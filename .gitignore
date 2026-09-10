@@ -1,2 +1,6 @@
 backend/.env
 node_modules/
+
+# Editor / IDE
+.vscode/
+.idea/

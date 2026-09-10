@@ -1,7 +1,7 @@
 from urllib.parse import urlsplit
 from typing import Literal
 
-from pydantic import EmailStr, SecretStr, field_validator, model_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     supabase_url: str
     supabase_service_role_key: str
+<<<<<<< Updated upstream
 
     # SMTP remains the default for local development. Railway deployments can
     # use Resend's HTTPS API, which does not require outbound SMTP access.
@@ -22,6 +23,12 @@ class Settings(BaseSettings):
 
     resend_api_key: SecretStr | None = None
     resend_from_email: EmailStr | None = None
+=======
+    # Public anon key, used only for the signup request. Supabase Auth delivers the
+    # confirmation email itself, and it does that for ordinary signups rather than
+    # for service-role admin calls.
+    supabase_anon_key: str
+>>>>>>> Stashed changes
 
     # The public frontend origin used for all server-generated email redirects.
     # Add this origin to Supabase Auth's Redirect URLs allow-list.
@@ -57,6 +64,7 @@ class Settings(BaseSettings):
 
         return normalized
 
+<<<<<<< Updated upstream
     @model_validator(mode="after")
     def validate_email_provider(self):
         if self.email_provider == "smtp":
@@ -93,6 +101,8 @@ class Settings(BaseSettings):
 
         return self
 
+=======
+>>>>>>> Stashed changes
     @property
     def allowed_cors_origins(self) -> list[str]:
         configured_origins = self.cors_origins.split(",") if self.cors_origins else []
