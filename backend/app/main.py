@@ -63,6 +63,20 @@ def root():
 
 @app.get("/health")
 def health_check():
+    """Report liveness plus which optional features are configured.
+
+    Only reports whether a variable is present, never its value. The same
+    information is already observable by calling the routes themselves, so this
+    exposes nothing new -- it just makes a misconfigured deployment obvious.
+    """
+    missing = [
+        name
+        for name, value in (("SUPABASE_ANON_KEY", settings.supabase_anon_key),)
+        if not value
+    ]
+
     return {
-        "status": "healthy"
+        "status": "healthy",
+        "registration": "unconfigured" if missing else "configured",
+        "missing_variables": missing,
     }
