@@ -10,6 +10,7 @@ Run from the backend directory, or in a Railway console:
 
 from __future__ import annotations
 
+import errno
 import os
 import smtplib
 import socket
@@ -64,8 +65,14 @@ def _probe_tcp(host: str) -> dict[int, str]:
             results[port] = "refused"
             print(f"  {port:<5} refused - reachable, but nothing is listening ({exc.errno})")
         except OSError as exc:
-            results[port] = "error"
-            print(f"  {port:<5} failed - {type(exc).__name__}: {exc}")
+            # ENETUNREACH/EHOSTUNREACH mean the host has no route for this traffic
+            # at all, which is how providers null-route blocked SMTP egress.
+            if exc.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+                results[port] = "unroutable"
+                print(f"  {port:<5} UNREACHABLE - no route for this traffic ({exc.errno})")
+            else:
+                results[port] = "error"
+                print(f"  {port:<5} failed - {type(exc).__name__}: {exc}")
 
     print()
     return results
@@ -144,10 +151,17 @@ def _verdict(outcome: str, tcp: dict[int, str], port: int) -> None:
         open_ports = [p for p, r in tcp.items() if r == "open"]
         timed_out = [p for p, r in tcp.items() if r == "timeout"]
         refused = [p for p, r in tcp.items() if r == "refused"]
+        unroutable = [p for p, r in tcp.items() if r == "unroutable"]
 
         if open_ports:
             print(f"  Port {port} did not connect, but {open_ports} did. The block is")
             print(f"  specific to {port} rather than to SMTP generally - try another port.")
+        elif unroutable and not timed_out:
+            print("  Every SMTP port reported 'network unreachable'. The host has no")
+            print("  route for outbound SMTP at all - the provider null-routes it. This")
+            print("  is a plan-level block, not a configuration problem, and no code")
+            print("  change works around it. Upgrade the plan, or have Supabase Auth")
+            print("  send the mail using these same SMTP credentials.")
         elif timed_out:
             print("  Every SMTP port timed out. A silent timeout is the signature of")
             print("  provider-level egress filtering, which the free Railway plan applies.")
