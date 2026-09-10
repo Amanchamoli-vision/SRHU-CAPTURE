@@ -1,4 +1,6 @@
 from html import escape
+import logging
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -9,6 +11,7 @@ from app.services.email_service import EmailDeliveryError, send_email
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+logger = logging.getLogger(__name__)
 
 
 class RegistrationRequest(BaseModel):
@@ -46,6 +49,14 @@ def _confirmation_email(confirmation_url: str) -> tuple[str, str, str]:
 def register(payload: RegistrationRequest):
     """Create an unconfirmed Supabase user and deliver its confirmation link by SMTP."""
     email = str(payload.email).casefold()
+    logger.info(
+        "registration_started recipient_domain=%s",
+        email.rsplit("@", 1)[-1],
+    )
+    logger.info(
+        "supabase_generate_link_started redirect_url=%s",
+        settings.signup_confirmation_redirect_url,
+    )
 
     try:
         generated_link = supabase.auth.admin.generate_link(
@@ -60,23 +71,38 @@ def register(payload: RegistrationRequest):
             }
         )
     except Exception as exc:
+        logger.warning("supabase_generate_link_failed type=%s", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unable to create the account. Please check your details and try again.",
         ) from exc
 
-    subject, text_body, html_body = _confirmation_email(
-        generated_link.properties.action_link
+    confirmation_url = generated_link.properties.action_link
+    parsed_confirmation_url = urlsplit(confirmation_url)
+    logger.info(
+        "supabase_generate_link_succeeded response_type=%s link_origin=%s link_path=%s",
+        type(generated_link).__name__,
+        f"{parsed_confirmation_url.scheme}://{parsed_confirmation_url.netloc}",
+        parsed_confirmation_url.path,
     )
 
+    subject, text_body, html_body = _confirmation_email(confirmation_url)
+
     try:
+        logger.info(
+            "email_delivery_started recipient_domain=%s confirmation_url_domain=%s",
+            email.rsplit("@", 1)[-1],
+            parsed_confirmation_url.netloc,
+        )
         send_email(email, subject, text_body, html_body)
     except EmailDeliveryError as exc:
+        logger.warning("email_delivery_failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to send the verification email. Please try again later.",
         ) from exc
 
+    logger.info("registration_completed")
     return {
         "message": "Account created successfully! Please check your email for verification."
     }

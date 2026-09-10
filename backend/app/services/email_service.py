@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from email.message import EmailMessage
+import logging
 import smtplib
 import ssl
 
 from app.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class EmailDeliveryError(RuntimeError):
@@ -30,6 +34,7 @@ def send_email(
         message.add_alternative(html_body, subtype="html")
 
     try:
+        logger.info("smtp_connection_started host=%s port=%s", settings.smtp_host, settings.smtp_port)
         with smtplib.SMTP(
             settings.smtp_host,
             settings.smtp_port,
@@ -37,11 +42,20 @@ def send_email(
         ) as smtp:
             smtp.ehlo()
             smtp.starttls(context=ssl.create_default_context())
+            logger.info("smtp_starttls_succeeded")
             smtp.ehlo()
             smtp.login(
                 str(settings.smtp_user),
                 settings.smtp_password.get_secret_value(),
             )
+            logger.info("smtp_authentication_succeeded")
             smtp.send_message(message)
+            logger.info("smtp_send_message_succeeded")
     except (OSError, smtplib.SMTPException) as exc:
+        logger.error(
+            "smtp_delivery_failed type=%s smtp_code=%s os_errno=%s",
+            type(exc).__name__,
+            getattr(exc, "smtp_code", None),
+            getattr(exc, "errno", None),
+        )
         raise EmailDeliveryError("Unable to deliver email through SMTP") from exc
