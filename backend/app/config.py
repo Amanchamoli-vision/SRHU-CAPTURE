@@ -51,8 +51,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_smtp_sender(self):
-        if self.smtp_port != 587:
-            raise ValueError("SMTP_PORT must be 587 for STARTTLS")
+        if self.smtp_port not in {465, 587}:
+            raise ValueError(
+                "SMTP_PORT must be 465 for implicit SSL/TLS or 587 for STARTTLS"
+            )
 
         if not self.smtp_password.get_secret_value():
             raise ValueError("SMTP_PASSWORD must not be empty")
