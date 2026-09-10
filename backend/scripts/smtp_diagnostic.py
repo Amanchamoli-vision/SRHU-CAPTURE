@@ -15,6 +15,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.config import settings
 from app.services.email_service import (
     EmailDeliveryError,
     SMTPDeliveryState,
@@ -39,6 +40,10 @@ def _print_state(state: SMTPDeliveryState) -> None:
 
 
 def main() -> int:
+    if settings.email_provider != "smtp":
+        print("SMTP diagnostic skipped: EMAIL_PROVIDER=resend uses HTTPS, not SMTP.")
+        return 0
+
     try:
         state = check_smtp_connection()
     except EmailDeliveryError as exc:

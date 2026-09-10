@@ -11,6 +11,7 @@ from app.services import email_service
 class EmailServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.settings = SimpleNamespace(
+            email_provider="smtp",
             smtp_host="smtp.example.test",
             smtp_port=587,
             smtp_user="sender@example.test",
@@ -35,6 +36,7 @@ class EmailServiceTests(unittest.TestCase):
     ) -> None:
         client = self._smtp_client()
         smtp.return_value = client
+        settings.email_provider = "smtp"
         settings.smtp_host = self.settings.smtp_host
         settings.smtp_port = 587
         settings.smtp_user = self.settings.smtp_user
@@ -60,6 +62,7 @@ class EmailServiceTests(unittest.TestCase):
     ) -> None:
         client = self._smtp_client()
         smtp_ssl.return_value = client
+        settings.email_provider = "smtp"
         settings.smtp_host = self.settings.smtp_host
         settings.smtp_port = 465
         settings.smtp_user = self.settings.smtp_user
@@ -83,6 +86,7 @@ class EmailServiceTests(unittest.TestCase):
     ) -> None:
         client = self._smtp_client()
         smtp.return_value = client
+        settings.email_provider = "smtp"
         settings.smtp_host = self.settings.smtp_host
         settings.smtp_port = 587
         settings.smtp_user = self.settings.smtp_user
@@ -95,6 +99,36 @@ class EmailServiceTests(unittest.TestCase):
         self.assertTrue(state.authentication_succeeded)
         self.assertFalse(state.send_message_succeeded)
         client.send_message.assert_not_called()
+
+    @patch("app.services.email_service.settings")
+    @patch("app.services.email_service.httpx.post")
+    def test_resend_uses_https_without_smtp(
+        self,
+        post: MagicMock,
+        settings: MagicMock,
+    ) -> None:
+        response = MagicMock()
+        response.is_success = True
+        response.status_code = 202
+        post.return_value = response
+        settings.email_provider = "resend"
+        settings.resend_api_key = SimpleNamespace(
+            get_secret_value=lambda: "resend-api-key"
+        )
+        settings.resend_from_email = "notifications@example.com"
+
+        email_service.send_email(
+            "recipient@example.com",
+            "Subject",
+            "Text",
+            "<p>Text</p>",
+        )
+
+        post.assert_called_once()
+        request = post.call_args.kwargs
+        self.assertEqual(request["timeout"], 15)
+        self.assertEqual(request["json"]["to"], ["recipient@example.com"])
+        self.assertEqual(request["json"]["html"], "<p>Text</p>")
 
     def test_settings_rejects_unsupported_smtp_port(self) -> None:
         with self.assertRaisesRegex(ValueError, "SMTP_PORT must be 465"):

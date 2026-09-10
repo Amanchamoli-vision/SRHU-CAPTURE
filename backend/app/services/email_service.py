@@ -8,6 +8,8 @@ import logging
 import smtplib
 import ssl
 
+import httpx
+
 from app.config import settings
 
 
@@ -162,13 +164,64 @@ def check_smtp_connection() -> SMTPDeliveryState:
     return _deliver_or_check()
 
 
+def _send_with_resend(
+    to_email: str,
+    subject: str,
+    body: str,
+    html_body: str | None,
+) -> None:
+    """Send an email through Resend's HTTPS API without logging sensitive data."""
+    recipient_domain = to_email.rsplit("@", 1)[-1]
+    logger.info("resend_delivery_started recipient_domain=%s", recipient_domain)
+    payload = {
+        "from": str(settings.resend_from_email),
+        "to": [to_email],
+        "subject": subject,
+        "text": body,
+    }
+    if html_body is not None:
+        payload["html"] = html_body
+
+    try:
+        response = httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": (
+                    f"Bearer {settings.resend_api_key.get_secret_value()}"
+                ),
+            },
+            json=payload,
+            timeout=15,
+        )
+    except httpx.HTTPError as exc:
+        logger.error(
+            "resend_delivery_failed type=%s http_status=%s",
+            type(exc).__name__,
+            None,
+        )
+        raise EmailDeliveryError("Unable to deliver email through Resend") from exc
+
+    if not response.is_success:
+        logger.error(
+            "resend_delivery_failed type=http_response http_status=%s",
+            response.status_code,
+        )
+        raise EmailDeliveryError("Unable to deliver email through Resend")
+
+    logger.info("resend_delivery_succeeded http_status=%s", response.status_code)
+
+
 def send_email(
     to_email: str,
     subject: str,
     body: str,
     html_body: str | None = None,
 ) -> None:
-    """Send an email through the configured SSL/TLS or STARTTLS SMTP server."""
+    """Send an email through the configured SMTP or HTTPS email provider."""
+    if settings.email_provider == "resend":
+        _send_with_resend(to_email, subject, body, html_body)
+        return
+
     message = EmailMessage()
     message["From"] = str(settings.smtp_from_email)
     message["To"] = to_email
