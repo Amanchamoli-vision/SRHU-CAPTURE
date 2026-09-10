@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../services/supabase";
+import { API_BASE_URL } from "../../services/api";
 
 function AdminDashboard() {
   const navigate = useNavigate();
@@ -15,9 +16,6 @@ function AdminDashboard() {
 
   const [loading, setLoading] = useState(true);
   const [statsLoading, setStatsLoading] = useState(true);
-
-  const API_BASE_URL =
-    import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
   useEffect(() => {
     loadAdminDashboard();

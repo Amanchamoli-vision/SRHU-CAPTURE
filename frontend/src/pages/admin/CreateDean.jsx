@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../services/supabase";
+import { API_BASE_URL } from "../../services/api";
 
 function CreateDean() {
   const navigate = useNavigate();
@@ -12,11 +13,6 @@ function CreateDean() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
-
-  const API_BASE_URL =
-    import.meta.env.VITE_API_BASE_URL ||
-    "http://127.0.0.1:8000";
-
 
   // =========================================================
   // Create Dean

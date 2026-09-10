@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import admin, events, reports
+from app.config import settings
+from app.routers import admin, auth, events, reports
 
 
 # ============================================================
@@ -21,10 +22,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.allowed_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,6 +35,9 @@ app.add_middleware(
 
 # Admin APIs
 app.include_router(admin.router)
+
+# Registration and confirmation-email API
+app.include_router(auth.router)
 
 # Teacher + Dean Event APIs
 app.include_router(events.router)

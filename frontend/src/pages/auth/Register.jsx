@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { supabase } from "../../services/supabase";
+import { API_BASE_URL } from "../../services/api";
 
 function EyeIcon({ open }) {
   return open ? (
@@ -76,29 +76,26 @@ function Register() {
     try {
       setLoading(true);
 
-      console.log("Starting registration...");
-
-      const { data, error: signUpError } =
-        await supabase.auth.signUp({
+      const response = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
           email: email.trim(),
-          password: password,
-          options: {
-            data: {
-              name: name.trim(),
-            },
-          },
-        });
+          password,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
 
-      console.log("Supabase response:", data);
-
-      if (signUpError) {
-        console.error("Supabase registration error:", signUpError);
-        setError(signUpError.message);
-        return;
+      if (!response.ok) {
+        throw new Error(
+          result.detail || "Something went wrong. Please try again."
+        );
       }
 
       setMessage(
-        "Account created successfully! Please check your email for verification."
+        result.message ||
+          "Account created successfully! Please check your email for verification."
       );
 
       // Clear form
@@ -225,7 +222,7 @@ function Register() {
                     autoComplete="name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Dr. Aman Chamoli"
+                    placeholder="Full Name"
                     disabled={loading}
                     className="w-full rounded-xl border border-slate-300 bg-slate-50/50 py-3 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-600 focus:bg-white focus:ring-4 focus:ring-blue-600/10 disabled:cursor-not-allowed disabled:opacity-60"
                   />
