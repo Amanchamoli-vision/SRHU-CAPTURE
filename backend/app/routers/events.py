@@ -1,24 +1,37 @@
-from fastapi import APIRouter, HTTPException, Header
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Header, Query
+
 from app.database import supabase
 
-router = APIRouter(tags=["Events", "Dean"])
+
+router = APIRouter(
+    tags=["Events", "Dean"]
+)
 
 
 # ============================================================
-# AUTHENTICATION
+# GET CURRENT USER
 # ============================================================
 
-def get_current_user(authorization: str | None):
+def get_current_user(
+    authorization: str | None
+):
     if not authorization:
         raise HTTPException(
             status_code=401,
             detail="Authorization token required"
         )
 
-    token = authorization.replace("Bearer ", "").strip()
+    token = authorization.replace(
+        "Bearer ",
+        ""
+    ).strip()
 
     try:
-        response = supabase.auth.get_user(token)
+        response = supabase.auth.get_user(
+            token
+        )
 
         if not response or not response.user:
             raise HTTPException(
@@ -32,7 +45,10 @@ def get_current_user(authorization: str | None):
         raise
 
     except Exception as error:
-        print("Authentication error:", error)
+        print(
+            "Authentication error:",
+            error
+        )
 
         raise HTTPException(
             status_code=401,
@@ -44,13 +60,19 @@ def get_current_user(authorization: str | None):
 # CHECK DEAN
 # ============================================================
 
-def check_dean(user_id: str):
-
+def check_dean(
+    user_id: str
+):
     response = (
         supabase
         .table("users")
-        .select("id, name, email, role")
-        .eq("id", user_id)
+        .select(
+            "id, name, email, role"
+        )
+        .eq(
+            "id",
+            user_id
+        )
         .single()
         .execute()
     )
@@ -76,19 +98,29 @@ def check_dean(user_id: str):
 # DEAN DASHBOARD STATS
 # ============================================================
 
-@router.get("/dean/dashboard/stats")
+@router.get(
+    "/dean/dashboard/stats"
+)
 def dean_dashboard_stats(
-    authorization: str | None = Header(default=None)
+    authorization: str | None = Header(
+        default=None
+    )
 ):
 
-    user = get_current_user(authorization)
+    user = get_current_user(
+        authorization
+    )
 
-    check_dean(user.id)
+    check_dean(
+        user.id
+    )
 
     response = (
         supabase
         .table("events")
-        .select("id, status")
+        .select(
+            "id, status"
+        )
         .execute()
     )
 
@@ -119,80 +151,236 @@ def dean_dashboard_stats(
         "total_events": total_events,
         "pending_events": pending_events,
         "approved_events": approved_events,
-        "rejected_events": rejected_events
+        "rejected_events": rejected_events,
     }
 
 
 # ============================================================
-# GET ALL EVENTS FOR DEAN
+# GET ALL DEAN EVENTS
+#
+# Optional filters:
+#
+# /dean/events
+#
+# /dean/events?event_date=2026-09-09
+#
+# /dean/events?event_type=Cultural
+#
+# /dean/events?event_date=2026-09-09&event_type=Cultural
+#
 # ============================================================
 
-@router.get("/dean/events")
+@router.get(
+    "/dean/events"
+)
 def get_all_events(
-    authorization: str | None = Header(default=None)
+    authorization: str | None = Header(
+        default=None
+    ),
+
+    event_date: str | None = Query(
+        default=None
+    ),
+
+    event_type: str | None = Query(
+        default=None
+    ),
 ):
 
-    user = get_current_user(authorization)
+    # --------------------------------------------------------
+    # AUTHENTICATION
+    # --------------------------------------------------------
 
-    check_dean(user.id)
+    user = get_current_user(
+        authorization
+    )
 
-    response = (
+    check_dean(
+        user.id
+    )
+
+    # --------------------------------------------------------
+    # VALIDATE DATE
+    # --------------------------------------------------------
+
+    if event_date:
+
+        try:
+            date.fromisoformat(
+                event_date
+            )
+
+        except ValueError:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid date format. "
+                    "Use YYYY-MM-DD."
+                )
+            )
+
+    # --------------------------------------------------------
+    # VALIDATE EVENT TYPE
+    # --------------------------------------------------------
+
+    allowed_event_types = {
+        "Cultural",
+        "Sports",
+        "Academic",
+        "Workshop",
+        "Seminar",
+        "Other",
+    }
+
+    normalized_event_type = None
+
+    if event_type:
+
+        normalized_event_type = (
+            event_type.strip()
+        )
+
+        matching_type = next(
+            (
+                item
+                for item in allowed_event_types
+                if item.lower()
+                == normalized_event_type.lower()
+            ),
+            None
+        )
+
+        if not matching_type:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid event type. "
+                    "Allowed values: "
+                    "Cultural, Sports, Academic, "
+                    "Workshop, Seminar, Other."
+                )
+            )
+
+        normalized_event_type = matching_type
+
+    # --------------------------------------------------------
+    # BUILD QUERY
+    # --------------------------------------------------------
+
+    query = (
         supabase
         .table("events")
         .select(
-    """
-    id,
-    teacher_id,
-    event_name,
-    event_date,
-    event_type,
-    location,
-    description,
-    social_network_url,
-    status,
-    rejection_reason,
-    created_at,
-    updated_at
-    """
-)
-        .order("created_at", desc=True)
-        .execute()
+            """
+            id,
+            teacher_id,
+            event_name,
+            event_date,
+            event_type,
+            location,
+            description,
+            social_network_url,
+            status,
+            rejection_reason,
+            created_at,
+            updated_at
+            """
+        )
     )
 
+    # --------------------------------------------------------
+    # DATE FILTER
+    # --------------------------------------------------------
+
+    if event_date:
+
+        query = query.eq(
+            "event_date",
+            event_date
+        )
+
+    # --------------------------------------------------------
+    # EVENT TYPE FILTER
+    # --------------------------------------------------------
+
+    if normalized_event_type:
+
+        query = query.eq(
+            "event_type",
+            normalized_event_type
+        )
+
+    # --------------------------------------------------------
+    # SORT
+    # --------------------------------------------------------
+
+    query = query.order(
+        "created_at",
+        desc=True
+    )
+
+    # --------------------------------------------------------
+    # EXECUTE
+    # --------------------------------------------------------
+
+    response = query.execute()
+
     events = response.data or []
+
+    # --------------------------------------------------------
+    # RESPONSE
+    # --------------------------------------------------------
 
     return {
         "success": True,
         "events": events,
-        "total": len(events)
+        "total": len(events),
+
+        "filters": {
+            "event_date": event_date,
+            "event_type": normalized_event_type,
+        },
     }
 
 
 # ============================================================
-# GET MEDIA FOR PARTICULAR EVENT
+# GET EVENT MEDIA
 # ============================================================
 
-@router.get("/dean/events/{event_id}/media")
+@router.get(
+    "/dean/events/{event_id}/media"
+)
 def get_event_media(
     event_id: str,
-    authorization: str | None = Header(default=None)
+    authorization: str | None = Header(
+        default=None
+    )
 ):
 
-    # Authenticate
-    user = get_current_user(authorization)
+    user = get_current_user(
+        authorization
+    )
 
-    # Make sure user is Dean
-    check_dean(user.id)
+    check_dean(
+        user.id
+    )
 
     # --------------------------------------------------------
-    # Check event exists
+    # EVENT
     # --------------------------------------------------------
 
     event_response = (
         supabase
         .table("events")
-        .select("id, event_name, teacher_id")
-        .eq("id", event_id)
+        .select(
+            "id, event_name, teacher_id"
+        )
+        .eq(
+            "id",
+            event_id
+        )
         .maybe_single()
         .execute()
     )
@@ -206,7 +394,7 @@ def get_event_media(
         )
 
     # --------------------------------------------------------
-    # Get event media
+    # MEDIA
     # --------------------------------------------------------
 
     media_response = (
@@ -222,8 +410,14 @@ def get_event_media(
             created_at
             """
         )
-        .eq("event_id", event_id)
-        .order("created_at", desc=False)
+        .eq(
+            "event_id",
+            event_id
+        )
+        .order(
+            "created_at",
+            desc=False
+        )
         .execute()
     )
 
@@ -233,7 +427,7 @@ def get_event_media(
         "success": True,
         "event_id": event_id,
         "media": media,
-        "total": len(media)
+        "total": len(media),
     }
 
 
@@ -241,15 +435,23 @@ def get_event_media(
 # APPROVE EVENT
 # ============================================================
 
-@router.patch("/dean/events/{event_id}/approve")
+@router.patch(
+    "/dean/events/{event_id}/approve"
+)
 def approve_event(
     event_id: str,
-    authorization: str | None = Header(default=None)
+    authorization: str | None = Header(
+        default=None
+    )
 ):
 
-    user = get_current_user(authorization)
+    user = get_current_user(
+        authorization
+    )
 
-    check_dean(user.id)
+    check_dean(
+        user.id
+    )
 
     response = (
         supabase
@@ -257,10 +459,13 @@ def approve_event(
         .update(
             {
                 "status": "approved",
-                "rejection_reason": None
+                "rejection_reason": None,
             }
         )
-        .eq("id", event_id)
+        .eq(
+            "id",
+            event_id
+        )
         .execute()
     )
 
@@ -273,7 +478,7 @@ def approve_event(
     return {
         "success": True,
         "message": "Event approved successfully",
-        "event": response.data[0]
+        "event": response.data[0],
     }
 
 
@@ -281,18 +486,27 @@ def approve_event(
 # REJECT EVENT
 # ============================================================
 
-@router.patch("/dean/events/{event_id}/reject")
+@router.patch(
+    "/dean/events/{event_id}/reject"
+)
 def reject_event(
     event_id: str,
     rejection_reason: str,
-    authorization: str | None = Header(default=None)
+    authorization: str | None = Header(
+        default=None
+    )
 ):
 
-    user = get_current_user(authorization)
+    user = get_current_user(
+        authorization
+    )
 
-    check_dean(user.id)
+    check_dean(
+        user.id
+    )
 
     if not rejection_reason.strip():
+
         raise HTTPException(
             status_code=400,
             detail="Rejection reason is required"
@@ -304,14 +518,19 @@ def reject_event(
         .update(
             {
                 "status": "rejected",
-                "rejection_reason": rejection_reason.strip()
+                "rejection_reason":
+                    rejection_reason.strip(),
             }
         )
-        .eq("id", event_id)
+        .eq(
+            "id",
+            event_id
+        )
         .execute()
     )
 
     if not response.data:
+
         raise HTTPException(
             status_code=404,
             detail="Event not found"
@@ -320,5 +539,5 @@ def reject_event(
     return {
         "success": True,
         "message": "Event rejected successfully",
-        "event": response.data[0]
+        "event": response.data[0],
     }
