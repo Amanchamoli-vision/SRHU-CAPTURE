@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     # Public anon key, used only for the signup request. Supabase Auth delivers the
     # confirmation email itself, and it does that for ordinary signups rather than
     # for service-role admin calls.
-    supabase_anon_key: str
+    #
+    # Optional so that one missing signup credential cannot take down the whole API.
+    # Without it every other route still serves and only /auth/register reports 503.
+    supabase_anon_key: str | None = None
 
     # The public frontend origin used for all server-generated email redirects.
     # Add this origin to Supabase Auth's Redirect URLs allow-list.

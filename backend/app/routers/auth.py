@@ -33,6 +33,15 @@ def register(payload: RegistrationRequest):
     service never opens an outbound SMTP connection. Configure the sender under
     Supabase Auth > SMTP Settings and the wording under Auth > Email Templates.
     """
+    if supabase_public is None:
+        logger.error(
+            "registration_unavailable reason=supabase_anon_key_not_configured"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Registration is temporarily unavailable. Please try again later.",
+        )
+
     email = str(payload.email).casefold()
     logger.info(
         "registration_started recipient_domain=%s redirect_url=%s",

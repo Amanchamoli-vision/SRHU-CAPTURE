@@ -67,5 +67,14 @@ class RegisterEndpointTests(unittest.TestCase):
             supabase_public.auth.sign_up.assert_not_called()
 
 
+    def test_register_reports_503_when_anon_key_not_configured(self) -> None:
+        """A missing SUPABASE_ANON_KEY must degrade this route, not crash the service."""
+        with patch("app.routers.auth.supabase_public", None):
+            response = self.client.post("/auth/register", json=self.payload)
+
+            self.assertEqual(response.status_code, 503)
+            self.assertIn("temporarily unavailable", response.json()["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()
