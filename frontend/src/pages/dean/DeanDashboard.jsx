@@ -35,6 +35,13 @@ const IconRefresh = ({ className = "h-4 w-4" }) => (
     <path d="M20 20v-4.5h-4.5" />
   </svg>
 );
+const IconLogout = ({ className = "h-4 w-4" }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <path d="M16 17l5-5-5-5" />
+    <path d="M21 12H9" />
+  </svg>
+);
 const IconLayers = ({ className = "h-5 w-5" }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <path d="M12 3 3 8l9 5 9-5-9-5Z" />
@@ -201,6 +208,24 @@ export default function DeanDashboard() {
     }
 
     return session;
+  };
+
+  // ============================================
+  // LOGOUT
+  // ============================================
+
+  const handleLogout = async () => {
+    const confirmed = window.confirm(
+      "Are you sure you want to logout?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    await supabase.auth.signOut();
+
+    navigate("/login");
   };
 
   // ============================================
@@ -766,6 +791,14 @@ export default function DeanDashboard() {
             >
               <IconRefresh />
               Refresh
+            </button>
+
+            <button
+              onClick={handleLogout}
+              className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-100"
+            >
+              <IconLogout />
+              Logout
             </button>
 
           </div>

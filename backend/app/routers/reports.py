@@ -664,14 +664,16 @@ def build_pdf(
     )
 
     story.append(
-        Paragraph(
-            f"This report was automatically generated for "
-            f"the approved event <b>{event_name}</b>. "
-            f"The event contains {len(media)} photo/video "
-            f"files and {len(documents)} supporting documents.",
-            normal_style
-        )
-    )
+Paragraph(
+f"This report presents the official documentation and relevant details "
+f"pertaining to the approved event <b>{event_name}</b>. "
+f"The event record comprises {len(media)} photo/video files and "
+f"{len(documents)} supporting documents submitted in connection "
+f"with the event.",
+normal_style
+)
+)
+
 
     story.append(
         Spacer(1, 10)

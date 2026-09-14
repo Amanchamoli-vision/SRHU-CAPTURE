@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../services/supabase";
 import { API_BASE_URL } from "../../services/api";
+import Navbar from "../../components/Navbar";
 
 function AllEvents() {
   const navigate = useNavigate();
@@ -377,20 +378,9 @@ function AllEvents() {
           HEADER
       ====================================================== */}
 
-      <header className="border-b border-slate-200 bg-white">
-
-        <div className="flex h-16 items-center justify-between px-6">
-
-          <div>
-            <h1 className="text-xl font-bold text-slate-800">
-              Campus Capture
-            </h1>
-
-            <p className="text-sm text-slate-500">
-              Dean Panel
-            </p>
-          </div>
-
+      <Navbar
+        title="Dean Panel"
+        actions={
           <button
             onClick={() =>
               navigate("/dean/dashboard")
@@ -399,10 +389,8 @@ function AllEvents() {
           >
             Dashboard
           </button>
-
-        </div>
-
-      </header>
+        }
+      />
 
       {/* ======================================================
           MAIN

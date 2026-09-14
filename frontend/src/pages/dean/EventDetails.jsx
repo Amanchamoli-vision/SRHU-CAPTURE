@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../services/supabase";
 import { API_BASE_URL } from "../../services/api";
+import Navbar from "../../components/Navbar";
 
 function EventDetails() {
   const { eventId } = useParams();
@@ -659,18 +660,9 @@ function EventDetails() {
   if (error && !event) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <header className="border-b border-slate-200 bg-white">
-          <div className="flex h-16 items-center justify-between px-6">
-            <div>
-              <h1 className="text-xl font-bold text-slate-800">
-                Campus Capture
-              </h1>
-
-              <p className="text-sm text-slate-500">
-                Dean Panel
-              </p>
-            </div>
-
+        <Navbar
+          title="Dean Panel"
+          actions={
             <button
               onClick={() =>
                 navigate("/dean/events")
@@ -679,8 +671,8 @@ function EventDetails() {
             >
               Back to Events
             </button>
-          </div>
-        </header>
+          }
+        />
 
         <main className="mx-auto max-w-4xl px-6 py-10">
           <div className="rounded-xl border border-red-200 bg-red-50 p-8 text-center">
@@ -708,19 +700,9 @@ function EventDetails() {
           NAVBAR
       ====================================================== */}
 
-      <header className="border-b border-slate-200 bg-white">
-        <div className="flex h-16 items-center justify-between px-6">
-
-          <div>
-            <h1 className="text-xl font-bold text-slate-800">
-              Campus Capture
-            </h1>
-
-            <p className="text-sm text-slate-500">
-              Dean Panel
-            </p>
-          </div>
-
+      <Navbar
+        title="Dean Panel"
+        actions={
           <button
             onClick={() =>
               navigate("/dean/events")
@@ -729,8 +711,8 @@ function EventDetails() {
           >
             Back to Events
           </button>
-        </div>
-      </header>
+        }
+      />
 
       {/* ======================================================
           MAIN
