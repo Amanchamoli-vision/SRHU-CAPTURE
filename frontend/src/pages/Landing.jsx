@@ -123,14 +123,14 @@ export default function Landing() {
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-white border-b border-slate-200">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <div className="mb-12 max-w-2xl sm:mb-16">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-blue-700">
+          <div className="mb-12 sm:mb-16">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-blue-700">
               System Capabilities
             </h2>
-            <p className="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
+            <p className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
               Built for university administrative operations
             </p>
-            <p className="mt-2 text-sm text-slate-500 leading-normal">
+            <p className="mt-2 text-base text-slate-500 leading-relaxed">
               Designed around institutional workflows across departments,
               colleges, and administrative offices.
             </p>
@@ -157,10 +157,10 @@ export default function Landing() {
                   <line x1="10" y1="16" x2="14" y2="16" />
                 </svg>
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold text-slate-900">
                 Create Event
               </h3>
-              <p className="mt-2 text-xs leading-normal text-slate-600">
+              <p className="mt-2 text-sm leading-relaxed text-slate-600">
                 Draft and submit comprehensive event proposals with schedules,
                 venues, and official file attachments.
               </p>
@@ -182,10 +182,10 @@ export default function Landing() {
                   <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
                 </svg>
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold text-slate-900">
                 Approval Workflow
               </h3>
-              <p className="mt-2 text-xs leading-normal text-slate-600">
+              <p className="mt-2 text-sm leading-relaxed text-slate-600">
                 Inspect pending proposals and attached documents from an
                 administrative queue to record formal decisions.
               </p>
@@ -207,10 +207,10 @@ export default function Landing() {
                   <polyline points="12 6 12 12 16 14" />
                 </svg>
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold text-slate-900">
                 Status Tracking
               </h3>
-              <p className="mt-2 text-xs leading-normal text-slate-600">
+              <p className="mt-2 text-sm leading-relaxed text-slate-600">
                 Monitor live proposal review status across pending, approved, and
                 rejected states directly from your dashboard.
               </p>
@@ -231,10 +231,10 @@ export default function Landing() {
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </svg>
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold text-slate-900">
                 Role-based Dashboards
               </h3>
-              <p className="mt-2 text-xs leading-normal text-slate-600">
+              <p className="mt-2 text-sm leading-relaxed text-slate-600">
                 Dedicated operational views and authorization boundaries tailored
                 for Teachers, Deans, and Administrators.
               </p>
@@ -245,22 +245,21 @@ export default function Landing() {
 
       {/* =========================================================
           4. HOW IT WORKS ("How event approval works")
-          - 4-step horizontal process on desktop
-          - Connecting timeline track on desktop
-          - Vertical stacked list on mobile
-          - Optically centered step numbers
-          - Concise step descriptions balanced for 2 lines
+          - Outer container matching header (max-w-6xl mx-auto px-4 sm:px-6 lg:px-8)
+          - Left-aligned header block flush with container
+          - Bumped type scale matching System Capabilities
+          - 4-step horizontal process on desktop, vertical list on mobile
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-slate-50">
-        <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-2xl mx-auto mb-12 sm:mb-16">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-blue-700">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+          <div className="mb-12 sm:mb-16">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-blue-700">
               Workflow
             </h2>
-            <p className="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
+            <p className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
               How event approval works
             </p>
-            <p className="mt-2 text-sm text-slate-500 leading-normal">
+            <p className="mt-2 text-base text-slate-500 leading-relaxed">
               The four sequential stages of event proposal and administrative review.
             </p>
           </div>
@@ -269,61 +268,61 @@ export default function Landing() {
             {/* Connecting line on desktop */}
             <div
               aria-hidden="true"
-              className="hidden md:block absolute top-7 left-14 right-14 h-0.5 bg-slate-200"
+              className="hidden lg:block absolute top-7 left-7 right-28 h-0.5 bg-slate-200"
             />
 
-            <div className="grid gap-8 md:grid-cols-4 relative">
+            <div className="grid w-full grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4 relative">
               {/* Step 1 */}
-              <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="flex flex-col items-start text-left">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   1
                 </div>
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-base font-bold text-slate-900">
                   Teacher Creates Event
                 </h3>
-                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
                   Faculty member compiles event schedule, venue requirements, and
                   necessary documentation.
                 </p>
               </div>
 
               {/* Step 2 */}
-              <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="flex flex-col items-start text-left">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   2
                 </div>
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-base font-bold text-slate-900">
                   Submits for Review
                 </h3>
-                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
                   Proposal enters the system and appears immediately in the Dean
                   review queue.
                 </p>
               </div>
 
               {/* Step 3 */}
-              <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="flex flex-col items-start text-left">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   3
                 </div>
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-base font-bold text-slate-900">
                   Dean Approves / Rejects
                 </h3>
-                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
                   Dean evaluates proposal feasibility, reviews attachments, and
                   records an official decision.
                 </p>
               </div>
 
               {/* Step 4 */}
-              <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="flex flex-col items-start text-left">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   4
                 </div>
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-base font-bold text-slate-900">
                   Status Visible to Teacher
                 </h3>
-                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
                   Final decision is instantly updated on faculty dashboards and
                   university calendars.
                 </p>
