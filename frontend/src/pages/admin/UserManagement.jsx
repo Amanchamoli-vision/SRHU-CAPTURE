@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../services/supabase";
 import { API_BASE_URL } from "../../services/api";
-import srhuLogo from "../../assets/logo-srhu.png";
+import srhuLogo from "../../assets/logo.png";
 
 
 function UserManagement() {
@@ -544,28 +544,15 @@ function UserManagement() {
           HEADER
       ====================================================== */}
 
-      <header
-        className="
-          border-b
-          border-slate-200
-          bg-white
-        "
-      >
-
-        <div
-          className="
-            flex
-            h-16
-            items-center
-            justify-between
-            px-6
-          "
-        >
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
+        <div className="flex h-[76px] items-center justify-between px-6">
 
           <div className="flex items-center gap-3.5">
-            <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
-              <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
-            </div>
+            <img
+              src={srhuLogo}
+              alt="Swami Rama Himalayan University"
+              className="h-12 sm:h-14 w-auto object-contain shrink-0"
+            />
             <div>
               <h1 className="text-lg font-bold text-slate-800 leading-tight">
                 Campus Capture

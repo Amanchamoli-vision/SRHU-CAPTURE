@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import { supabase } from "../../services/supabase";
 import { API_BASE_URL } from "../../services/api";
-import srhuLogo from "../../assets/logo-srhu.png";
+import srhuLogo from "../../assets/logo.png";
 
 const PIE_COLORS = [
   "#101A33",
@@ -705,9 +705,11 @@ export default function DeanDashboard() {
         <div className="flex h-[76px] items-center justify-between px-6">
 
           <div className="flex items-center gap-3.5">
-            <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
-              <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
-            </div>
+            <img
+              src={srhuLogo}
+              alt="Swami Rama Himalayan University"
+              className="h-12 sm:h-14 w-auto object-contain shrink-0"
+            />
             <div>
               <h1 className="font-display text-lg font-semibold leading-tight text-[#101A33]">
                 Campus Capture
@@ -810,7 +812,7 @@ export default function DeanDashboard() {
       <div className="flex">
 
         {/* ================= SIDEBAR ================= */}
-        <aside className="sticky top-[68px] h-[calc(100vh-68px)] w-60 shrink-0 border-r border-slate-200 bg-white px-3 py-6">
+        <aside className="sticky top-[76px] h-[calc(100vh-76px)] w-60 shrink-0 border-r border-slate-200 bg-white px-3 py-6">
           <nav className="space-y-1.5">
 
             <button

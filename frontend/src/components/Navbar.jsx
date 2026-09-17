@@ -20,14 +20,14 @@ function Navbar({ title = "Dean Panel", actions = null }) {
   };
 
   return (
-    <header className="border-b border-slate-200 bg-white">
-      <div className="flex h-20 sm:h-24 items-center justify-between px-6">
+    <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
+      <div className="flex h-[76px] items-center justify-between px-6">
 
         <div className="flex items-center gap-3.5">
           <img
             src={srhuLogo}
             alt="Swami Rama Himalayan University"
-            className="h-14 sm:h-18 w-auto object-contain"
+            className="h-12 sm:h-14 w-auto object-contain shrink-0"
           />
           <div>
             <h1 className="text-lg font-bold text-slate-900 leading-tight">
