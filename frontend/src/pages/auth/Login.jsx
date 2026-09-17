@@ -1,15 +1,30 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../../services/supabase";
+import { useAuth } from "../../context/AuthContext";
 
 function Login() {
   const navigate = useNavigate();
+  const { user: currentUser, role: currentRole, loading: authLoading, signOut } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Redirect if user already has an active authenticated session
+  useEffect(() => {
+    if (!authLoading && currentUser && currentRole) {
+      if (currentRole === "admin") {
+        navigate("/admin/dashboard", { replace: true });
+      } else if (currentRole === "dean") {
+        navigate("/dean/dashboard", { replace: true });
+      } else if (currentRole === "teacher") {
+        navigate("/teacher/dashboard", { replace: true });
+      }
+    }
+  }, [currentUser, currentRole, authLoading, navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -92,27 +107,17 @@ function Login() {
         .eq("id", user.id)
         .single();
 
-      if (profileError) {
+      if (profileError || !profile) {
         console.error(
           "Profile Fetch Error:",
           profileError
         );
 
-        // Sign out if profile cannot be loaded
-        await supabase.auth.signOut();
+        // Sign out and clear local storage if profile cannot be loaded
+        await signOut();
 
         setError(
           "Unable to load your user profile. Please contact the administrator."
-        );
-
-        return;
-      }
-
-      if (!profile) {
-        await supabase.auth.signOut();
-
-        setError(
-          "User profile not found. Please contact the administrator."
         );
 
         return;
@@ -155,7 +160,7 @@ function Login() {
       // -----------------------------
       // Invalid role
       // -----------------------------
-      await supabase.auth.signOut();
+      await signOut();
 
       setError(
         "Your account has an invalid role. Please contact the administrator."
