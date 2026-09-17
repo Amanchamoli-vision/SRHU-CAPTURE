@@ -3,18 +3,21 @@ import srhuLogo from "../assets/logo-srhu.png";
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-blue-600 selection:text-white scroll-smooth">
       {/* =========================================================
-          1. STICKY HEADER
-          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
-          - Logo badge + "Campus Capture" wordmark on left
-          - Single "Portal Login" button on right (links to /login)
-          - h-16 height
+          1. STICKY HEADER (Attractive, Modern, Institutional)
+          - Subtle top gradient accent line
+          - Spacious, elegant h-20 height with backdrop-blur-xl
+          - Enhanced logo badge with hover elevation
+          - Center interactive section navigation links
+          - High-contrast gradient "Portal Login" CTA with micro-interaction
       ========================================================== */}
-      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+      <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl shadow-xs">
+        <div className="h-0.5 w-full bg-gradient-to-r from-blue-900 via-indigo-600 to-blue-900" />
+        <div className="mx-auto flex h-20 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
+          {/* Left Brand Mark */}
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-slate-200/90 bg-white p-2 shadow-sm ring-1 ring-slate-100/80 transition-all duration-200 hover:shadow-md hover:scale-105">
               <img
                 src={srhuLogo}
                 alt="SRHU Logo"
@@ -22,20 +25,58 @@ export default function Landing() {
               />
             </div>
             <div>
-              <span className="block text-base font-bold leading-tight tracking-tight text-slate-900">
-                Campus Capture
-              </span>
-              <span className="block text-[11px] font-medium text-slate-500">
+              <div className="flex items-center gap-2">
+                <span className="block text-lg font-extrabold leading-tight tracking-tight text-slate-950">
+                  Campus Capture
+                </span>
+                <span className="hidden sm:inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-800 border border-blue-200/60">
+                  SRHU
+                </span>
+              </div>
+              <span className="block text-xs font-medium text-slate-500">
                 Swami Rama Himalayan University
               </span>
             </div>
           </div>
 
+          {/* Middle Navigation & Status */}
+          <nav className="hidden md:flex items-center gap-1.5 lg:gap-3">
+            <a
+              href="#capabilities"
+              className="rounded-xl px-3.5 py-2 text-sm font-semibold text-slate-600 transition-colors hover:text-blue-900 hover:bg-slate-100/80"
+            >
+              Capabilities
+            </a>
+            <a
+              href="#workflow"
+              className="rounded-xl px-3.5 py-2 text-sm font-semibold text-slate-600 transition-colors hover:text-blue-900 hover:bg-slate-100/80"
+            >
+              Workflow
+            </a>
+            <div className="h-4 w-px bg-slate-200 mx-1 hidden lg:block" />
+            <span className="hidden lg:inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 border border-emerald-200/60">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              System Online
+            </span>
+          </nav>
+
+          {/* Right Action Button */}
           <Link
             to="/login"
-            className="inline-flex items-center justify-center rounded-xl bg-blue-900 px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-sm shadow-blue-950/20 transition hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-700/20"
+            className="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-900 via-blue-950 to-indigo-950 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-blue-950/20 transition-all duration-200 hover:from-blue-800 hover:via-blue-900 hover:to-indigo-900 hover:shadow-lg hover:shadow-blue-950/30 hover:-translate-y-0.5 focus:outline-none focus:ring-4 focus:ring-blue-700/20"
           >
-            Portal Login
+            <span>Portal Login</span>
+            <svg
+              className="h-4 w-4 text-blue-200 transition-transform duration-200 group-hover:translate-x-1"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fillRule="evenodd"
+                d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z"
+                clipRule="evenodd"
+              />
+            </svg>
           </Link>
         </div>
       </header>
@@ -121,7 +162,7 @@ export default function Landing() {
           - Increased card text size (text-base sm:text-lg)
           - Spacious padding (p-7 sm:p-8) for enhanced readability
       ========================================================== */}
-      <section className="py-16 sm:py-24 bg-white border-b border-slate-200">
+      <section id="capabilities" className="py-16 sm:py-24 bg-white border-b border-slate-200 scroll-mt-20">
         <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
           {/* Section Heading - Centered */}
           <div className="text-center max-w-3xl mx-auto mb-12 sm:mb-16">
@@ -251,7 +292,7 @@ export default function Landing() {
           - Increased step text size (text-base sm:text-lg)
           - 4-step horizontal process on desktop, vertical list on mobile
       ========================================================== */}
-      <section className="py-16 sm:py-24 bg-slate-50">
+      <section id="workflow" className="py-16 sm:py-24 bg-slate-50 scroll-mt-20">
         <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
           {/* Section Heading - Centered */}
           <div className="text-center max-w-3xl mx-auto mb-12 sm:mb-16">
