@@ -5,7 +5,10 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
       {/* =========================================================
-          Top Navigation Bar
+          1. STICKY HEADER
+          - Logo badge + "Campus Capture" wordmark on left
+          - Single "Portal Login" button on right (links to /login)
+          - max-w-6xl container, h-16 height
       ========================================================== */}
       <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -18,7 +21,7 @@ export default function Landing() {
               />
             </div>
             <div>
-              <span className="block text-base font-bold leading-tight text-slate-900">
+              <span className="block text-base font-bold leading-tight tracking-tight text-slate-900">
                 Campus Capture
               </span>
               <span className="block text-[11px] font-medium text-slate-500">
@@ -29,7 +32,7 @@ export default function Landing() {
 
           <Link
             to="/login"
-            className="inline-flex items-center justify-center rounded-xl bg-blue-900 px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2"
+            className="inline-flex items-center justify-center rounded-xl bg-blue-900 px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-sm shadow-blue-950/20 transition hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-700/20"
           >
             Portal Login
           </Link>
@@ -37,58 +40,65 @@ export default function Landing() {
       </header>
 
       {/* =========================================================
-          Hero Section
+          2. HERO SECTION
+          - Full-bleed mesh gradient background (#0a1226 -> #101e40 -> #1e1b4b)
+          - Texture dot-matrix + dual soft radial glow
+          - Centered content: SRHU badge, exact headline, supporting sentence
+          - Single primary CTA button linking to /login ("Access Portal")
+          - NO fabricated metrics/stats bar
       ========================================================== */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-[#0a1226] via-[#101e40] to-[#1e1b4b] text-white py-16 sm:py-24 lg:py-28">
-        {/* Subtle grid background pattern */}
+      <section className="relative overflow-hidden bg-gradient-to-br from-[#0a1226] via-[#101e40] to-[#1e1b4b] text-white py-20 sm:py-28 lg:py-32">
+        {/* Subtle dot-matrix background pattern */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 opacity-[0.06]"
           style={{
             backgroundImage:
               "radial-gradient(circle at 1px 1px, #ffffff 1px, transparent 0)",
-            backgroundSize: "24px 24px",
+            backgroundSize: "20px 20px",
           }}
         />
 
-        {/* Ambient soft glow */}
+        {/* Ambient soft glow layers */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -top-32 -left-32 h-96 w-96 rounded-full bg-blue-500/15 blur-3xl"
+          className="pointer-events-none absolute -top-24 -left-24 h-80 w-80 rounded-full bg-blue-500/15 blur-3xl"
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-indigo-500/15 blur-3xl"
+          className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-indigo-500/15 blur-3xl"
         />
 
         <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
           {/* Institutional Badge */}
           <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3.5 py-1 text-xs font-medium text-blue-200 backdrop-blur-sm mb-6">
             <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
-            Official SRHU Event Management & Approval System
+            Swami Rama Himalayan University
           </div>
 
-          <h1 className="text-3xl font-extrabold tracking-tight sm:text-5xl sm:leading-tight lg:text-6xl">
+          {/* Headline - Reused verbatim from Login.jsx */}
+          <h1 className="text-3xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl sm:leading-tight">
             Manage campus events with{" "}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-white to-blue-100">
               clarity and control.
             </span>
           </h1>
 
-          <p className="mx-auto mt-6 max-w-2xl text-base text-blue-100/85 sm:text-lg sm:leading-relaxed">
-            A centralized university portal for faculty event submissions,
-            Dean-level administrative reviews, and institutional tracking across
-            Swami Rama Himalayan University.
+          {/* Supporting Sentence */}
+          <p className="mx-auto mt-6 max-w-2xl text-base text-blue-100/80 font-normal sm:text-lg sm:leading-relaxed">
+            A centralized university portal for faculty event proposals,
+            administrative Dean reviews, and real-time status tracking across SRHU.
           </p>
 
-          <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
+          {/* Primary CTA */}
+          <div className="mt-8 flex justify-center">
             <Link
               to="/login"
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3.5 text-sm font-semibold text-slate-900 shadow-lg shadow-black/20 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-900"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-900 px-6 py-3 text-sm font-semibold text-white border border-blue-400/30 shadow-lg shadow-black/30 transition hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-700/30"
             >
-              <span>Access Faculty Portal</span>
+              <span>Access Portal</span>
               <svg
-                className="h-4 w-4 text-slate-700"
+                className="h-4 w-4"
                 viewBox="0 0 20 20"
                 fill="currentColor"
               >
@@ -100,37 +110,39 @@ export default function Landing() {
               </svg>
             </Link>
           </div>
-
-          <div className="mt-12 grid grid-cols-3 divide-x divide-white/10 border-t border-white/10 pt-6 text-center text-xs sm:text-sm font-medium text-blue-200/90">
-            <div>Faculty Submissions</div>
-            <div>Dean Review Queue</div>
-            <div>Institutional Records</div>
-          </div>
         </div>
       </section>
 
       {/* =========================================================
-          Feature Highlights
+          3. FEATURE HIGHLIGHTS
+          - Light/neutral background (bg-white / border-slate-200)
+          - 4 cards describing real system capabilities:
+            1. Create Event
+            2. Approval Workflow
+            3. Status Tracking
+            4. Role-based Dashboards
+          - Card style: rounded-2xl, border-slate-200/80, soft shadow
+          - Inline SVGs only (no icon library)
       ========================================================== */}
-      <section className="py-16 sm:py-20 lg:py-24 bg-white border-b border-slate-200">
+      <section className="py-16 sm:py-24 bg-white border-b border-slate-200">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-12 sm:mb-16">
             <h2 className="text-xs font-bold uppercase tracking-wider text-blue-700">
               System Capabilities
             </h2>
             <p className="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-              Engineered for university administrative workflows
+              Built for university administrative operations
             </p>
             <p className="mt-3 text-sm text-slate-500 leading-relaxed">
-              Every feature aligns with the actual operational roles and
-              protocols established across SRHU schools and departments.
+              Designed around institutional workflows across departments,
+              colleges, and administrative offices.
             </p>
           </div>
 
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {/* Card 1: Event Creation */}
-            <div className="flex flex-col rounded-2xl border border-slate-200 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4">
+            {/* Feature 1: Create Event */}
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
                 <svg
                   className="h-5 w-5"
                   viewBox="0 0 24 24"
@@ -149,44 +161,17 @@ export default function Landing() {
                 </svg>
               </div>
               <h3 className="text-base font-bold text-slate-900">
-                Structured Event Proposal
+                Create Event
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Submit comprehensive event proposals with event titles, dates,
-                venues, descriptions, and expected participant volumes.
+                Teachers submit new event proposals with titles, dates, venues,
+                participant estimates, and supporting document attachments.
               </p>
             </div>
 
-            {/* Card 2: Document & Media Management */}
-            <div className="flex flex-col rounded-2xl border border-slate-200 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4">
-                <svg
-                  className="h-5 w-5"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="12" y1="18" x2="12" y2="12" />
-                  <line x1="9" y1="15" x2="15" y2="15" />
-                </svg>
-              </div>
-              <h3 className="text-base font-bold text-slate-900">
-                Secure File Attachments
-              </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Attach official approval documents (PDF/DOC up to 25MB) and media
-                banners directly into isolated, secure university storage buckets.
-              </p>
-            </div>
-
-            {/* Card 3: Dean Review Workflow */}
-            <div className="flex flex-col rounded-2xl border border-slate-200 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4">
+            {/* Feature 2: Approval Workflow */}
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
                 <svg
                   className="h-5 w-5"
                   viewBox="0 0 24 24"
@@ -201,17 +186,42 @@ export default function Landing() {
                 </svg>
               </div>
               <h3 className="text-base font-bold text-slate-900">
-                Dean Review Pipeline
+                Approval Workflow
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Deans review pending department submissions with full attachment
-                inspection and record formal approve or reject decisions.
+                Deans review incoming submissions in an administrative queue,
+                inspect proposal details, and record formal approval or rejection.
               </p>
             </div>
 
-            {/* Card 4: Role-Based Dashboards */}
-            <div className="flex flex-col rounded-2xl border border-slate-200 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4">
+            {/* Feature 3: Status Tracking */}
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
+                <svg
+                  className="h-5 w-5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+              </div>
+              <h3 className="text-base font-bold text-slate-900">
+                Status Tracking
+              </h3>
+              <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                Teachers monitor real-time event status updates—pending, approved,
+                or rejected—with immediate visual badges across their dashboard.
+              </p>
+            </div>
+
+            {/* Feature 4: Role-based Dashboards */}
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
                 <svg
                   className="h-5 w-5"
                   viewBox="0 0 24 24"
@@ -225,11 +235,11 @@ export default function Landing() {
                 </svg>
               </div>
               <h3 className="text-base font-bold text-slate-900">
-                Role-Guarded Access
+                Role-based Dashboards
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Strict authorization boundaries isolate Teacher, Dean, and Admin
-                views with server-verified credentials and row-level security.
+                Segmented views tailored for Teachers, Deans, and Administrators
+                with strict row-level security and server-side verification.
               </p>
             </div>
           </div>
@@ -237,20 +247,24 @@ export default function Landing() {
       </section>
 
       {/* =========================================================
-          "How It Works" Section
+          4. HOW IT WORKS
+          - 4-step horizontal process on desktop
+          - Connecting timeline track on desktop
+          - Vertical stacked list on mobile
+          - Exact real workflow:
+            Teacher creates event -> Submits for review -> Dean approves/rejects -> Status visible to Teacher
       ========================================================== */}
-      <section className="py-16 sm:py-20 lg:py-24 bg-slate-50">
+      <section className="py-16 sm:py-24 bg-slate-50">
         <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-12 sm:mb-16">
             <h2 className="text-xs font-bold uppercase tracking-wider text-blue-700">
-              Lifecycle
+              Workflow
             </h2>
             <p className="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
               How event approval works
             </p>
             <p className="mt-3 text-sm text-slate-500 leading-relaxed">
-              A transparent, 4-step sequence from faculty drafting to administrative
-              approval.
+              The four sequential stages of event proposal and administrative review.
             </p>
           </div>
 
@@ -258,7 +272,7 @@ export default function Landing() {
             {/* Connecting line on desktop */}
             <div
               aria-hidden="true"
-              className="hidden md:block absolute top-7 left-12 right-12 h-0.5 bg-slate-200"
+              className="hidden md:block absolute top-7 left-14 right-14 h-0.5 bg-slate-200"
             />
 
             <div className="grid gap-8 md:grid-cols-4 relative">
@@ -271,8 +285,8 @@ export default function Landing() {
                   Teacher Creates Event
                 </h3>
                 <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  Faculty member fills event schedule, venue details, and uploads
-                  required documents.
+                  Teacher drafts event details, specifies schedule and venue, and
+                  attaches required documentation.
                 </p>
               </div>
 
@@ -282,11 +296,11 @@ export default function Landing() {
                   2
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Submission Queued
+                  Submits for Review
                 </h3>
                 <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  The event enters the system under pending status and appears in
-                  the Dean&apos;s review list.
+                  Proposal is submitted into the system and queued directly into
+                  the Dean&apos;s pending review list.
                 </p>
               </div>
 
@@ -296,11 +310,11 @@ export default function Landing() {
                   3
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Dean Review
+                  Dean Approves / Rejects
                 </h3>
                 <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  Dean evaluates documentation and formally records an approval
-                  or rejection decision.
+                  Dean evaluates event feasibility and attached files, then records
+                  an approval or rejection decision.
                 </p>
               </div>
 
@@ -310,11 +324,11 @@ export default function Landing() {
                   4
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Status Confirmed
+                  Status Visible to Teacher
                 </h3>
                 <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  Decision is immediately reflected on teacher dashboards and
-                  the university calendar.
+                  Decision is updated in real time on the teacher&apos;s dashboard
+                  under approved or rejected status.
                 </p>
               </div>
             </div>
@@ -323,30 +337,11 @@ export default function Landing() {
       </section>
 
       {/* =========================================================
-          Pre-Footer Access Banner
-      ========================================================== */}
-      <section className="bg-gradient-to-r from-blue-900 to-indigo-900 py-12 text-white text-center px-4">
-        <div className="mx-auto max-w-3xl">
-          <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
-            Swami Rama Himalayan University Faculty Portal
-          </h2>
-          <p className="mt-2 text-xs sm:text-sm text-blue-100/80">
-            Sign in with your authorized institutional account to access your
-            dashboard.
-          </p>
-          <div className="mt-6">
-            <Link
-              to="/login"
-              className="inline-flex items-center justify-center rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-blue-950 shadow-sm transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-900"
-            >
-              Sign In to Dashboard
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* =========================================================
-          Footer
+          5. FOOTER
+          - SRHU name
+          - "Campus Capture" wordmark
+          - Copyright line
+          - No fake social icons, no fake legal/privacy links
       ========================================================== */}
       <footer className="border-t border-slate-200 bg-white py-8 mt-auto">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
@@ -358,14 +353,18 @@ export default function Landing() {
                 className="h-full w-full object-contain"
               />
             </div>
-            <p className="text-xs text-slate-600 font-medium">
-              Campus Capture · Swami Rama Himalayan University
-            </p>
+            <div>
+              <p className="text-xs font-bold text-slate-900 leading-tight">
+                Campus Capture
+              </p>
+              <p className="text-[11px] text-slate-500 font-medium">
+                Swami Rama Himalayan University
+              </p>
+            </div>
           </div>
 
           <p className="text-xs text-slate-400">
-            © {new Date().getFullYear()} Swami Rama Himalayan University. All
-            rights reserved.
+            © {new Date().getFullYear()} Swami Rama Himalayan University. All rights reserved.
           </p>
         </div>
       </footer>
