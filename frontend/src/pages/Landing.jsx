@@ -123,7 +123,7 @@ export default function Landing() {
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-white border-b border-slate-200">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-2xl mx-auto mb-12 sm:mb-16">
+          <div className="mb-12 max-w-2xl sm:mb-16">
             <h2 className="text-xs font-bold uppercase tracking-wider text-blue-700">
               System Capabilities
             </h2>
@@ -136,7 +136,7 @@ export default function Landing() {
             </p>
           </div>
 
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {/* Feature 1: Create Event */}
             <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
