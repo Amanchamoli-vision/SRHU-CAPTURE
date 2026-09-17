@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import srhuLogo from "../assets/srhu-logo-light.png";
+import srhuLogo from "../assets/logo.png";
 
 export default function Landing() {
   return (

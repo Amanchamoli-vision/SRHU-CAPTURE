@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
-import srhuLogo from "../assets/srhu-logo-light.png";
+import srhuLogo from "../assets/logo.png";
 
 function Navbar({ title = "Dean Panel", actions = null }) {
   const navigate = useNavigate();
