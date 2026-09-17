@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../../services/supabase";
+import srhuLogo from "../../assets/logo-srhu.png";
 
 /* ============ Inline icons (no external icon library needed) ============ */
 const IconLogout = ({ className = "h-4 w-4" }) => (
@@ -203,8 +204,8 @@ function TeacherDashboard() {
         <div className="flex h-[68px] items-center justify-between px-6">
 
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#101A33]">
-              <span className="font-display text-sm font-semibold text-[#D4AF6A]">CC</span>
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
+              <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
             </div>
             <div>
               <h1 className="font-display text-base font-semibold leading-tight text-[#101A33]">

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../services/supabase";
 import { API_BASE_URL } from "../../services/api";
+import srhuLogo from "../../assets/logo-srhu.png";
 
 function AdminDashboard() {
   const navigate = useNavigate();
@@ -112,14 +113,18 @@ function AdminDashboard() {
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r min-h-screen p-5 flex flex-col">
 
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">
-            Campus Capture
-          </h1>
-
-          <p className="text-sm text-gray-500 mt-1">
-            Admin Panel
-          </p>
+        <div className="mb-8 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
+            <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-gray-900 leading-tight">
+              Campus Capture
+            </h1>
+            <p className="text-xs text-gray-500">
+              Admin Panel
+            </p>
+          </div>
         </div>
 
         <nav className="space-y-2">

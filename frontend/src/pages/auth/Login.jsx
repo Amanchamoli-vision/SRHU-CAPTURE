@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
+import srhuLogo from "../../assets/logo-srhu.png";
 
 function Login() {
   const navigate = useNavigate();
@@ -203,16 +204,13 @@ function Login() {
         ========================== */}
         <div className="relative hidden flex-col justify-between bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 p-10 text-white md:flex">
           <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20">
-                <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3 2 8l10 5 10-5-10-5Z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 10.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-5.5" />
-                </svg>
+            <div className="flex items-center gap-3.5">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white p-1.5 shadow-md shadow-blue-950/20">
+                <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
               </div>
               <div>
                 <p className="text-lg font-bold leading-tight">Campus Capture</p>
-                <p className="text-xs text-blue-200">SRHU Event Management</p>
+                <p className="text-xs text-blue-200">Swami Rama Himalayan University</p>
               </div>
             </div>
 
@@ -249,13 +247,13 @@ function Login() {
 
             {/* Mobile-only brand mark */}
             <div className="mb-8 flex items-center gap-3 md:hidden">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-900">
-                <svg className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3 2 8l10 5 10-5-10-5Z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 10.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-5.5" />
-                </svg>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white p-1.5 shadow-sm border border-slate-200">
+                <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
               </div>
-              <p className="text-lg font-bold text-slate-900">Campus Capture</p>
+              <div>
+                <p className="text-lg font-bold text-slate-900 leading-tight">Campus Capture</p>
+                <p className="text-xs text-slate-500">Swami Rama Himalayan University</p>
+              </div>
             </div>
 
             {/* =========================

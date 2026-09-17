@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
-import favicon from './assets/images.png'
+import favicon from './assets/logo-srhu.png'
 
 const link = document.querySelector("link[rel~='icon']") || document.createElement('link')
 link.rel = 'icon'

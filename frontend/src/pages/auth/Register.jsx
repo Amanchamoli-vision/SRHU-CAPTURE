@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { API_BASE_URL } from "../../services/api";
+import srhuLogo from "../../assets/logo-srhu.png";
 
 function EyeIcon({ open }) {
   return open ? (
@@ -123,11 +124,14 @@ function Register() {
         <div className="pointer-events-none absolute -top-24 -left-24 h-96 w-96 rounded-full bg-white/5 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-32 -right-16 h-96 w-96 rounded-full bg-indigo-400/10 blur-3xl" />
 
-        <div className="relative flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 backdrop-blur-sm ring-1 ring-white/20">
-            <span className="text-sm font-bold tracking-wide">SRHU</span>
+        <div className="relative flex items-center gap-3.5">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white p-1.5 shadow-md shadow-blue-950/20">
+            <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
           </div>
-          <span className="text-lg font-semibold tracking-tight">Campus Capture</span>
+          <div>
+            <span className="text-lg font-bold tracking-tight block">Campus Capture</span>
+            <span className="text-xs text-blue-200 block">Swami Rama Himalayan University</span>
+          </div>
         </div>
 
         <div className="relative max-w-md">
@@ -168,8 +172,8 @@ function Register() {
 
           {/* Mobile-only logo */}
           <div className="mb-8 text-center lg:hidden">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-900 shadow-lg shadow-blue-900/20">
-              <span className="text-sm font-bold text-white">SRHU</span>
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white p-2 shadow-sm border border-slate-200">
+              <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
             </div>
             <h1 className="text-2xl font-bold text-slate-900">Campus Capture</h1>
             <p className="mt-1 text-sm text-slate-500">Swami Rama Himalayan University</p>
