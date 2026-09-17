@@ -12,13 +12,13 @@ export default function Landing() {
           - High-contrast gradient "Portal Login" CTA with micro-interaction
       ========================================================== */}
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl shadow-xs">
-        <div className="mx-auto flex h-18 sm:h-20 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
+        <div className="mx-auto flex h-20 sm:h-24 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
           {/* Left Brand Mark */}
           <div className="flex items-center gap-3.5 sm:gap-4">
             <img
               src={srhuLogo}
               alt="Swami Rama Himalayan University"
-              className="h-12 sm:h-14 w-auto object-contain"
+              className="h-16 sm:h-20 w-auto object-contain"
             />
             <div>
               <div className="flex items-center gap-2.5">

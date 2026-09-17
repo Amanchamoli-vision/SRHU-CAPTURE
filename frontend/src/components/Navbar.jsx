@@ -21,13 +21,13 @@ function Navbar({ title = "Dean Panel", actions = null }) {
 
   return (
     <header className="border-b border-slate-200 bg-white">
-      <div className="flex h-18 sm:h-20 items-center justify-between px-6">
+      <div className="flex h-20 sm:h-24 items-center justify-between px-6">
 
         <div className="flex items-center gap-3.5">
           <img
             src={srhuLogo}
             alt="Swami Rama Himalayan University"
-            className="h-11 sm:h-13 w-auto object-contain"
+            className="h-14 sm:h-18 w-auto object-contain"
           />
           <div>
             <h1 className="text-lg font-bold text-slate-900 leading-tight">
