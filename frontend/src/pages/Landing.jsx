@@ -6,13 +6,13 @@ export default function Landing() {
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
       {/* =========================================================
           1. STICKY HEADER
-          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
-          - Logo badge + "Campus Capture" wordmark on left
+          - Container aligned with main content left edge
+          - max-w-[1600px] mx-auto px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20
           - Single "Portal Login" button on right (links to /login)
           - h-16 height
       ========================================================== */}
       <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
+        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
               <img
@@ -43,11 +43,9 @@ export default function Landing() {
       {/* =========================================================
           2. HERO SECTION
           - Full-bleed mesh gradient background (#0a1226 -> #101e40 -> #1e1b4b)
-          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
-          - Texture dot-matrix + dual soft radial glow
-          - Centered content: SRHU badge, natural clause break, tightened subtext
+          - Main page heading is PERFECTLY CENTER-ALIGNED within content area
+          - Symmetrical center layout for hero content
           - Single primary CTA button linking to /login ("Access Portal")
-          - NO fabricated metrics/stats bar
       ========================================================== */}
       <section className="relative overflow-hidden bg-gradient-to-br from-[#0a1226] via-[#101e40] to-[#1e1b4b] text-white py-20 sm:py-28 lg:py-32">
         {/* Subtle dot-matrix background pattern */}
@@ -78,8 +76,8 @@ export default function Landing() {
             Swami Rama Himalayan University
           </div>
 
-          {/* Headline - Natural clause break with consistent tracking */}
-          <h1 className="mx-auto max-w-5xl text-3xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl sm:leading-tight">
+          {/* Main Page Heading - PERFECTLY CENTER-ALIGNED */}
+          <h1 className="mx-auto max-w-5xl text-3xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl sm:leading-tight text-center">
             Manage campus events{" "}
             <br className="hidden sm:inline" />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-white to-blue-100 font-extrabold tracking-tight">
@@ -87,13 +85,13 @@ export default function Landing() {
             </span>
           </h1>
 
-          {/* Supporting Sentence */}
-          <p className="mx-auto mt-5 max-w-2xl text-base font-normal leading-relaxed text-blue-100/80 sm:text-lg">
+          {/* Supporting Sentence - Center Aligned */}
+          <p className="mx-auto mt-5 max-w-2xl text-base font-normal leading-relaxed text-blue-100/80 sm:text-lg text-center">
             A centralized university portal for faculty event proposals,
             administrative Dean reviews, and real-time status tracking across SRHU.
           </p>
 
-          {/* Primary CTA */}
+          {/* Primary CTA - Center Aligned */}
           <div className="mt-8 flex justify-center">
             <Link
               to="/login"
@@ -118,14 +116,13 @@ export default function Landing() {
 
       {/* =========================================================
           3. FEATURE HIGHLIGHTS ("System Capabilities")
-          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
-          - Full-width left-aligned layout matching header edge
-          - Light/neutral background (bg-white / border-slate-200)
-          - 4 cards describing real system capabilities
-          - Inline SVGs only (no icon library)
+          - Shifted slightly toward left side with balanced spacing
+          - max-w-[1600px] mx-auto px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20
+          - Larger card titles (text-xl) and larger body copy (text-sm sm:text-base)
+          - Refined card padding (p-6 sm:p-7) for comfortable rhythm
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-white border-b border-slate-200">
-        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
+        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20">
           <div className="mb-12 sm:mb-16">
             <h2 className="text-sm font-bold uppercase tracking-wider text-blue-700">
               System Capabilities
@@ -133,7 +130,7 @@ export default function Landing() {
             <p className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
               Built for university administrative operations
             </p>
-            <p className="mt-2 text-base text-slate-500 leading-relaxed">
+            <p className="mt-2 text-base sm:text-lg text-slate-500 leading-relaxed">
               Designed around institutional workflows across departments,
               colleges, and administrative offices.
             </p>
@@ -141,10 +138,10 @@ export default function Landing() {
 
           <div className="grid w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {/* Feature 1: Create Event */}
-            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 sm:p-7 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-900 text-white mb-5 shadow-sm shadow-blue-950/20">
                 <svg
-                  className="h-5 w-5"
+                  className="h-6 w-6"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -160,20 +157,20 @@ export default function Landing() {
                   <line x1="10" y1="16" x2="14" y2="16" />
                 </svg>
               </div>
-              <h3 className="text-lg font-bold text-slate-900">
+              <h3 className="text-xl font-bold tracking-tight text-slate-900">
                 Create Event
               </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2.5 text-sm sm:text-base leading-relaxed text-slate-600">
                 Draft and submit comprehensive event proposals with schedules,
                 venues, and official file attachments.
               </p>
             </div>
 
             {/* Feature 2: Approval Workflow */}
-            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 sm:p-7 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-900 text-white mb-5 shadow-sm shadow-blue-950/20">
                 <svg
-                  className="h-5 w-5"
+                  className="h-6 w-6"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -185,20 +182,20 @@ export default function Landing() {
                   <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
                 </svg>
               </div>
-              <h3 className="text-lg font-bold text-slate-900">
+              <h3 className="text-xl font-bold tracking-tight text-slate-900">
                 Approval Workflow
               </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2.5 text-sm sm:text-base leading-relaxed text-slate-600">
                 Inspect pending proposals and attached documents from an
                 administrative queue to record formal decisions.
               </p>
             </div>
 
             {/* Feature 3: Status Tracking */}
-            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 sm:p-7 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-900 text-white mb-5 shadow-sm shadow-blue-950/20">
                 <svg
-                  className="h-5 w-5"
+                  className="h-6 w-6"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -210,20 +207,20 @@ export default function Landing() {
                   <polyline points="12 6 12 12 16 14" />
                 </svg>
               </div>
-              <h3 className="text-lg font-bold text-slate-900">
+              <h3 className="text-xl font-bold tracking-tight text-slate-900">
                 Status Tracking
               </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2.5 text-sm sm:text-base leading-relaxed text-slate-600">
                 Monitor live proposal review status across pending, approved, and
                 rejected states directly from your dashboard.
               </p>
             </div>
 
             {/* Feature 4: Role-based Dashboards */}
-            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 shadow-sm transition hover:shadow-md hover:border-slate-300">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-900 text-white mb-4 shadow-sm shadow-blue-950/20">
+            <div className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 sm:p-7 shadow-sm transition hover:shadow-md hover:border-slate-300">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-900 text-white mb-5 shadow-sm shadow-blue-950/20">
                 <svg
-                  className="h-5 w-5"
+                  className="h-6 w-6"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -234,10 +231,10 @@ export default function Landing() {
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-bold text-slate-900">
+              <h3 className="text-xl font-bold tracking-tight text-slate-900">
                 Role-based Dashboards
               </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2.5 text-sm sm:text-base leading-relaxed text-slate-600">
                 Dedicated operational views and authorization boundaries tailored
                 for Teachers, Deans, and Administrators.
               </p>
@@ -248,13 +245,13 @@ export default function Landing() {
 
       {/* =========================================================
           4. HOW IT WORKS ("How event approval works")
-          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
-          - Full-width left-aligned layout matching header edge
+          - Shifted slightly toward left side with balanced spacing
+          - max-w-[1600px] mx-auto px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20
+          - Larger step titles (text-lg) and larger step body text (text-sm sm:text-base)
           - 4-step horizontal process on desktop, vertical list on mobile
-          - Dynamic inter-card connecting lines
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-slate-50">
-        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
+        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20">
           <div className="mb-12 sm:mb-16">
             <h2 className="text-sm font-bold uppercase tracking-wider text-blue-700">
               Workflow
@@ -262,7 +259,7 @@ export default function Landing() {
             <p className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
               How event approval works
             </p>
-            <p className="mt-2 text-base text-slate-500 leading-relaxed">
+            <p className="mt-2 text-base sm:text-lg text-slate-500 leading-relaxed">
               The four sequential stages of event proposal and administrative review.
             </p>
           </div>
@@ -274,13 +271,13 @@ export default function Landing() {
                 aria-hidden="true"
                 className="hidden lg:block absolute top-7 left-14 -right-8 h-0.5 bg-slate-200"
               />
-              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-5 leading-none select-none">
                 1
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold tracking-tight text-slate-900">
                 Teacher Creates Event
               </h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2 text-sm sm:text-base leading-relaxed text-slate-600">
                 Faculty member compiles event schedule, venue requirements, and
                 necessary documentation.
               </p>
@@ -292,13 +289,13 @@ export default function Landing() {
                 aria-hidden="true"
                 className="hidden lg:block absolute top-7 left-14 -right-8 h-0.5 bg-slate-200"
               />
-              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-5 leading-none select-none">
                 2
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold tracking-tight text-slate-900">
                 Submits for Review
               </h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2 text-sm sm:text-base leading-relaxed text-slate-600">
                 Proposal enters the system and appears immediately in the Dean
                 review queue.
               </p>
@@ -310,13 +307,13 @@ export default function Landing() {
                 aria-hidden="true"
                 className="hidden lg:block absolute top-7 left-14 -right-8 h-0.5 bg-slate-200"
               />
-              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-5 leading-none select-none">
                 3
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold tracking-tight text-slate-900">
                 Dean Approves / Rejects
               </h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2 text-sm sm:text-base leading-relaxed text-slate-600">
                 Dean evaluates proposal feasibility, reviews attachments, and
                 records an official decision.
               </p>
@@ -324,13 +321,13 @@ export default function Landing() {
 
             {/* Step 4 */}
             <div className="relative flex flex-col items-start text-left">
-              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-5 leading-none select-none">
                 4
               </div>
-              <h3 className="text-base font-bold text-slate-900">
+              <h3 className="text-lg font-bold tracking-tight text-slate-900">
                 Status Visible to Teacher
               </h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+              <p className="mt-2 text-sm sm:text-base leading-relaxed text-slate-600">
                 Final decision is instantly updated on faculty dashboards and
                 university calendars.
               </p>
@@ -341,12 +338,12 @@ export default function Landing() {
 
       {/* =========================================================
           5. FOOTER
-          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
+          - Container aligned with main content left edge
+          - max-w-[1600px] mx-auto px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20
           - Wordmark (sm, bold) -> Subtitle (xs, medium) -> Copyright (xs, slate-400)
-          - No fake social icons, no fake legal/privacy links
       ========================================================== */}
       <footer className="border-t border-slate-200 bg-white py-8 mt-auto">
-        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
+        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:pl-8 lg:pr-14 xl:pl-10 xl:pr-20 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 shrink-0 rounded-lg border border-slate-200 bg-white p-1">
               <img
