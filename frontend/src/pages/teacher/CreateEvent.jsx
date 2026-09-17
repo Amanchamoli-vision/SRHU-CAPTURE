@@ -109,13 +109,44 @@ function CreateEvent() {
   };
 
   // --------------------------------------------------
-  // Media Selection
+  // Media Selection & Validation (Max 10MB, Images/Videos only)
   // --------------------------------------------------
 
-  const handleMediaChange = (e) => {
-    const files = Array.from(e.target.files || []);
+  const MAX_MEDIA_SIZE = 10 * 1024 * 1024; // 10MB
 
-    setMediaFiles((prev) => [...prev, ...files]);
+  const handleMediaChange = (e) => {
+    const rawFiles = Array.from(e.target.files || []);
+    const validFiles = [];
+    const rejectedErrors = [];
+
+    for (const file of rawFiles) {
+      const isImageOrVideo =
+        file.type.startsWith("image/") || file.type.startsWith("video/");
+
+      if (!isImageOrVideo) {
+        rejectedErrors.push(
+          `"${file.name}" is not a valid image or video file.`
+        );
+        continue;
+      }
+
+      if (file.size > MAX_MEDIA_SIZE) {
+        rejectedErrors.push(
+          `"${file.name}" exceeds the 10MB limit.`
+        );
+        continue;
+      }
+
+      validFiles.push(file);
+    }
+
+    if (rejectedErrors.length > 0) {
+      setError(rejectedErrors.join(" "));
+    }
+
+    if (validFiles.length > 0) {
+      setMediaFiles((prev) => [...prev, ...validFiles]);
+    }
 
     e.target.value = "";
   };
@@ -127,16 +158,58 @@ function CreateEvent() {
   };
 
   // --------------------------------------------------
-  // Document Selection
+  // Document Selection & Validation (Max 25MB, Supported document formats)
   // --------------------------------------------------
 
-  const handleDocumentChange = (e) => {
-    const files = Array.from(e.target.files || []);
+  const MAX_DOC_SIZE = 25 * 1024 * 1024; // 25MB
+  const ALLOWED_DOC_EXTENSIONS = [
+    "pdf",
+    "doc",
+    "docx",
+    "xls",
+    "xlsx",
+    "ppt",
+    "pptx",
+    "txt",
+    "csv",
+  ];
 
-    setDocumentFiles((prev) => [
-      ...prev,
-      ...files,
-    ]);
+  const handleDocumentChange = (e) => {
+    const rawFiles = Array.from(e.target.files || []);
+    const validFiles = [];
+    const rejectedErrors = [];
+
+    for (const file of rawFiles) {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      const isValidExt = ext && ALLOWED_DOC_EXTENSIONS.includes(ext);
+
+      if (!isValidExt) {
+        rejectedErrors.push(
+          `"${file.name}" is not a supported document type (allowed: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT, CSV).`
+        );
+        continue;
+      }
+
+      if (file.size > MAX_DOC_SIZE) {
+        rejectedErrors.push(
+          `"${file.name}" exceeds the 25MB limit.`
+        );
+        continue;
+      }
+
+      validFiles.push(file);
+    }
+
+    if (rejectedErrors.length > 0) {
+      setError(rejectedErrors.join(" "));
+    }
+
+    if (validFiles.length > 0) {
+      setDocumentFiles((prev) => [
+        ...prev,
+        ...validFiles,
+      ]);
+    }
 
     e.target.value = "";
   };
