@@ -43,7 +43,7 @@ export default function Landing() {
           2. HERO SECTION
           - Full-bleed mesh gradient background (#0a1226 -> #101e40 -> #1e1b4b)
           - Texture dot-matrix + dual soft radial glow
-          - Centered content: SRHU badge, exact headline, supporting sentence
+          - Centered content: SRHU badge, natural clause break, tightened subtext
           - Single primary CTA button linking to /login ("Access Portal")
           - NO fabricated metrics/stats bar
       ========================================================== */}
@@ -71,30 +71,31 @@ export default function Landing() {
 
         <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
           {/* Institutional Badge */}
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3.5 py-1 text-xs font-medium text-blue-200 backdrop-blur-sm mb-6">
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-200 backdrop-blur-sm mb-6">
             <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
             Swami Rama Himalayan University
           </div>
 
-          {/* Headline - Reused verbatim from Login.jsx */}
+          {/* Headline - Natural clause break with consistent tracking */}
           <h1 className="text-3xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl sm:leading-tight">
-            Manage campus events with{" "}
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-white to-blue-100">
-              clarity and control.
+            Manage campus events{" "}
+            <br className="hidden sm:inline" />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-white to-blue-100 font-extrabold tracking-tight">
+              with clarity and control.
             </span>
           </h1>
 
-          {/* Supporting Sentence */}
-          <p className="mx-auto mt-6 max-w-2xl text-base text-blue-100/80 font-normal sm:text-lg sm:leading-relaxed">
+          {/* Supporting Sentence - Constrained width and tightened line-height */}
+          <p className="mx-auto mt-5 max-w-xl text-sm font-normal leading-snug text-blue-100/80 sm:text-base sm:leading-normal">
             A centralized university portal for faculty event proposals,
             administrative Dean reviews, and real-time status tracking across SRHU.
           </p>
 
-          {/* Primary CTA */}
+          {/* Primary CTA - Refined font-weight and letter-spacing */}
           <div className="mt-8 flex justify-center">
             <Link
               to="/login"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-900 px-6 py-3 text-sm font-semibold text-white border border-blue-400/30 shadow-lg shadow-black/30 transition hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-700/30"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-900 px-6 py-3 text-sm font-bold tracking-wide text-white border border-blue-400/30 shadow-lg shadow-black/30 transition hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-700/30"
             >
               <span>Access Portal</span>
               <svg
@@ -114,14 +115,10 @@ export default function Landing() {
       </section>
 
       {/* =========================================================
-          3. FEATURE HIGHLIGHTS
+          3. FEATURE HIGHLIGHTS ("System Capabilities")
           - Light/neutral background (bg-white / border-slate-200)
-          - 4 cards describing real system capabilities:
-            1. Create Event
-            2. Approval Workflow
-            3. Status Tracking
-            4. Role-based Dashboards
-          - Card style: rounded-2xl, border-slate-200/80, soft shadow
+          - 4 cards describing real system capabilities
+          - Concise descriptions maintaining a 2-line visual rhythm
           - Inline SVGs only (no icon library)
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-white border-b border-slate-200">
@@ -133,7 +130,7 @@ export default function Landing() {
             <p className="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
               Built for university administrative operations
             </p>
-            <p className="mt-3 text-sm text-slate-500 leading-relaxed">
+            <p className="mt-2 text-sm text-slate-500 leading-normal">
               Designed around institutional workflows across departments,
               colleges, and administrative offices.
             </p>
@@ -163,9 +160,9 @@ export default function Landing() {
               <h3 className="text-base font-bold text-slate-900">
                 Create Event
               </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Teachers submit new event proposals with titles, dates, venues,
-                participant estimates, and supporting document attachments.
+              <p className="mt-2 text-xs leading-normal text-slate-600">
+                Draft and submit comprehensive event proposals with schedules,
+                venues, and official file attachments.
               </p>
             </div>
 
@@ -188,9 +185,9 @@ export default function Landing() {
               <h3 className="text-base font-bold text-slate-900">
                 Approval Workflow
               </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Deans review incoming submissions in an administrative queue,
-                inspect proposal details, and record formal approval or rejection.
+              <p className="mt-2 text-xs leading-normal text-slate-600">
+                Inspect pending proposals and attached documents from an
+                administrative queue to record formal decisions.
               </p>
             </div>
 
@@ -213,9 +210,9 @@ export default function Landing() {
               <h3 className="text-base font-bold text-slate-900">
                 Status Tracking
               </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Teachers monitor real-time event status updates—pending, approved,
-                or rejected—with immediate visual badges across their dashboard.
+              <p className="mt-2 text-xs leading-normal text-slate-600">
+                Monitor live proposal review status across pending, approved, and
+                rejected states directly from your dashboard.
               </p>
             </div>
 
@@ -237,9 +234,9 @@ export default function Landing() {
               <h3 className="text-base font-bold text-slate-900">
                 Role-based Dashboards
               </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                Segmented views tailored for Teachers, Deans, and Administrators
-                with strict row-level security and server-side verification.
+              <p className="mt-2 text-xs leading-normal text-slate-600">
+                Dedicated operational views and authorization boundaries tailored
+                for Teachers, Deans, and Administrators.
               </p>
             </div>
           </div>
@@ -247,12 +244,12 @@ export default function Landing() {
       </section>
 
       {/* =========================================================
-          4. HOW IT WORKS
+          4. HOW IT WORKS ("How event approval works")
           - 4-step horizontal process on desktop
           - Connecting timeline track on desktop
           - Vertical stacked list on mobile
-          - Exact real workflow:
-            Teacher creates event -> Submits for review -> Dean approves/rejects -> Status visible to Teacher
+          - Optically centered step numbers
+          - Concise step descriptions balanced for 2 lines
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-slate-50">
         <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
@@ -263,7 +260,7 @@ export default function Landing() {
             <p className="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
               How event approval works
             </p>
-            <p className="mt-3 text-sm text-slate-500 leading-relaxed">
+            <p className="mt-2 text-sm text-slate-500 leading-normal">
               The four sequential stages of event proposal and administrative review.
             </p>
           </div>
@@ -278,57 +275,57 @@ export default function Landing() {
             <div className="grid gap-8 md:grid-cols-4 relative">
               {/* Step 1 */}
               <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   1
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
                   Teacher Creates Event
                 </h3>
-                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  Teacher drafts event details, specifies schedule and venue, and
-                  attaches required documentation.
+                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                  Faculty member compiles event schedule, venue requirements, and
+                  necessary documentation.
                 </p>
               </div>
 
               {/* Step 2 */}
               <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   2
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
                   Submits for Review
                 </h3>
-                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  Proposal is submitted into the system and queued directly into
-                  the Dean&apos;s pending review list.
+                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                  Proposal enters the system and appears immediately in the Dean
+                  review queue.
                 </p>
               </div>
 
               {/* Step 3 */}
               <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   3
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
                   Dean Approves / Rejects
                 </h3>
-                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  Dean evaluates event feasibility and attached files, then records
-                  an approval or rejection decision.
+                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                  Dean evaluates proposal feasibility, reviews attachments, and
+                  records an official decision.
                 </p>
               </div>
 
               {/* Step 4 */}
               <div className="flex flex-col items-center text-center">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4">
+                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-base font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
                   4
                 </div>
                 <h3 className="text-sm font-bold text-slate-900">
                   Status Visible to Teacher
                 </h3>
-                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                  Decision is updated in real time on the teacher&apos;s dashboard
-                  under approved or rejected status.
+                <p className="mt-1.5 text-xs leading-normal text-slate-600">
+                  Final decision is instantly updated on faculty dashboards and
+                  university calendars.
                 </p>
               </div>
             </div>
@@ -338,9 +335,8 @@ export default function Landing() {
 
       {/* =========================================================
           5. FOOTER
-          - SRHU name
-          - "Campus Capture" wordmark
-          - Copyright line
+          - Clear typographic hierarchy:
+            Wordmark (sm, bold) -> Subtitle (xs, medium) -> Copyright (xs, slate-400)
           - No fake social icons, no fake legal/privacy links
       ========================================================== */}
       <footer className="border-t border-slate-200 bg-white py-8 mt-auto">
@@ -354,10 +350,10 @@ export default function Landing() {
               />
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-900 leading-tight">
+              <p className="text-sm font-bold text-slate-900 leading-tight">
                 Campus Capture
               </p>
-              <p className="text-[11px] text-slate-500 font-medium">
+              <p className="text-xs font-medium text-slate-500">
                 Swami Rama Himalayan University
               </p>
             </div>
