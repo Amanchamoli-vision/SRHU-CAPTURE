@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
-import srhuLogo from "../../assets/logo-srhu.png";
+import srhuLogo from "../../assets/logo.png";
 
 function Login() {
   const navigate = useNavigate();
@@ -195,21 +195,21 @@ function Login() {
     }
   };
 
-  // Initial mount: subtle loading skeleton to prevent flash of content while AuthContext resolves
+  // Initial mount: subtle loading skeleton matching Landing layout
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-8 sm:px-6 md:py-12">
         <div className="w-full max-w-4xl grid overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-xl shadow-slate-200/50 md:grid-cols-2 animate-pulse">
-          <div className="hidden md:flex flex-col justify-between bg-gradient-to-br from-[#0a1226] via-[#101e40] to-[#1e1b4b] p-10">
+          <div className="hidden md:flex flex-col justify-between bg-gradient-to-br from-[#0a1226] via-[#101e40] to-[#1e1b4b] p-8 lg:p-10">
             <div>
               <div className="flex items-center gap-3">
-                <div className="h-12 w-12 rounded-2xl bg-white/20" />
+                <div className="h-12 w-12 rounded-xl bg-white/20" />
                 <div className="space-y-1.5">
                   <div className="h-4 w-28 rounded bg-white/20" />
                   <div className="h-3 w-40 rounded bg-white/10" />
                 </div>
               </div>
-              <div className="mt-14 space-y-3">
+              <div className="mt-12 space-y-3">
                 <div className="h-7 w-3/4 rounded bg-white/20" />
                 <div className="h-7 w-1/2 rounded bg-white/20" />
                 <div className="mt-4 h-4 w-5/6 rounded bg-white/10" />
@@ -248,7 +248,7 @@ function Login() {
             Left Institutional Panel
         ========================== */}
         <div className="relative hidden md:flex flex-col justify-between bg-gradient-to-br from-[#0a1226] via-[#101e40] to-[#1e1b4b] p-8 lg:p-10 text-white overflow-hidden">
-          {/* Subtle grid pattern */}
+          {/* Subtle grid pattern matching Landing page */}
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 opacity-[0.06]"
@@ -259,7 +259,7 @@ function Login() {
             }}
           />
 
-          {/* Ambient soft glow */}
+          {/* Ambient soft glow layers */}
           <div
             aria-hidden="true"
             className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-blue-500/15 blur-3xl"
@@ -270,44 +270,56 @@ function Login() {
           />
 
           <div className="relative z-10">
+            {/* Top Brand & Institutional Badge */}
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white p-1.5 shadow-md shadow-black/20">
-                <img
-                  src={srhuLogo}
-                  alt="SRHU Logo"
-                  className="h-full w-full object-contain"
-                />
-              </div>
+              <img
+                src={srhuLogo}
+                alt="SRHU Logo"
+                className="h-12 w-auto object-contain"
+              />
               <div>
-                <span className="block text-base font-bold leading-tight tracking-tight text-white">
-                  Campus Capture
-                </span>
-                <span className="block text-[11px] font-medium text-blue-200">
+                <div className="flex items-center gap-2">
+                  <span className="block text-base font-black leading-tight tracking-tight text-white">
+                    Campus Capture
+                  </span>
+                  <span className="inline-flex items-center rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-blue-200 border border-white/15">
+                    SRHU
+                  </span>
+                </div>
+                <span className="block text-xs font-medium text-blue-200/80">
                   Swami Rama Himalayan University
                 </span>
               </div>
             </div>
 
-            <h2 className="mt-12 text-2xl lg:text-3xl font-extrabold leading-snug tracking-tight text-white">
-              Manage campus events with clarity and control.
-            </h2>
-            <p className="mt-3 text-xs lg:text-sm leading-relaxed text-blue-100/80 font-normal">
-              A unified institutional platform for faculty event submissions,
-              Dean review workflows, and campus-wide event coordination.
-            </p>
+            {/* Headline matching Landing typography */}
+            <div className="mt-10">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-200 backdrop-blur-sm mb-4">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                Administrative Portal
+              </div>
+              <h2 className="text-2xl lg:text-3xl font-extrabold leading-snug tracking-tight text-white">
+                Manage campus events with clarity and control.
+              </h2>
+              <p className="mt-3 text-xs lg:text-sm leading-relaxed text-blue-100/80 font-normal">
+                A unified institutional platform for faculty event submissions,
+                Dean review workflows, and status tracking across SRHU.
+              </p>
+            </div>
           </div>
 
+          {/* Feature List matching Landing System Capabilities */}
           <div className="relative z-10 space-y-2.5 pt-8 text-xs text-blue-100/85 border-t border-white/10">
-            <div className="flex items-center gap-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
-              <span>Role-segregated faculty and Dean access</span>
+            <div className="flex items-center gap-2.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0" />
+              <span>Role-segregated faculty and Dean authorization</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
-              <span>Structured proposal and attachment workflow</span>
+            <div className="flex items-center gap-2.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0" />
+              <span>Structured event proposal & document approval pipeline</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+            <div className="flex items-center gap-2.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0" />
               <span>Real-time status tracking across departments</span>
             </div>
           </div>
@@ -321,24 +333,27 @@ function Login() {
 
             {/* Mobile-only brand mark */}
             <div className="mb-6 flex items-center gap-3 md:hidden">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white p-1.5 border border-slate-200 shadow-sm">
-                <img
-                  src={srhuLogo}
-                  alt="SRHU Logo"
-                  className="h-full w-full object-contain"
-                />
-              </div>
+              <img
+                src={srhuLogo}
+                alt="SRHU Logo"
+                className="h-12 w-auto object-contain"
+              />
               <div>
-                <span className="block text-base font-bold text-slate-900 leading-tight">
-                  Campus Capture
-                </span>
-                <span className="block text-[11px] font-medium text-slate-500">
+                <div className="flex items-center gap-2">
+                  <span className="block text-base font-black text-slate-950 leading-tight">
+                    Campus Capture
+                  </span>
+                  <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-blue-800 border border-blue-200/70">
+                    SRHU
+                  </span>
+                </div>
+                <span className="block text-xs font-medium text-slate-500">
                   Swami Rama Himalayan University
                 </span>
               </div>
             </div>
 
-            {/* Header */}
+            {/* Form Header */}
             <div className="mb-6">
               <h1 className="text-2xl font-bold tracking-tight text-slate-900 leading-snug">
                 Welcome back
@@ -374,7 +389,7 @@ function Login() {
             {/* Login Form */}
             <form onSubmit={handleLogin} className="space-y-4">
 
-              {/* Email */}
+              {/* Email Input */}
               <div>
                 <label
                   htmlFor="email"
@@ -403,12 +418,12 @@ function Login() {
                     placeholder="name@srhu.edu.in"
                     autoComplete="email"
                     disabled={loading}
-                    className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-700 focus:ring-4 focus:ring-blue-700/10 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-600 focus:ring-4 focus:ring-blue-600/10 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                   />
                 </div>
               </div>
 
-              {/* Password */}
+              {/* Password Input */}
               <div>
                 <label
                   htmlFor="password"
@@ -440,12 +455,12 @@ function Login() {
                     placeholder="Enter your password"
                     autoComplete="current-password"
                     disabled={loading}
-                    className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-700 focus:ring-4 focus:ring-blue-700/10 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-600 focus:ring-4 focus:ring-blue-600/10 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                   />
                 </div>
               </div>
 
-              {/* Forgot Password */}
+              {/* Forgot Password Link */}
               <div className="flex items-center justify-end pt-1">
                 <Link
                   to="/forgot-password"
@@ -455,16 +470,29 @@ function Login() {
                 </Link>
               </div>
 
-              {/* Login Button */}
+              {/* Login CTA Button matching Landing gradient style */}
               <button
                 type="submit"
                 disabled={loading}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-900 py-2.5 px-4 text-sm font-semibold text-white shadow-sm shadow-blue-950/20 transition hover:bg-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-700/20 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-900 via-blue-950 to-indigo-950 py-3 px-4 text-sm font-bold text-white shadow-md shadow-blue-950/20 transition-all duration-200 hover:from-blue-800 hover:via-blue-900 hover:to-indigo-900 hover:shadow-lg hover:shadow-blue-950/30 hover:-translate-y-0.5 focus:outline-none focus:ring-4 focus:ring-blue-700/20 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:from-blue-900 disabled:hover:shadow-md"
               >
                 {loading && (
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
                 )}
-                {loading ? "Signing in..." : "Sign In to Portal"}
+                <span>{loading ? "Signing in..." : "Sign In to Portal"}</span>
+                {!loading && (
+                  <svg
+                    className="h-4 w-4 text-blue-200 transition-transform duration-200 group-hover:translate-x-1"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                )}
               </button>
             </form>
 
@@ -474,7 +502,7 @@ function Login() {
                 Need faculty account access?{" "}
                 <Link
                   to="/register"
-                  className="font-semibold text-blue-700 hover:text-blue-800"
+                  className="font-bold text-blue-700 hover:text-blue-800 transition"
                 >
                   Register here
                 </Link>
