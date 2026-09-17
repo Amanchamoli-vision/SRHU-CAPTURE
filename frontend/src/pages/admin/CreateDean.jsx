@@ -180,8 +180,8 @@ function CreateDean() {
 
       <aside className="w-64 bg-white border-r min-h-screen p-5 flex flex-col">
 
-        <div className="mb-8 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
+        <div className="mb-8 flex items-center gap-3.5">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
             <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
           </div>
           <div>

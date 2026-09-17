@@ -14,26 +14,26 @@ export default function Landing() {
       ========================================================== */}
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl shadow-xs">
         <div className="h-0.5 w-full bg-gradient-to-r from-blue-900 via-indigo-600 to-blue-900" />
-        <div className="mx-auto flex h-20 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
+        <div className="mx-auto flex h-20 sm:h-24 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
           {/* Left Brand Mark */}
-          <div className="flex items-center gap-3.5">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-slate-200/90 bg-white p-2 shadow-sm ring-1 ring-slate-100/80 transition-all duration-200 hover:shadow-md hover:scale-105">
+          <div className="flex items-center gap-4 sm:gap-4.5">
+            <div className="flex h-14 w-14 sm:h-18 sm:w-18 shrink-0 items-center justify-center rounded-2xl border border-slate-200/90 bg-white p-1 sm:p-1.5 shadow-sm ring-1 ring-slate-100/80 transition-all duration-200 hover:shadow-md hover:scale-105">
               <img
                 src={srhuLogo}
                 alt="SRHU Logo"
-                className="h-full w-full object-contain"
+                className="h-full w-full object-contain drop-shadow-xs"
               />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="block text-lg font-extrabold leading-tight tracking-tight text-slate-950">
+              <div className="flex items-center gap-2.5">
+                <span className="block text-xl sm:text-2xl font-black leading-tight tracking-tight text-slate-950">
                   Campus Capture
                 </span>
-                <span className="hidden sm:inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-800 border border-blue-200/60">
+                <span className="hidden sm:inline-flex items-center rounded-md bg-blue-50 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-blue-800 border border-blue-200/70">
                   SRHU
                 </span>
               </div>
-              <span className="block text-xs font-medium text-slate-500">
+              <span className="block text-xs sm:text-sm font-semibold text-slate-500 tracking-normal mt-0.5">
                 Swami Rama Himalayan University
               </span>
             </div>
@@ -162,7 +162,7 @@ export default function Landing() {
           - Increased card text size (text-base sm:text-lg)
           - Spacious padding (p-7 sm:p-8) for enhanced readability
       ========================================================== */}
-      <section id="capabilities" className="py-16 sm:py-24 bg-white border-b border-slate-200 scroll-mt-20">
+      <section id="capabilities" className="py-16 sm:py-24 bg-white border-b border-slate-200 scroll-mt-28">
         <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
           {/* Section Heading - Centered */}
           <div className="text-center max-w-3xl mx-auto mb-12 sm:mb-16">
@@ -292,7 +292,7 @@ export default function Landing() {
           - Increased step text size (text-base sm:text-lg)
           - 4-step horizontal process on desktop, vertical list on mobile
       ========================================================== */}
-      <section id="workflow" className="py-16 sm:py-24 bg-slate-50 scroll-mt-20">
+      <section id="workflow" className="py-16 sm:py-24 bg-slate-50 scroll-mt-28">
         <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
           {/* Section Heading - Centered */}
           <div className="text-center max-w-3xl mx-auto mb-12 sm:mb-16">

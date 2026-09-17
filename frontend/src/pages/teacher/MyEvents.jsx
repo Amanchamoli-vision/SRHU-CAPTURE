@@ -193,17 +193,17 @@ function MyEvents() {
 
       {/* ================= HEADER ================= */}
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="flex h-[68px] items-center justify-between px-6">
+        <div className="flex h-[76px] items-center justify-between px-6">
 
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
               <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
             </div>
             <div>
-              <h1 className="font-display text-base font-semibold leading-tight text-[#101A33]">
+              <h1 className="font-display text-lg font-semibold leading-tight text-[#101A33]">
                 Campus Capture
               </h1>
-              <p className="text-[11px] font-medium text-slate-400">
+              <p className="text-xs font-medium text-slate-400">
                 Swami Rama Himalayan University
               </p>
             </div>

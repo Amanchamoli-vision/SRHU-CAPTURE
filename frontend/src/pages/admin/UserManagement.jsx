@@ -562,15 +562,15 @@ function UserManagement() {
           "
         >
 
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
               <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
             </div>
             <div>
-              <h1 className="text-base font-bold text-slate-800 leading-tight">
+              <h1 className="text-lg font-bold text-slate-800 leading-tight">
                 Campus Capture
               </h1>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs font-medium text-slate-500">
                 Admin Panel
               </p>
             </div>
