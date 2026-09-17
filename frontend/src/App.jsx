@@ -20,6 +20,7 @@ import DeanEventDetails from "./pages/dean/EventDetails";
 // Admin
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import UserManagement from "./pages/admin/UserManagement";
+import CreateDean from "./pages/admin/CreateDean";
 
 function App() {
   return (
@@ -112,6 +113,15 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={["admin"]}>
                 <UserManagement />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/admin/create-dean"
+            element={
+              <ProtectedRoute allowedRoles={["admin"]}>
+                <CreateDean />
               </ProtectedRoute>
             }
           />
