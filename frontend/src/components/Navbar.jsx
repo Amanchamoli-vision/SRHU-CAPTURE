@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
-import srhuLogo from "../assets/logo-srhu.png";
+import srhuLogo from "../assets/srhu-logo-light.png";
 
 function Navbar({ title = "Dean Panel", actions = null }) {
   const navigate = useNavigate();
@@ -24,9 +24,11 @@ function Navbar({ title = "Dean Panel", actions = null }) {
       <div className="flex h-18 sm:h-20 items-center justify-between px-6">
 
         <div className="flex items-center gap-3.5">
-          <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-xl bg-white p-1 border border-slate-200 shadow-sm">
-            <img src={srhuLogo} alt="SRHU Logo" className="h-full w-full object-contain" />
-          </div>
+          <img
+            src={srhuLogo}
+            alt="Swami Rama Himalayan University"
+            className="h-11 sm:h-13 w-auto object-contain"
+          />
           <div>
             <h1 className="text-lg font-bold text-slate-900 leading-tight">
               Campus Capture

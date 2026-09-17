@@ -1,28 +1,25 @@
 import { Link } from "react-router-dom";
-import srhuLogo from "../assets/logo-srhu.png";
+import srhuLogo from "../assets/srhu-logo-light.png";
 
 export default function Landing() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-blue-600 selection:text-white scroll-smooth">
       {/* =========================================================
           1. STICKY HEADER (Attractive, Modern, Institutional)
-          - Subtle top gradient accent line
-          - Spacious, elegant h-20 height with backdrop-blur-xl
-          - Enhanced logo badge with hover elevation
+          - Clean standalone Himovation institutional logo
+          - Spacious h-18 sm:h-20 height with backdrop-blur-xl
           - Center interactive section navigation links
           - High-contrast gradient "Portal Login" CTA with micro-interaction
       ========================================================== */}
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl shadow-xs">
         <div className="mx-auto flex h-18 sm:h-20 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
           {/* Left Brand Mark */}
-          <div className="flex items-center gap-4 sm:gap-4.5">
-            <div className="flex h-14 w-14 sm:h-16 sm:w-16 shrink-0 items-center justify-center rounded-2xl border border-slate-200/90 bg-white p-0 overflow-hidden shadow-sm ring-1 ring-slate-100/80 transition-all duration-200 hover:shadow-md hover:scale-105">
-              <img
-                src={srhuLogo}
-                alt="SRHU Logo"
-                className="h-full w-full object-contain"
-              />
-            </div>
+          <div className="flex items-center gap-3.5 sm:gap-4">
+            <img
+              src={srhuLogo}
+              alt="Swami Rama Himalayan University"
+              className="h-12 sm:h-14 w-auto object-contain"
+            />
             <div>
               <div className="flex items-center gap-2.5">
                 <span className="block text-xl sm:text-2xl font-black leading-tight tracking-tight text-slate-950">
