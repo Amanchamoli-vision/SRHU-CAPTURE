@@ -6,12 +6,13 @@ export default function Landing() {
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-blue-600 selection:text-white">
       {/* =========================================================
           1. STICKY HEADER
+          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
           - Logo badge + "Campus Capture" wordmark on left
           - Single "Portal Login" button on right (links to /login)
-          - max-w-6xl container, h-16 height
+          - h-16 height
       ========================================================== */}
       <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between px-6 sm:px-8 lg:px-12">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
               <img
@@ -42,6 +43,7 @@ export default function Landing() {
       {/* =========================================================
           2. HERO SECTION
           - Full-bleed mesh gradient background (#0a1226 -> #101e40 -> #1e1b4b)
+          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
           - Texture dot-matrix + dual soft radial glow
           - Centered content: SRHU badge, natural clause break, tightened subtext
           - Single primary CTA button linking to /login ("Access Portal")
@@ -69,7 +71,7 @@ export default function Landing() {
           className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-indigo-500/15 blur-3xl"
         />
 
-        <div className="relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
+        <div className="relative mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12 text-center">
           {/* Institutional Badge */}
           <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-200 backdrop-blur-sm mb-6">
             <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
@@ -77,7 +79,7 @@ export default function Landing() {
           </div>
 
           {/* Headline - Natural clause break with consistent tracking */}
-          <h1 className="text-3xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl sm:leading-tight">
+          <h1 className="mx-auto max-w-5xl text-3xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl sm:leading-tight">
             Manage campus events{" "}
             <br className="hidden sm:inline" />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-white to-blue-100 font-extrabold tracking-tight">
@@ -85,13 +87,13 @@ export default function Landing() {
             </span>
           </h1>
 
-          {/* Supporting Sentence - Constrained width and tightened line-height */}
-          <p className="mx-auto mt-5 max-w-xl text-sm font-normal leading-snug text-blue-100/80 sm:text-base sm:leading-normal">
+          {/* Supporting Sentence */}
+          <p className="mx-auto mt-5 max-w-2xl text-base font-normal leading-relaxed text-blue-100/80 sm:text-lg">
             A centralized university portal for faculty event proposals,
             administrative Dean reviews, and real-time status tracking across SRHU.
           </p>
 
-          {/* Primary CTA - Refined font-weight and letter-spacing */}
+          {/* Primary CTA */}
           <div className="mt-8 flex justify-center">
             <Link
               to="/login"
@@ -116,13 +118,14 @@ export default function Landing() {
 
       {/* =========================================================
           3. FEATURE HIGHLIGHTS ("System Capabilities")
+          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
+          - Full-width left-aligned layout matching header edge
           - Light/neutral background (bg-white / border-slate-200)
           - 4 cards describing real system capabilities
-          - Concise descriptions maintaining a 2-line visual rhythm
           - Inline SVGs only (no icon library)
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-white border-b border-slate-200">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
           <div className="mb-12 sm:mb-16">
             <h2 className="text-sm font-bold uppercase tracking-wider text-blue-700">
               System Capabilities
@@ -245,13 +248,13 @@ export default function Landing() {
 
       {/* =========================================================
           4. HOW IT WORKS ("How event approval works")
-          - Outer container matching header (max-w-6xl mx-auto px-4 sm:px-6 lg:px-8)
-          - Left-aligned header block flush with container
-          - Bumped type scale matching System Capabilities
+          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
+          - Full-width left-aligned layout matching header edge
           - 4-step horizontal process on desktop, vertical list on mobile
+          - Dynamic inter-card connecting lines
       ========================================================== */}
       <section className="py-16 sm:py-24 bg-slate-50">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12">
           <div className="mb-12 sm:mb-16">
             <h2 className="text-sm font-bold uppercase tracking-wider text-blue-700">
               Workflow
@@ -264,69 +267,73 @@ export default function Landing() {
             </p>
           </div>
 
-          <div className="relative">
-            {/* Connecting line on desktop */}
-            <div
-              aria-hidden="true"
-              className="hidden lg:block absolute top-7 left-7 right-28 h-0.5 bg-slate-200"
-            />
-
-            <div className="grid w-full grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4 relative">
-              {/* Step 1 */}
-              <div className="flex flex-col items-start text-left">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
-                  1
-                </div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Teacher Creates Event
-                </h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
-                  Faculty member compiles event schedule, venue requirements, and
-                  necessary documentation.
-                </p>
+          <div className="grid w-full grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4">
+            {/* Step 1 */}
+            <div className="relative flex flex-col items-start text-left">
+              <div
+                aria-hidden="true"
+                className="hidden lg:block absolute top-7 left-14 -right-8 h-0.5 bg-slate-200"
+              />
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+                1
               </div>
+              <h3 className="text-base font-bold text-slate-900">
+                Teacher Creates Event
+              </h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+                Faculty member compiles event schedule, venue requirements, and
+                necessary documentation.
+              </p>
+            </div>
 
-              {/* Step 2 */}
-              <div className="flex flex-col items-start text-left">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
-                  2
-                </div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Submits for Review
-                </h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
-                  Proposal enters the system and appears immediately in the Dean
-                  review queue.
-                </p>
+            {/* Step 2 */}
+            <div className="relative flex flex-col items-start text-left">
+              <div
+                aria-hidden="true"
+                className="hidden lg:block absolute top-7 left-14 -right-8 h-0.5 bg-slate-200"
+              />
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+                2
               </div>
+              <h3 className="text-base font-bold text-slate-900">
+                Submits for Review
+              </h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+                Proposal enters the system and appears immediately in the Dean
+                review queue.
+              </p>
+            </div>
 
-              {/* Step 3 */}
-              <div className="flex flex-col items-start text-left">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
-                  3
-                </div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Dean Approves / Rejects
-                </h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
-                  Dean evaluates proposal feasibility, reviews attachments, and
-                  records an official decision.
-                </p>
+            {/* Step 3 */}
+            <div className="relative flex flex-col items-start text-left">
+              <div
+                aria-hidden="true"
+                className="hidden lg:block absolute top-7 left-14 -right-8 h-0.5 bg-slate-200"
+              />
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+                3
               </div>
+              <h3 className="text-base font-bold text-slate-900">
+                Dean Approves / Rejects
+              </h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+                Dean evaluates proposal feasibility, reviews attachments, and
+                records an official decision.
+              </p>
+            </div>
 
-              {/* Step 4 */}
-              <div className="flex flex-col items-start text-left">
-                <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
-                  4
-                </div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Status Visible to Teacher
-                </h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
-                  Final decision is instantly updated on faculty dashboards and
-                  university calendars.
-                </p>
+            {/* Step 4 */}
+            <div className="relative flex flex-col items-start text-left">
+              <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl bg-white border-2 border-blue-900 text-lg font-bold text-blue-900 shadow-sm mb-4 leading-none select-none">
+                4
               </div>
+              <h3 className="text-base font-bold text-slate-900">
+                Status Visible to Teacher
+              </h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
+                Final decision is instantly updated on faculty dashboards and
+                university calendars.
+              </p>
             </div>
           </div>
         </div>
@@ -334,12 +341,12 @@ export default function Landing() {
 
       {/* =========================================================
           5. FOOTER
-          - Clear typographic hierarchy:
-            Wordmark (sm, bold) -> Subtitle (xs, medium) -> Copyright (xs, slate-400)
+          - Container: max-w-[1600px] mx-auto px-6 sm:px-8 lg:px-12
+          - Wordmark (sm, bold) -> Subtitle (xs, medium) -> Copyright (xs, slate-400)
           - No fake social icons, no fake legal/privacy links
       ========================================================== */}
       <footer className="border-t border-slate-200 bg-white py-8 mt-auto">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
+        <div className="mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-12 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 shrink-0 rounded-lg border border-slate-200 bg-white p-1">
               <img
