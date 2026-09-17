@@ -183,9 +183,7 @@ function CreateEvent() {
   // Upload Media
   // --------------------------------------------------
 
-  const uploadMediaFiles = async (userId, eventId) => {
-    const uploadedFiles = [];
-
+  const uploadMediaFiles = async (userId, eventId, accumulator = []) => {
     for (const file of mediaFiles) {
       const safeFileName = file.name.replace(
         /[^a-zA-Z0-9._-]/g,
@@ -213,6 +211,13 @@ function CreateEvent() {
           `Failed to upload ${file.name}: ${uploadError.message}`
         );
       }
+
+      // Storage upload succeeded! IMMEDIATELY record in accumulator so rollback cleans it up
+      const tracker = {
+        storagePath: filePath,
+        databaseId: null,
+      };
+      accumulator.push(tracker);
 
       const {
         data: publicUrlData,
@@ -246,22 +251,17 @@ function CreateEvent() {
         );
       }
 
-      uploadedFiles.push({
-        storagePath: filePath,
-        databaseId: insertedMedia.id,
-      });
+      tracker.databaseId = insertedMedia.id;
     }
 
-    return uploadedFiles;
+    return accumulator;
   };
 
   // --------------------------------------------------
   // Upload Documents
   // --------------------------------------------------
 
-  const uploadDocumentFiles = async (userId, eventId) => {
-    const uploadedFiles = [];
-
+  const uploadDocumentFiles = async (userId, eventId, accumulator = []) => {
     for (const file of documentFiles) {
       const safeFileName = file.name.replace(
         /[^a-zA-Z0-9._-]/g,
@@ -290,6 +290,13 @@ function CreateEvent() {
           `Failed to upload ${file.name}: ${uploadError.message}`
         );
       }
+
+      // Storage upload succeeded! IMMEDIATELY record in accumulator so rollback cleans it up
+      const tracker = {
+        storagePath: filePath,
+        databaseId: null,
+      };
+      accumulator.push(tracker);
 
       const {
         data: publicUrlData,
@@ -320,13 +327,10 @@ function CreateEvent() {
         );
       }
 
-      uploadedFiles.push({
-        storagePath: filePath,
-        databaseId: insertedDocument.id,
-      });
+      tracker.databaseId = insertedDocument.id;
     }
 
-    return uploadedFiles;
+    return accumulator;
   };
 
   // --------------------------------------------------
@@ -643,9 +647,10 @@ function CreateEvent() {
       // ----------------------------------------------
 
       if (mediaFiles.length > 0) {
-        mediaUploads = await uploadMediaFiles(
+        await uploadMediaFiles(
           currentUserId,
-          createdEventId
+          createdEventId,
+          mediaUploads
         );
       }
 
@@ -654,11 +659,11 @@ function CreateEvent() {
       // ----------------------------------------------
 
       if (documentFiles.length > 0) {
-        documentUploads =
-          await uploadDocumentFiles(
-            currentUserId,
-            createdEventId
-          );
+        await uploadDocumentFiles(
+          currentUserId,
+          createdEventId,
+          documentUploads
+        );
       }
 
       // ----------------------------------------------
