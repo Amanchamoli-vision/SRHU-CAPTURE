@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { supabase } from "../../services/supabase";
-import srhuLogo from "../../assets/logo.png";
+import { apiJson, apiUpload } from "../../services/api";
+import { fetchCurrentUser, signOut } from "../../services/auth";
+import { canTeacherEditEvent } from "../../utils/constants";
 import {
   getTeacherDraftById,
   saveTeacherDraft,
@@ -9,83 +10,75 @@ import {
   encodeEventMetadata,
   decodeEventMetadata,
 } from "../../utils/draftStorage";
-import NotificationBell from "../../components/NotificationBell";
+import TeacherShell from "../../components/teacher/TeacherShell";
+import Modal from "../../components/teacher/Modal";
+import UploadPanel from "../../components/teacher/UploadPanel";
+import StatusChip from "../../components/teacher/StatusChip";
+import { trackOf } from "../../components/teacher/status";
+import {
+  IconAlertTriangle,
+  IconArrowLeft,
+  IconArrowRight,
+  IconBookmark,
+  IconCheck,
+  IconCheckCircle,
+  IconFilePlus,
+  IconFilm,
+  IconImagePlus,
+  IconInfo,
+  IconLayers,
+} from "../../components/teacher/icons";
 
-/* ============ Inline icons (no external icon library needed) ============ */
-const IconLogout = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3" />
-    <path d="M10 17l5-5-5-5" />
-    <path d="M15 12H3" />
-  </svg>
-);
-const IconGrid = ({ className = "h-[18px] w-[18px]" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
-  </svg>
-);
-const IconPlus = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 5v14M5 12h14" />
-  </svg>
-);
-const IconList = ({ className = "h-[18px] w-[18px]" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="5" y="4" width="14" height="17" rx="2" />
-    <path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1Z" />
-    <path d="M9 12h6M9 16h6M9 8.5h2" />
-  </svg>
-);
-const IconArrowLeft = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M19 12H5M11 6l-6 6 6 6" />
-  </svg>
-);
-const IconCheckCircle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M8.5 12.2l2.4 2.4 4.6-5" />
-  </svg>
-);
-const IconAlertTriangle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 3.5 21.5 20h-19L12 3.5Z" />
-    <path d="M12 9.5v4.5M12 17h.01" />
-  </svg>
-);
-const IconImagePlus = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
-    <circle cx="9" cy="10" r="1.75" />
-    <path d="M20.5 15.5 15.5 11l-9 8" />
-  </svg>
-);
-const IconFilePlus = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M7 3.5h7l4 4v13a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20.5v-15A1.5 1.5 0 0 1 7 3.5Z" />
-    <path d="M14 3.5V8h4" />
-    <path d="M12 12v5M9.5 14.5h5" />
-  </svg>
-);
-const IconX = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M6 6l12 12M18 6L6 18" />
-  </svg>
-);
-const IconBookmark = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-  </svg>
-);
-const IconInfo = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M12 11v5.5M12 7.75h.01" />
-  </svg>
-);
+const EVENT_TYPES = [
+  "Academic",
+  "Cultural",
+  "Sports",
+  "Workshop",
+  "Seminar",
+  "Conference",
+  "Celebration",
+  "Other",
+];
+
+/** "2026-10-04" → "04 Oct 2026", for the submit confirmation. */
+function formatSummaryDate(value) {
+  if (!value) return "Not set";
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+// Photos and videos are separate steps, so each carries its own cap.
+const MAX_MEDIA_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_DOC_SIZE = 25 * 1024 * 1024; // 25MB
+const MAX_IMAGE_COUNT = 4;
+const MAX_VIDEO_COUNT = 2;
+
+const ALLOWED_DOC_EXTENSIONS = [
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv",
+];
+
+const STEPS = [
+  { key: "details", label: "Details", Icon: IconLayers },
+  { key: "photos", label: "Photos", Icon: IconImagePlus },
+  { key: "videos", label: "Videos", Icon: IconFilm },
+  { key: "documents", label: "Documents", Icon: IconFilePlus },
+];
+
+const REQUIRED_DETAILS = [
+  ["eventName", "Please enter the event name."],
+  ["eventDate", "Please select the event date."],
+  ["eventType", "Please select the event type."],
+  ["startTime", "Please specify the event start time."],
+  ["endTime", "Please specify the event end time."],
+  ["location", "Please enter the venue / location."],
+  ["department", "Please specify the host department or school."],
+  ["organizer", "Please enter the organizer or faculty coordinator name."],
+  ["contactInfo", "Please provide organizer contact information."],
+  ["description", "Please provide a description for the event."],
+];
+
+let uploadKeySeed = 0;
 
 function CreateEvent() {
   const navigate = useNavigate();
@@ -94,8 +87,8 @@ function CreateEvent() {
   const draftIdParam = searchParams.get("draftId");
   const editEventIdParam = searchParams.get("editEventId");
 
-  const fileInputRef = useRef(null);
-  const documentInputRef = useRef(null);
+  const [step, setStep] = useState(1);
+  const [maxStepReached, setMaxStepReached] = useState(1);
 
   const [formData, setFormData] = useState({
     eventName: "",
@@ -112,41 +105,92 @@ function CreateEvent() {
     socialNetworkUrl: "",
   });
 
-  const [mediaFiles, setMediaFiles] = useState([]);
-  const [documentFiles, setDocumentFiles] = useState([]);
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  // Files live on the server from the moment they are picked, so these hold
+  // saved records rather than browser File objects.
+  const [mediaItems, setMediaItems] = useState([]);
+  const [documentItems, setDocumentItems] = useState([]);
+  const [uploads, setUploads] = useState([]);
 
   const [currentUser, setCurrentUser] = useState(null);
   const [editingDraftId, setEditingDraftId] = useState(draftIdParam || null);
-  const [editingEvent, setEditingEvent] = useState(null); // When editing rejected event
+  const [serverEvent, setServerEvent] = useState(null);
+  const [serverEventId, setServerEventId] = useState(null);
 
+  const [initialising, setInitialising] = useState(Boolean(editEventIdParam));
   const [loading, setLoading] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  /**
+   * Set once a draft has been stored, and rendered as a dialog rather than a
+   * banner. The Save Draft button lives at the foot of a long form, and the
+   * banner rendered above it: on a laptop the confirmation appeared roughly
+   * 480px above the top of the viewport, so the teacher clicked Save Draft and
+   * saw nothing happen at all. `where` distinguishes the two resting places a
+   * draft can have, because only one of them survives a change of browser.
+   */
+  const [draftSaved, setDraftSaved] = useState(null);
+
+  // Submitting is two dialogs: "are you sure?" before anything is sent, then
+  // "submitted" once the server has it. The confirm dialog carries its own
+  // error line, because the page's banner sits far above the sticky Submit
+  // button and a failure there would go unseen.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmError, setConfirmError] = useState("");
+  const [submitted, setSubmitted] = useState(null); // the saved event
+
+  // The event id is also held in a ref: several files picked at once each need
+  // it, and React state would still be null for all of them.
+  const eventIdRef = useRef(null);
+  const creatingEventRef = useRef(null);
+  const formDataRef = useRef(formData);
+  const userRef = useRef(null);
+  const editingDraftRef = useRef(draftIdParam || null);
+
+  useEffect(() => {
+    formDataRef.current = formData;
+  }, [formData]);
+
+  const photos = mediaItems.filter((m) => m.media_type === "image");
+  const videos = mediaItems.filter((m) => m.media_type === "video");
+
+  const photoUploads = uploads.filter((u) => u.kind === "image");
+  const videoUploads = uploads.filter((u) => u.kind === "video");
+  const documentUploads = uploads.filter((u) => u.kind === "document");
+
+  const uploading = uploads.some((u) => !u.error);
+  const isDraftEvent = !serverEvent || serverEvent.status === "draft";
+  // Only a rejected event that is being resubmitted; a draft is not one.
+  const resubmitting = Boolean(serverEvent) && serverEvent.status !== "draft";
+
   // --------------------------------------------------
-  // Load User & Pre-populate Draft or Rejected Event
+  // Load user, and any draft or event being edited
   // --------------------------------------------------
   useEffect(() => {
+    let cancelled = false;
+
     async function initUserAndData() {
       try {
-        const {
-          data: { user },
-          error: authError,
-        } = await supabase.auth.getUser();
+        const user = await fetchCurrentUser();
 
-        if (authError || !user) {
+        if (!user) {
           navigate("/login");
           return;
         }
 
+        if (cancelled) return;
         setCurrentUser(user);
+        userRef.current = user;
 
-        // 1. If editing an existing local draft
+        // 1. A local draft saved before any file was attached.
         if (draftIdParam) {
           const draft = getTeacherDraftById(user.id, draftIdParam);
-          if (draft) {
+          if (draft && !cancelled) {
             setEditingDraftId(draft.id);
+            editingDraftRef.current = draft.id;
             setFormData({
               eventName: draft.event_name || "",
               eventDate: draft.event_date || "",
@@ -164,330 +208,353 @@ function CreateEvent() {
           }
         }
 
-        // 2. If editing a rejected event to resubmit
+        // 2. An event already on the server: a draft being resumed, or a
+        //    rejected event being corrected. Both bring their files with them.
         if (editEventIdParam) {
-          const { data: event, error: eventErr } = await supabase
-            .from("events")
-            .select("*")
-            .eq("id", editEventIdParam)
-            .eq("teacher_id", user.id)
-            .single();
+          try {
+            const result = await apiJson(`/teacher/events/${editEventIdParam}`);
+            const event = result?.event || null;
 
-          if (!eventErr && event) {
-            setEditingEvent(event);
-            const { description, meta } = decodeEventMetadata(event.description);
-            setFormData({
-              eventName: event.event_name || "",
-              eventDate: event.event_date || "",
-              eventType: event.event_type || "",
-              startTime: meta.startTime || "",
-              endTime: meta.endTime || "",
-              location: event.location || "",
-              department: meta.department || "",
-              organizer: meta.organizer || "",
-              expectedParticipants: meta.expectedParticipants || "",
-              contactInfo: meta.contactInfo || "",
-              description: description || "",
-              socialNetworkUrl: event.social_network_url || "",
-            });
+            if (cancelled) return;
+
+            if (event && !canTeacherEditEvent(event)) {
+              setError("This event has already been approved and can no longer be edited.");
+              setInitialising(false);
+              return;
+            }
+
+            if (event) {
+              const { description, meta } = decodeEventMetadata(event.description);
+
+              setServerEvent(event);
+              setServerEventId(event.id);
+              eventIdRef.current = event.id;
+              setMediaItems(result.media || []);
+              setDocumentItems(result.documents || []);
+              setFormData({
+                eventName: event.event_name || "",
+                eventDate: event.event_date || "",
+                eventType: event.event_type || "",
+                startTime: meta.startTime || "",
+                endTime: meta.endTime || "",
+                location: event.location || "",
+                department: meta.department || "",
+                organizer: meta.organizer || "",
+                expectedParticipants: meta.expectedParticipants || "",
+                contactInfo: meta.contactInfo || "",
+                description: description || "",
+                socialNetworkUrl: event.social_network_url || "",
+              });
+
+              // Everything is already filled in, so every step is reachable.
+              setMaxStepReached(STEPS.length);
+            }
+          } catch (err) {
+            if (!cancelled) {
+              setError(err?.message || "Could not load this event.");
+            }
           }
         }
       } catch (err) {
         console.error("Init CreateEvent error:", err);
+      } finally {
+        if (!cancelled) setInitialising(false);
       }
     }
 
     initUserAndData();
+    return () => {
+      cancelled = true;
+    };
   }, [draftIdParam, editEventIdParam, navigate]);
 
   // --------------------------------------------------
-  // Form Change
+  // Form change
   // --------------------------------------------------
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    setFieldErrors((prev) => {
+      if (!prev[name]) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
   };
 
   // --------------------------------------------------
-  // Media Selection & Validation (Max 10MB)
+  // Step 1 validation
   // --------------------------------------------------
-  const MAX_MEDIA_SIZE = 10 * 1024 * 1024; // 10MB
+  const validateDetails = () => {
+    const errors = {};
 
-  const handleMediaChange = (e) => {
-    const rawFiles = Array.from(e.target.files || []);
-    const validFiles = [];
-    const rejectedErrors = [];
-
-    for (const file of rawFiles) {
-      const isImageOrVideo =
-        file.type.startsWith("image/") || file.type.startsWith("video/");
-
-      if (!isImageOrVideo) {
-        rejectedErrors.push(
-          `"${file.name}" is not a valid image or video file.`
-        );
-        continue;
-      }
-
-      if (file.size > MAX_MEDIA_SIZE) {
-        rejectedErrors.push(`"${file.name}" exceeds the 10MB limit.`);
-        continue;
-      }
-
-      validFiles.push(file);
+    for (const [field, message] of REQUIRED_DETAILS) {
+      if (!String(formData[field] ?? "").trim()) errors[field] = message;
     }
 
-    if (rejectedErrors.length > 0) {
-      setError(rejectedErrors.join(" "));
-    }
-
-    if (validFiles.length > 0) {
-      setMediaFiles((prev) => [...prev, ...validFiles]);
-    }
-
-    e.target.value = "";
-  };
-
-  const removeMediaFile = (index) => {
-    setMediaFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  // --------------------------------------------------
-  // Document Selection & Validation (Max 25MB)
-  // --------------------------------------------------
-  const MAX_DOC_SIZE = 25 * 1024 * 1024; // 25MB
-  const ALLOWED_DOC_EXTENSIONS = [
-    "pdf",
-    "doc",
-    "docx",
-    "xls",
-    "xlsx",
-    "ppt",
-    "pptx",
-    "txt",
-    "csv",
-  ];
-
-  const handleDocumentChange = (e) => {
-    const rawFiles = Array.from(e.target.files || []);
-    const validFiles = [];
-    const rejectedErrors = [];
-
-    for (const file of rawFiles) {
-      const ext = file.name.split(".").pop()?.toLowerCase();
-      const isValidExt = ext && ALLOWED_DOC_EXTENSIONS.includes(ext);
-
-      if (!isValidExt) {
-        rejectedErrors.push(
-          `"${file.name}" is not a supported document type (allowed: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT, CSV).`
-        );
-        continue;
-      }
-
-      if (file.size > MAX_DOC_SIZE) {
-        rejectedErrors.push(`"${file.name}" exceeds the 25MB limit.`);
-        continue;
-      }
-
-      validFiles.push(file);
-    }
-
-    if (rejectedErrors.length > 0) {
-      setError(rejectedErrors.join(" "));
-    }
-
-    if (validFiles.length > 0) {
-      setDocumentFiles((prev) => [...prev, ...validFiles]);
-    }
-
-    e.target.value = "";
-  };
-
-  const removeDocumentFile = (index) => {
-    setDocumentFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const formatFileSize = (bytes) => {
-    if (!bytes) return "0 KB";
-    const kb = bytes / 1024;
-    if (kb < 1024) return `${kb.toFixed(1)} KB`;
-    const mb = kb / 1024;
-    return `${mb.toFixed(1)} MB`;
-  };
-
-  const getFileExtension = (fileName) => {
-    const parts = fileName.split(".");
-    if (parts.length <= 1) return "FILE";
-    return parts.pop().toUpperCase();
-  };
-
-  // --------------------------------------------------
-  // Upload Media Helper
-  // --------------------------------------------------
-  const uploadMediaFiles = async (userId, eventId, accumulator = []) => {
-    for (const file of mediaFiles) {
-      const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const uniqueFileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}-${safeFileName}`;
-      const filePath = `${userId}/${eventId}/${uniqueFileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("event-media")
-        .upload(filePath, file, {
-          cacheControl: "3600",
-          upsert: false,
-        });
-
-      if (uploadError) {
-        throw new Error(`Failed to upload ${file.name}: ${uploadError.message}`);
-      }
-
-      const tracker = { storagePath: filePath, databaseId: null };
-      accumulator.push(tracker);
-
-      const { data: publicUrlData } = supabase.storage
-        .from("event-media")
-        .getPublicUrl(filePath);
-
-      const mediaType = file.type.startsWith("video/") ? "video" : "image";
-
-      const mediaRecord = {
-        event_id: eventId,
-        media_url: publicUrlData.publicUrl,
-        media_type: mediaType,
-        cloudinary_public_id: null,
-      };
-
-      const { data: insertedMedia, error: mediaInsertError } = await supabase
-        .from("event_media")
-        .insert(mediaRecord)
-        .select()
-        .single();
-
-      if (mediaInsertError) {
-        throw new Error(`Failed to save media record for ${file.name}: ${mediaInsertError.message}`);
-      }
-
-      tracker.databaseId = insertedMedia.id;
-    }
-
-    return accumulator;
-  };
-
-  // --------------------------------------------------
-  // Upload Documents Helper
-  // --------------------------------------------------
-  const uploadDocumentFiles = async (userId, eventId, accumulator = []) => {
-    for (const file of documentFiles) {
-      const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const uniqueFileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}-${safeFileName}`;
-      const filePath = `${userId}/${eventId}/${uniqueFileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("event-documents")
-        .upload(filePath, file, {
-          cacheControl: "3600",
-          upsert: false,
-          contentType: file.type || undefined,
-        });
-
-      if (uploadError) {
-        throw new Error(`Failed to upload ${file.name}: ${uploadError.message}`);
-      }
-
-      const tracker = { storagePath: filePath, databaseId: null };
-      accumulator.push(tracker);
-
-      const { data: publicUrlData } = supabase.storage
-        .from("event-documents")
-        .getPublicUrl(filePath);
-
-      const documentRecord = {
-        event_id: eventId,
-        file_name: file.name,
-        file_url: publicUrlData.publicUrl,
-        file_type: file.type || null,
-        file_size: file.size || null,
-      };
-
-      const { data: insertedDocument, error: documentInsertError } = await supabase
-        .from("event_documents")
-        .insert(documentRecord)
-        .select()
-        .single();
-
-      if (documentInsertError) {
-        throw new Error(`Failed to save document record for ${file.name}: ${documentInsertError.message}`);
-      }
-
-      tracker.databaseId = insertedDocument.id;
-    }
-
-    return accumulator;
-  };
-
-  // --------------------------------------------------
-  // Rollback on Failure
-  // --------------------------------------------------
-  const rollbackSubmission = async ({ eventId, mediaUploads = [], documentUploads = [] }) => {
-    for (const media of mediaUploads) {
-      if (media.databaseId) {
-        try {
-          await supabase.from("event_media").delete().eq("id", media.databaseId);
-        } catch (e) {
-          console.error("Rollback media DB error:", e);
-        }
-      }
-    }
-
-    if (mediaUploads.length > 0) {
-      const paths = mediaUploads.map((item) => item.storagePath).filter(Boolean);
-      if (paths.length > 0) {
-        try {
-          await supabase.storage.from("event-media").remove(paths);
-        } catch (e) {
-          console.error("Rollback media storage error:", e);
-        }
-      }
-    }
-
-    for (const document of documentUploads) {
-      if (document.databaseId) {
-        try {
-          await supabase.from("event_documents").delete().eq("id", document.databaseId);
-        } catch (e) {
-          console.error("Rollback doc DB error:", e);
-        }
-      }
-    }
-
-    if (documentUploads.length > 0) {
-      const paths = documentUploads.map((item) => item.storagePath).filter(Boolean);
-      if (paths.length > 0) {
-        try {
-          await supabase.storage.from("event-documents").remove(paths);
-        } catch (e) {
-          console.error("Rollback doc storage error:", e);
-        }
-      }
-    }
-
-    // Only delete new events (not existing rejected events that were being resubmitted)
-    if (eventId && !editingEvent) {
+    if (formData.socialNetworkUrl.trim()) {
       try {
-        await supabase.from("events").delete().eq("id", eventId);
-      } catch (e) {
-        console.error("Rollback event error:", e);
+        const url = new URL(formData.socialNetworkUrl.trim());
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          errors.socialNetworkUrl = "The link must start with http:// or https://";
+        }
+      } catch {
+        errors.socialNetworkUrl = "Please enter a valid social network URL.";
       }
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const buildEventBody = (saveAsDraft) => {
+    const data = formDataRef.current;
+    return {
+      event_name: data.eventName.trim(),
+      event_date: data.eventDate,
+      event_type: data.eventType,
+      location: data.location.trim(),
+      description: encodeEventMetadata(data.description, {
+        startTime: data.startTime,
+        endTime: data.endTime,
+        department: data.department,
+        organizer: data.organizer,
+        expectedParticipants: data.expectedParticipants,
+        contactInfo: data.contactInfo,
+      }),
+      social_network_url: data.socialNetworkUrl.trim() || null,
+      save_as_draft: saveAsDraft,
+    };
+  };
+
+  /**
+   * The event id to attach files to, creating a server-side draft the first
+   * time one is needed. Concurrent callers share a single in-flight create, so
+   * picking four photos at once cannot produce four draft events.
+   */
+  const ensureEventId = useCallback(async () => {
+    if (eventIdRef.current) return eventIdRef.current;
+    if (creatingEventRef.current) return creatingEventRef.current;
+
+    creatingEventRef.current = (async () => {
+      const { event } = await apiJson("/teacher/events", {
+        method: "POST",
+        body: buildEventBody(true),
+      });
+
+      eventIdRef.current = event.id;
+      setServerEventId(event.id);
+      setServerEvent(event);
+
+      // The draft now lives on the server, so drop the browser copy rather
+      // than leaving the teacher with two drafts of the same event.
+      const localId = editingDraftRef.current;
+      if (localId && userRef.current) {
+        deleteTeacherDraft(userRef.current.id, localId);
+        editingDraftRef.current = null;
+        setEditingDraftId(null);
+      }
+
+      return event.id;
+    })();
+
+    try {
+      return await creatingEventRef.current;
+    } finally {
+      creatingEventRef.current = null;
+    }
+    // buildEventBody reads through refs, so this needs no dependencies.
+  }, []);
+
+  // --------------------------------------------------
+  // Uploading
+  // --------------------------------------------------
+  const setUploadState = (key, changes) => {
+    setUploads((prev) =>
+      prev.map((item) => (item.key === key ? { ...item, ...changes } : item))
+    );
+  };
+
+  const runUpload = useCallback(async (entry) => {
+    try {
+      setUploadState(entry.key, { error: null, progress: 0 });
+
+      const eventId = await ensureEventId();
+      const path =
+        entry.kind === "document"
+          ? `/teacher/events/${eventId}/documents`
+          : `/teacher/events/${eventId}/media`;
+
+      const result = await apiUpload(path, {
+        file: entry.file,
+        onProgress: (fraction) => setUploadState(entry.key, { progress: fraction }),
+      });
+
+      if (entry.kind === "document") {
+        if (result?.document) setDocumentItems((prev) => [...prev, result.document]);
+      } else if (result?.media) {
+        setMediaItems((prev) => [...prev, result.media]);
+      }
+
+      setUploads((prev) => prev.filter((item) => item.key !== entry.key));
+    } catch (err) {
+      console.error("Upload error:", err);
+      setUploadState(entry.key, {
+        error: err?.message || "Upload failed.",
+        progress: null,
+      });
+    }
+  }, [ensureEventId]);
+
+  /**
+   * Validate a batch against the per-step caps and queue what survives.
+   * Counts include files already on the server and still uploading, so the
+   * caps hold across repeated picks rather than per batch.
+   */
+  const handlePick = (files, kind) => {
+    const rejected = [];
+    const accepted = [];
+
+    const isDocument = kind === "document";
+    const maxSize = isDocument ? MAX_DOC_SIZE : MAX_MEDIA_SIZE;
+    const sizeLabel = isDocument ? "25MB" : "10MB";
+
+    const max = kind === "image" ? MAX_IMAGE_COUNT : kind === "video" ? MAX_VIDEO_COUNT : null;
+    let used =
+      kind === "image"
+        ? photos.length + photoUploads.filter((u) => !u.error).length
+        : kind === "video"
+        ? videos.length + videoUploads.filter((u) => !u.error).length
+        : 0;
+
+    for (const file of files) {
+      if (kind === "image" && !file.type.startsWith("image/")) {
+        rejected.push(`"${file.name}" is not an image.`);
+        continue;
+      }
+      if (kind === "video" && !file.type.startsWith("video/")) {
+        rejected.push(`"${file.name}" is not a video.`);
+        continue;
+      }
+      if (isDocument) {
+        const ext = file.name.split(".").pop()?.toLowerCase();
+        if (!ext || !ALLOWED_DOC_EXTENSIONS.includes(ext)) {
+          rejected.push(`"${file.name}" is not a supported document type.`);
+          continue;
+        }
+      }
+
+      if (file.size > maxSize) {
+        rejected.push(`"${file.name}" is larger than ${sizeLabel}.`);
+        continue;
+      }
+
+      if (max != null && used >= max) {
+        rejected.push(
+          `"${file.name}" was not added. The limit is ${max} ${
+            kind === "image" ? "photos" : "videos"
+          }.`
+        );
+        continue;
+      }
+
+      used += 1;
+      accepted.push(file);
+    }
+
+    setError(rejected.join(" "));
+
+    if (accepted.length === 0) return;
+
+    const entries = accepted.map((file) => ({
+      key: `u${(uploadKeySeed += 1)}`,
+      name: file.name,
+      size: file.size,
+      kind,
+      file,
+      progress: 0,
+      error: null,
+    }));
+
+    setUploads((prev) => [...prev, ...entries]);
+
+    // One at a time: the caps are small, and a single progress bar moving is
+    // easier to follow than four crawling together.
+    (async () => {
+      for (const entry of entries) {
+        await runUpload(entry);
+      }
+    })();
+  };
+
+  const handleRemoveMedia = async (item) => {
+    const eventId = eventIdRef.current;
+    if (!eventId) return;
+
+    setMediaItems((prev) =>
+      prev.map((m) => (m.id === item.id ? { ...m, removing: true } : m))
+    );
+
+    try {
+      await apiJson(`/teacher/events/${eventId}/media/${item.id}`, { method: "DELETE" });
+      setMediaItems((prev) => prev.filter((m) => m.id !== item.id));
+    } catch (err) {
+      console.error("Remove media error:", err);
+      setError(err?.message || "Could not remove that file.");
+      setMediaItems((prev) =>
+        prev.map((m) => (m.id === item.id ? { ...m, removing: false } : m))
+      );
     }
   };
 
+  const handleRemoveDocument = async (item) => {
+    const eventId = eventIdRef.current;
+    if (!eventId) return;
+
+    setDocumentItems((prev) =>
+      prev.map((d) => (d.id === item.id ? { ...d, removing: true } : d))
+    );
+
+    try {
+      await apiJson(`/teacher/events/${eventId}/documents/${item.id}`, { method: "DELETE" });
+      setDocumentItems((prev) => prev.filter((d) => d.id !== item.id));
+    } catch (err) {
+      console.error("Remove document error:", err);
+      setError(err?.message || "Could not remove that file.");
+      setDocumentItems((prev) =>
+        prev.map((d) => (d.id === item.id ? { ...d, removing: false } : d))
+      );
+    }
+  };
+
+  const dismissUpload = (entry) =>
+    setUploads((prev) => prev.filter((item) => item.key !== entry.key));
+
   // --------------------------------------------------
-  // Action 1: Save Draft (Allows partial/incomplete data)
+  // Navigation
   // --------------------------------------------------
-  const handleSaveDraft = () => {
+  const goToStep = (next) => {
+    setStep(next);
+    setMaxStepReached((prev) => Math.max(prev, next));
+    setError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleNext = () => {
+    if (step === 1 && !validateDetails()) {
+      setError("Please complete the required fields before continuing.");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    goToStep(Math.min(step + 1, STEPS.length));
+  };
+
+  const handleBack = () => goToStep(Math.max(step - 1, 1));
+
+  // --------------------------------------------------
+  // Save draft
+  // --------------------------------------------------
+  const handleSaveDraft = async () => {
     setError("");
     setSuccess("");
 
@@ -498,824 +565,909 @@ function CreateEvent() {
 
     setSavingDraft(true);
     try {
-      const saved = saveTeacherDraft(currentUser.id, {
-        id: editingDraftId || undefined,
-        ...formData,
-        mediaFiles,
-        documentFiles,
-      });
+      let where;
 
-      setEditingDraftId(saved.id);
-      setSuccess("Draft saved successfully. You can continue editing anytime from My Events.");
-      setTimeout(() => {
-        setSuccess("");
-      }, 4000);
+      if (eventIdRef.current) {
+        // Already on the server, with its files attached.
+        await apiJson(`/teacher/events/${eventIdRef.current}`, {
+          method: "PATCH",
+          body: buildEventBody(true),
+        });
+        where = "server";
+      } else if (validateDetails()) {
+        // Complete enough for the API to accept: promote it to a server draft
+        // so any files added later have somewhere to go.
+        await ensureEventId();
+        where = "server";
+      } else {
+        // Still partial. Keep it in the browser, as before, so a half-filled
+        // form is never lost.
+        const saved = saveTeacherDraft(currentUser.id, {
+          id: editingDraftId || undefined,
+          ...formData,
+        });
+        setEditingDraftId(saved.id);
+        editingDraftRef.current = saved.id;
+        setFieldErrors({});
+        where = "browser";
+      }
+
+      setDraftSaved({ where });
     } catch (err) {
       console.error("Save draft error:", err);
-      setError("Failed to save draft. Please try again.");
+      setError(err?.message || "Failed to save draft. Please try again.");
     } finally {
       setSavingDraft(false);
     }
   };
 
   // --------------------------------------------------
-  // Action 2: Submit / Resubmit for Approval
+  // Submit
+  //
+  // The Submit button only asks. Everything that could stop a submission —
+  // missing details, uploads still running — is checked first, so the
+  // confirm dialog never offers a submission that is bound to fail.
   // --------------------------------------------------
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
+
+    // Only the last step submits. Without this the form goes in early in two
+    // ways: pressing Enter in any step-1 text field, and clicking "Next" on the
+    // step before the last, where React patches the very same DOM button from
+    // type="button" to type="submit" mid-click and the browser then runs the
+    // form's default action.
+    if (step !== STEPS.length) return;
 
     if (loading || savingDraft) return;
 
     setError("");
     setSuccess("");
 
-    let targetEventId = null;
-    let currentUserId = null;
-    let mediaUploads = [];
-    let documentUploads = [];
-
-    // --- Strict Field Validation for Submission ---
-    if (!formData.eventName.trim()) {
-      setError("Please enter the event name.");
-      return;
-    }
-    if (!formData.eventDate) {
-      setError("Please select the event date.");
-      return;
-    }
-    if (!formData.eventType) {
-      setError("Please select the event type.");
-      return;
-    }
-    if (!formData.startTime.trim()) {
-      setError("Please specify the event start time.");
-      return;
-    }
-    if (!formData.endTime.trim()) {
-      setError("Please specify the event end time.");
-      return;
-    }
-    if (!formData.location.trim()) {
-      setError("Please enter the venue / location.");
-      return;
-    }
-    if (!formData.department.trim()) {
-      setError("Please specify the host department or school.");
-      return;
-    }
-    if (!formData.organizer.trim()) {
-      setError("Please enter the organizer or faculty coordinator name.");
-      return;
-    }
-    if (!formData.contactInfo.trim()) {
-      setError("Please provide organizer contact information (email or phone).");
-      return;
-    }
-    if (!formData.description.trim()) {
-      setError("Please provide a description for the event.");
+    if (!validateDetails()) {
+      setStep(1);
+      setError("Please complete the required fields before submitting.");
+      window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
 
-    // Social URL validation (optional)
-    if (formData.socialNetworkUrl.trim()) {
-      try {
-        const url = new URL(formData.socialNetworkUrl.trim());
-        if (url.protocol !== "http:" && url.protocol !== "https:") {
-          setError("Please enter a valid social network URL starting with http:// or https://");
-          return;
-        }
-      } catch {
-        setError("Please enter a valid social network URL.");
-        return;
-      }
+    if (uploading) {
+      setError("Please wait for the uploads to finish.");
+      return;
     }
 
+    setConfirmError("");
+    setConfirmOpen(true);
+  };
+
+  /** Cancel: close the question and leave the form exactly as it was. */
+  const cancelSubmit = () => {
+    if (loading) return; // never abandon a request mid-flight
+    setConfirmOpen(false);
+    setConfirmError("");
+  };
+
+  /** Confirm: send it. The server puts it in the Dean's queue as pending. */
+  const confirmSubmit = async () => {
+    if (loading) return;
+
+    setConfirmError("");
     setLoading(true);
 
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      const user = await fetchCurrentUser();
+      if (!user) throw new Error("Your session has expired. Please log in again.");
 
-      if (userError || !user) {
-        throw new Error("Your session has expired. Please log in again.");
-      }
-
-      currentUserId = user.id;
-
-      // Encode extended metadata cleanly into description
-      const fullDescription = encodeEventMetadata(formData.description, {
-        startTime: formData.startTime,
-        endTime: formData.endTime,
-        department: formData.department,
-        organizer: formData.organizer,
-        expectedParticipants: formData.expectedParticipants,
-        contactInfo: formData.contactInfo,
-      });
-
-      if (editingEvent) {
-        // --- RESUBMISSION OF REJECTED EVENT ---
-        const { error: updateError } = await supabase
-          .from("events")
-          .update({
-            event_name: formData.eventName.trim(),
-            event_date: formData.eventDate,
-            event_type: formData.eventType,
-            location: formData.location.trim(),
-            description: fullDescription,
-            social_network_url: formData.socialNetworkUrl.trim() || null,
-            status: "pending",
-            rejection_reason: null,
-            updated_at: new Date().toISOString(),
+      // A draft or a rejected event already exists and is edited in place,
+      // with its files attached; otherwise nothing was uploaded and the event
+      // is created now. Either way the server sets it to pending.
+      const result = eventIdRef.current
+        ? await apiJson(`/teacher/events/${eventIdRef.current}`, {
+            method: "PATCH",
+            body: buildEventBody(false),
           })
-          .eq("id", editingEvent.id)
-          .eq("teacher_id", user.id);
+        : await apiJson("/teacher/events", {
+            method: "POST",
+            body: buildEventBody(false),
+          });
 
-        if (updateError) {
-          throw new Error(updateError.message || "Failed to resubmit event.");
-        }
-
-        targetEventId = editingEvent.id;
-      } else {
-        // --- NEW EVENT CREATION ---
-        const eventData = {
-          teacher_id: user.id,
-          event_name: formData.eventName.trim(),
-          event_date: formData.eventDate,
-          event_type: formData.eventType,
-          location: formData.location.trim(),
-          description: fullDescription,
-          social_network_url: formData.socialNetworkUrl.trim() || null,
-          status: "pending", // Initial submission status for Dean review
-        };
-
-        const { data: event, error: eventError } = await supabase
-          .from("events")
-          .insert(eventData)
-          .select()
-          .single();
-
-        if (eventError) {
-          throw new Error(eventError.message || "Failed to create event.");
-        }
-
-        targetEventId = event.id;
+      if (editingDraftRef.current) {
+        deleteTeacherDraft(user.id, editingDraftRef.current);
       }
 
-      // Upload Media
-      if (mediaFiles.length > 0) {
-        await uploadMediaFiles(currentUserId, targetEventId, mediaUploads);
-      }
-
-      // Upload Documents
-      if (documentFiles.length > 0) {
-        await uploadDocumentFiles(currentUserId, targetEventId, documentUploads);
-      }
-
-      // If this was an existing local draft, remove it from draft storage now
-      if (editingDraftId) {
-        deleteTeacherDraft(user.id, editingDraftId);
-      }
-
-      setSuccess(
-        editingEvent
-          ? "Event resubmitted successfully! It is now pending Dean approval."
-          : "Event submitted successfully for Dean approval."
-      );
-
-      // Redirect to My Events after a short delay
-      setTimeout(() => {
-        navigate("/teacher/my-events?filter=submitted");
-      }, 1500);
+      setConfirmOpen(false);
+      setSubmitted(result?.event || { status: "pending" });
     } catch (err) {
       console.error("Create / Resubmit event error:", err);
-
-      if (targetEventId && !editingEvent) {
-        await rollbackSubmission({
-          eventId: targetEventId,
-          mediaUploads,
-          documentUploads,
-        });
-      }
-
-      setError(err?.message || "Something went wrong while submitting the event.");
+      setConfirmError(err?.message || "Something went wrong while submitting the event.");
     } finally {
       setLoading(false);
     }
   };
 
+  /** Leaving the success dialog leaves the form: it has done its job. */
+  const finishSubmission = () => {
+    setSubmitted(null);
+    navigate("/teacher/my-events?filter=submitted");
+  };
+
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await signOut();
     navigate("/login", { replace: true });
   };
 
-  return (
-    <div className="min-h-screen bg-[#F3F5F9]">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&display=swap');
-        .font-display { font-family: 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif; }
-        @keyframes ccFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-      `}</style>
+  // --------------------------------------------------
+  // Copy
+  // --------------------------------------------------
+  // "Draft" is about how the page was opened, not about whether a draft row
+  // exists yet. Someone part-way through creating an event is still creating
+  // it, even though the first upload has already parked it as a draft.
+  const resumedExisting = Boolean(draftIdParam || editEventIdParam);
+  const mode = resubmitting ? "resubmit" : resumedExisting ? "draft" : "new";
 
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="flex h-[76px] items-center justify-between px-6">
-          <Link to="/teacher/dashboard" className="flex items-center gap-3.5">
-            <img
-              src={srhuLogo}
-              alt="Swami Rama Himalayan University"
-              className="h-12 sm:h-14 w-auto object-contain shrink-0"
-            />
-            <div>
-              <h1 className="font-display text-lg font-semibold leading-tight text-[#101A33]">
-                Campus Capture
-              </h1>
-              <p className="text-xs font-medium text-slate-400">
-                Swami Rama Himalayan University
-              </p>
-            </div>
-          </Link>
+  const heroCopy = {
+    resubmit: {
+      eyebrow: "Resubmission",
+      title: "Edit &",
+      accent: "Resubmit",
+      subtitle:
+        "Update the rejected event as advised by the Dean, then resubmit it for approval.",
+    },
+    draft: {
+      eyebrow: "Draft Mode",
+      title: "Edit Event",
+      accent: "Draft",
+      subtitle:
+        "Resume your saved draft. Anything you upload is kept, so you can finish this later.",
+    },
+    new: {
+      eyebrow: "New Proposal",
+      title: "Create",
+      accent: "Event",
+      subtitle:
+        "Submit event details for Dean approval, or save a draft and finish it later.",
+    },
+  }[mode];
 
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <NotificationBell currentUser={currentUser ? { id: currentUser.id } : null} />
-            </div>
+  const busy = loading || savingDraft;
 
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
-            >
-              <IconLogout />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
-          </div>
+  if (initialising) {
+    return (
+      <div className="hv-root flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <span className="spin mx-auto mb-4 block h-10 w-10 text-accent" />
+          <p className="prose-muted text-sm">Loading event…</p>
         </div>
-      </header>
+      </div>
+    );
+  }
 
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="sticky top-[76px] hidden h-[calc(100vh-76px)] w-64 shrink-0 flex-col bg-gradient-to-b from-[#101A33] to-[#1B2748] px-4 py-6 md:flex">
-          <nav className="space-y-1.5">
-            <Link
-              to="/teacher/dashboard"
-              className="flex items-center gap-3 rounded-lg border-l-[3px] border-transparent px-4 py-3 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white"
-            >
-              <IconGrid />
-              Dashboard
-            </Link>
+  return (
+    <TeacherShell
+      active="create"
+      profile={
+        currentUser
+          ? { id: currentUser.id, name: currentUser.name || currentUser.email }
+          : null
+      }
+      onLogout={handleLogout}
+      railNote="Photos, videos and documents upload as soon as you pick them, so a saved draft keeps them."
+      showToTop={false}
+    >
+      {/* Sized so the details step fits a laptop screen with at most a short
+          scroll: title, step rail and form share one card instead of a hero
+          band above it, the fields run three across, and the action bar
+          sticks to the bottom of the screen so Next is never out of reach. */}
+      <div className="mx-auto w-full max-w-6xl px-4 py-4 sm:px-6 lg:px-8">
 
-            <Link
-              to="/teacher/create-event"
-              className="flex items-center gap-3 rounded-lg border-l-[3px] border-[#D4AF6A] bg-white/10 px-4 py-3 text-sm font-semibold text-white"
-            >
-              <IconPlus className="h-[18px] w-[18px]" />
-              Create Event
-            </Link>
+        {/* Dean's feedback on a rejected event — the one thing that has to be
+            read before anything below it is touched. */}
+        {resubmitting && (
+          <div
+            style={{ "--track": trackOf("rejected") }}
+            className="reveal mb-4 rounded-2xl border p-4"
+            data-tint="rejected"
+          >
+            <div className="flex items-start gap-3">
+              <span className="icon-tile icon-tile-track shrink-0">
+                <IconAlertTriangle />
+              </span>
+              <div className="min-w-0">
+                <h2 className="h3 text-ink">Dean's rejection feedback</h2>
+                <p className="prose-muted mt-1.5 text-sm">
+                  {serverEvent.rejection_reason || "No explicit rejection reason provided."}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
-            <Link
-              to="/teacher/my-events"
-              className="flex items-center gap-3 rounded-lg border-l-[3px] border-transparent px-4 py-3 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white"
-            >
-              <IconList />
-              My Events
-            </Link>
-          </nav>
+        {success && (
+          <div className="toast toast-ok mb-4" role="status">
+            <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-ok" />
+            <p className="text-sm font-medium text-ink">{success}</p>
+          </div>
+        )}
 
-          <div className="mt-auto rounded-xl border border-white/10 bg-white/5 p-4">
-            <p className="text-xs leading-relaxed text-slate-300">
-              Save drafts anytime to finish later, or submit directly for Dean review.
+        {error && (
+          <div className="toast toast-err mb-4" role="alert">
+            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+            <p className="text-sm font-medium text-ink">{error}</p>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------ form */}
+        <form onSubmit={handleSubmit} className="glass overflow-clip">
+
+          {/* --------------------------------------- title + step rail */}
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b hairline px-4 py-3.5 sm:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <Link
+                to="/teacher/dashboard"
+                className="icon-btn icon-btn-sm shrink-0"
+                aria-label="Back to Dashboard"
+                title="Back to Dashboard"
+              >
+                <IconArrowLeft />
+              </Link>
+              <div className="min-w-0">
+                <p className="eyebrow text-[11px]">{heroCopy.eyebrow}</p>
+                <h1 className="truncate font-display text-xl font-bold leading-tight text-ink" title={heroCopy.subtitle}>
+                  {heroCopy.title} <span className="hero-accent">{heroCopy.accent}</span>
+                </h1>
+              </div>
+            </div>
+
+            <div className="wiz-rail" role="list">
+              {STEPS.map((item, index) => {
+                const number = index + 1;
+                const done = number < step;
+                const reachable = number <= maxStepReached;
+
+                return (
+                  <div key={item.key} className="flex items-center" role="listitem">
+                    {index > 0 && <span className="wiz-sep" aria-hidden="true" />}
+                    <button
+                      type="button"
+                      onClick={() => reachable && goToStep(number)}
+                      disabled={!reachable || busy}
+                      aria-current={number === step ? "step" : undefined}
+                      data-done={done ? "true" : undefined}
+                      className="wiz-step"
+                    >
+                      <i>{done ? <IconCheck className="h-3 w-3" /> : number}</i>
+                      <span className={number === step ? "" : "hidden sm:inline"}>
+                        {item.label}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* One line for what used to be a three-line band. The step count
+              lives here so it survives the rail scrolling on a phone. */}
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b hairline bg-line/2 px-4 py-2.5 sm:px-6">
+            <h2 className="text-sm font-semibold text-ink">
+              {step === 1 && "Event Information"}
+              {step === 2 && "Photos"}
+              {step === 3 && "Videos"}
+              {step === 4 && "Supporting Documents"}
+              <span className="ml-2 text-[11px] font-semibold uppercase tracking-wider text-accent">
+                Step {step} of {STEPS.length}
+              </span>
+            </h2>
+            <p className="prose-muted text-xs sm:text-sm">
+              {step === 1 && (
+                <>
+                  Core event details. Fields marked <span className="req">*</span> are
+                  required before the event can be submitted.
+                </>
+              )}
+              {step === 2 &&
+                `Optional. Posters, banners and photographs — up to ${MAX_IMAGE_COUNT} images, 10MB each.`}
+              {step === 3 &&
+                `Optional. Teasers and recordings — up to ${MAX_VIDEO_COUNT} videos, 10MB each.`}
+              {step === 4 && "Optional. PDF, Word, Excel or presentation files — up to 25MB each."}
             </p>
           </div>
-        </aside>
 
-        {/* Main Content */}
-        <main className="flex-1 px-5 py-8 lg:px-10">
-          <div className="mx-auto max-w-5xl">
-            {/* Back link */}
-            <Link
-              to="/teacher/dashboard"
-              className="mb-5 inline-flex items-center gap-1.5 text-sm font-semibold text-[#101A33] transition hover:text-[#c79a54]"
-            >
-              <IconArrowLeft />
-              Back to Dashboard
-            </Link>
+          {/* ------------------------------------------------ step 1: details */}
+          {step === 1 && (
+            <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 py-5 sm:gap-x-5 sm:px-6 lg:grid-cols-3">
 
-            {/* Hero Banner */}
-            <div
-              style={{ animation: "ccFadeUp 0.5s ease-out both" }}
-              className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#101A33] via-[#182449] to-[#1B2748] p-7 sm:p-9"
-            >
-              <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full border border-white/10"></div>
-              <div className="pointer-events-none absolute -right-6 -top-6 h-40 w-40 rounded-full border border-[#D4AF6A]/20"></div>
+              <div className="field col-span-2">
+                <label htmlFor="eventName">
+                  Event Name<span className="req">*</span>
+                </label>
+                <input
+                  id="eventName"
+                  name="eventName"
+                  type="text"
+                  value={formData.eventName}
+                  onChange={handleChange}
+                  placeholder="e.g. National Science Day Symposium 2026"
+                  disabled={busy}
+                  aria-invalid={fieldErrors.eventName ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.eventName && <p className="field-error">{fieldErrors.eventName}</p>}
+              </div>
 
-              <p className="relative text-xs font-semibold uppercase tracking-[0.14em] text-[#D4AF6A]">
-                {editingEvent ? "Resubmission" : editingDraftId ? "Draft Mode" : "New Proposal"}
-              </p>
-              <h2 className="font-display relative mt-2 text-3xl font-semibold text-white sm:text-4xl">
-                {editingEvent
-                  ? "Edit & Resubmit Event"
-                  : editingDraftId
-                  ? "Edit Event Draft"
-                  : "Create Event"}
-              </h2>
-              <p className="relative mt-2 max-w-lg text-sm text-slate-300">
-                {editingEvent
-                  ? "Update rejected event details as advised by the Dean, then resubmit for approval."
-                  : editingDraftId
-                  ? "Resume and edit your saved draft. You can save updates or submit for approval."
-                  : "Submit event details for Dean approval or save as a draft to finish later."}
+              <div className="field">
+                <label htmlFor="eventType">
+                  Event Type<span className="req">*</span>
+                </label>
+                <select
+                  id="eventType"
+                  name="eventType"
+                  value={formData.eventType}
+                  onChange={handleChange}
+                  disabled={busy}
+                  aria-invalid={fieldErrors.eventType ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                >
+                  <option value="">Select type</option>
+                  {EVENT_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                {fieldErrors.eventType && <p className="field-error">{fieldErrors.eventType}</p>}
+              </div>
+
+              <div className="field">
+                <label htmlFor="eventDate">
+                  Event Date<span className="req">*</span>
+                </label>
+                <input
+                  id="eventDate"
+                  name="eventDate"
+                  type="date"
+                  value={formData.eventDate}
+                  onChange={handleChange}
+                  disabled={busy}
+                  aria-invalid={fieldErrors.eventDate ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.eventDate && <p className="field-error">{fieldErrors.eventDate}</p>}
+              </div>
+
+              <div className="field">
+                <label htmlFor="startTime">
+                  Start Time<span className="req">*</span>
+                </label>
+                <input
+                  id="startTime"
+                  name="startTime"
+                  type="time"
+                  value={formData.startTime}
+                  onChange={handleChange}
+                  disabled={busy}
+                  aria-invalid={fieldErrors.startTime ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.startTime && <p className="field-error">{fieldErrors.startTime}</p>}
+              </div>
+
+              <div className="field">
+                <label htmlFor="endTime">
+                  End Time<span className="req">*</span>
+                </label>
+                <input
+                  id="endTime"
+                  name="endTime"
+                  type="time"
+                  value={formData.endTime}
+                  onChange={handleChange}
+                  disabled={busy}
+                  aria-invalid={fieldErrors.endTime ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.endTime && <p className="field-error">{fieldErrors.endTime}</p>}
+              </div>
+
+              <div className="field col-span-2">
+                <label htmlFor="location">
+                  Venue / Location<span className="req">*</span>
+                </label>
+                <input
+                  id="location"
+                  name="location"
+                  type="text"
+                  value={formData.location}
+                  onChange={handleChange}
+                  placeholder="e.g. Auditorium Hall B, Medical College Block"
+                  disabled={busy}
+                  aria-invalid={fieldErrors.location ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.location && <p className="field-error">{fieldErrors.location}</p>}
+              </div>
+
+              <div className="field col-span-2 md:col-span-1">
+                <label htmlFor="expectedParticipants">
+                  Expected Participants
+                  <span className="ml-2 font-normal text-muted">(Optional)</span>
+                </label>
+                <input
+                  id="expectedParticipants"
+                  name="expectedParticipants"
+                  type="text"
+                  value={formData.expectedParticipants}
+                  onChange={handleChange}
+                  placeholder="e.g. 150 Students & Faculty"
+                  disabled={busy}
+                  className="input min-h-10 py-2"
+                />
+              </div>
+
+              <div className="field col-span-2 md:col-span-1">
+                <label htmlFor="department">
+                  Host Department / School<span className="req">*</span>
+                </label>
+                <input
+                  id="department"
+                  name="department"
+                  type="text"
+                  value={formData.department}
+                  onChange={handleChange}
+                  placeholder="e.g. Department of Computer Science & Engineering"
+                  disabled={busy}
+                  aria-invalid={fieldErrors.department ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.department && (
+                  <p className="field-error">{fieldErrors.department}</p>
+                )}
+              </div>
+
+              <div className="field col-span-2 md:col-span-1">
+                <label htmlFor="organizer">
+                  Organizer / Faculty Coordinator<span className="req">*</span>
+                </label>
+                <input
+                  id="organizer"
+                  name="organizer"
+                  type="text"
+                  value={formData.organizer}
+                  onChange={handleChange}
+                  placeholder="e.g. Dr. Rajesh Sharma"
+                  disabled={busy}
+                  aria-invalid={fieldErrors.organizer ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.organizer && <p className="field-error">{fieldErrors.organizer}</p>}
+              </div>
+
+              <div className="field col-span-2 md:col-span-1">
+                <label htmlFor="contactInfo">
+                  Coordinator Contact Information<span className="req">*</span>
+                </label>
+                <input
+                  id="contactInfo"
+                  name="contactInfo"
+                  type="text"
+                  value={formData.contactInfo}
+                  onChange={handleChange}
+                  placeholder="e.g. coordinator@srhu.edu.in / +91 9876543210"
+                  disabled={busy}
+                  aria-invalid={fieldErrors.contactInfo ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.contactInfo && (
+                  <p className="field-error">{fieldErrors.contactInfo}</p>
+                )}
+              </div>
+
+              <div className="field col-span-2">
+                <label htmlFor="description">
+                  Event Description<span className="req">*</span>
+                </label>
+                <textarea
+                  id="description"
+                  name="description"
+                  rows="4"
+                  value={formData.description}
+                  onChange={handleChange}
+                  placeholder="Describe event objectives, agenda, keynote speakers, target audience, and expected outcomes…"
+                  disabled={busy}
+                  aria-invalid={fieldErrors.description ? "true" : undefined}
+                  className="input min-h-24 py-2"
+                />
+                {fieldErrors.description && (
+                  <p className="field-error">{fieldErrors.description}</p>
+                )}
+              </div>
+
+              <div className="field col-span-2 lg:col-span-1">
+                <label htmlFor="socialNetworkUrl">
+                  Social Network Link
+                  <span className="ml-2 font-normal text-muted">(Optional)</span>
+                </label>
+                <input
+                  id="socialNetworkUrl"
+                  name="socialNetworkUrl"
+                  type="url"
+                  value={formData.socialNetworkUrl}
+                  onChange={handleChange}
+                  placeholder="https://instagram.com/srhu_official"
+                  disabled={busy}
+                  aria-invalid={fieldErrors.socialNetworkUrl ? "true" : undefined}
+                  className="input min-h-10 py-2"
+                />
+                {fieldErrors.socialNetworkUrl ? (
+                  <p className="field-error">{fieldErrors.socialNetworkUrl}</p>
+                ) : (
+                  <p className="prose-muted text-xs">
+                    Instagram, LinkedIn, YouTube, X/Twitter, or Facebook.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ------------------------------------------------- step 2: photos */}
+          {step === 2 && (
+            <div className="px-4 py-5 sm:px-6">
+              <UploadPanel
+                kind="image"
+                accept="image/*"
+                items={photos}
+                uploads={photoUploads}
+                max={MAX_IMAGE_COUNT}
+                maxSizeLabel="JPG, PNG, WebP or GIF up to 10MB each"
+                emptyLabel="Drag photos here"
+                hint="Posters, banners, and photographs of the event."
+                disabled={busy}
+                onPick={(files) => handlePick(files, "image")}
+                onRemove={handleRemoveMedia}
+                onRetry={runUpload}
+                onDismiss={dismissUpload}
+              />
+            </div>
+          )}
+
+          {/* ------------------------------------------------- step 3: videos */}
+          {step === 3 && (
+            <div className="px-4 py-5 sm:px-6">
+              <UploadPanel
+                kind="video"
+                accept="video/*"
+                items={videos}
+                uploads={videoUploads}
+                max={MAX_VIDEO_COUNT}
+                maxSizeLabel="MP4, WebM or MOV up to 10MB each"
+                emptyLabel="Drag videos here"
+                hint="Teasers, highlights, or a recording of the event."
+                disabled={busy}
+                onPick={(files) => handlePick(files, "video")}
+                onRemove={handleRemoveMedia}
+                onRetry={runUpload}
+                onDismiss={dismissUpload}
+              />
+            </div>
+          )}
+
+          {/* ---------------------------------------------- step 4: documents */}
+          {step === 4 && (
+            <div className="px-4 py-5 sm:px-6">
+              <UploadPanel
+                kind="document"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+                items={documentItems}
+                uploads={documentUploads}
+                maxSizeLabel="PDF, Word, Excel, PowerPoint, TXT or CSV up to 25MB each"
+                emptyLabel="Drag documents here"
+                hint="Agenda, budget, invitation letter, or approval paperwork."
+                disabled={busy}
+                onPick={(files) => handlePick(files, "document")}
+                onRemove={handleRemoveDocument}
+                onRetry={runUpload}
+                onDismiss={dismissUpload}
+              />
+
+              <div className="mt-4 flex items-start gap-3 rounded-xl border border-accent/15 bg-accent/6 p-3.5">
+                <IconInfo className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
+                <p className="text-sm text-ink">
+                  {resubmitting
+                    ? "Resubmitting sets the event status back to Pending and notifies the Dean for re-evaluation."
+                    : "Once submitted, your event enters the approval workflow and is reviewed by the Dean."}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* ---------------------------------------------- saved-files note */}
+          {step > 1 && serverEventId && isDraftEvent && (
+            <div className="border-t hairline px-4 py-2.5 sm:px-6">
+              <p className="prose-muted flex items-center gap-2 text-xs">
+                <IconCheckCircle className="h-4 w-4 shrink-0 text-ok" />
+                Saved as a draft. Your files are stored, so you can close this page and
+                come back to it.
               </p>
             </div>
+          )}
 
-            {/* Editing Rejected Event Callout */}
-            {editingEvent && (
-              <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-5">
-                <div className="flex items-start gap-3">
-                  <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
-                  <div>
-                    <h3 className="text-sm font-semibold text-rose-900">
-                      Dean's Rejection Feedback
-                    </h3>
-                    <p className="mt-1 text-sm text-rose-700">
-                      {editingEvent.rejection_reason || "No explicit rejection reason provided."}
-                    </p>
-                    <p className="mt-2 text-xs font-medium text-rose-600">
-                      Update the event details below to resolve this feedback, then click "Update & Resubmit for Approval".
-                    </p>
-                  </div>
-                </div>
-              </div>
+          {/* ------------------------------------------------------- actions
+              Sticky, so Next / Submit and Save Draft stay on screen however
+              far down the form the teacher is. One row at every width: on a
+              phone Save Draft drops to its icon rather than stacking three
+              full-width buttons over the form. */}
+          <div className="sticky bottom-0 z-10 flex items-center gap-2 border-t hairline bg-(--card-bg) px-4 py-3 shadow-[0_-10px_24px_-18px_var(--shadow-strong)] sm:gap-3 sm:px-6">
+            {step === 1 ? (
+              <button
+                type="button"
+                onClick={() => navigate("/teacher/my-events")}
+                disabled={busy}
+                className="btn btn-ghost btn-sm"
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleBack}
+                disabled={busy}
+                className="btn btn-ghost btn-sm"
+              >
+                <IconArrowLeft />
+                Back
+              </button>
             )}
 
-            {/* Editing Draft Callout */}
-            {editingDraftId && !editingEvent && (
-              <div className="mt-6 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 p-4">
-                <div className="flex items-center gap-3">
-                  <IconBookmark className="h-5 w-5 shrink-0 text-amber-600" />
-                  <p className="text-sm text-amber-800">
-                    You are editing a saved draft. Changes will update your draft until submitted.
-                  </p>
-                </div>
+            <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
+              {!resubmitting && (
                 <button
                   type="button"
                   onClick={handleSaveDraft}
-                  disabled={savingDraft}
-                  className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+                  disabled={busy || uploading}
+                  className="btn btn-ghost btn-sm"
+                  aria-label={savingDraft ? "Saving draft" : "Save draft"}
                 >
-                  {savingDraft ? "Saving..." : "Quick Save"}
+                  {savingDraft ? <span className="spin h-4 w-4" /> : <IconBookmark />}
+                  <span className="hidden sm:inline">
+                    {savingDraft ? "Saving Draft…" : "Save Draft"}
+                  </span>
                 </button>
-              </div>
-            )}
+              )}
 
-            {/* Success Alert */}
-            {success && (
-              <div className="mt-6 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
-                <p className="text-sm font-medium text-emerald-700">{success}</p>
-              </div>
-            )}
-
-            {/* Error Alert */}
-            {error && (
-              <div className="mt-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4">
-                <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-500" />
-                <p className="text-sm font-medium text-rose-700">{error}</p>
-              </div>
-            )}
-
-            {/* Form */}
-            <form
-              onSubmit={handleSubmit}
-              className="mt-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-md"
-            >
-              {/* Event Information Section */}
-              <div className="border-b border-slate-100 px-6 py-5 sm:px-8">
-                <h3 className="font-display text-lg font-semibold text-slate-900">
-                  Event Information
-                </h3>
-                <p className="mt-0.5 text-sm text-slate-500">
-                  Provide core event details. All marked (<span className="text-rose-500">*</span>) fields are required for submission.
-                </p>
-              </div>
-
-              <div className="space-y-6 px-6 py-7 sm:px-8">
-                {/* Event Name */}
-                <div>
-                  <label htmlFor="eventName" className="mb-2 block text-sm font-medium text-slate-700">
-                    Event Name
-                    <span className="ml-1 text-rose-500">*</span>
-                  </label>
-                  <input
-                    id="eventName"
-                    name="eventName"
-                    type="text"
-                    value={formData.eventName}
-                    onChange={handleChange}
-                    placeholder="e.g. National Science Day Symposium 2026"
-                    disabled={loading || savingDraft}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                  />
-                </div>
-
-                {/* Date + Type */}
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <div>
-                    <label htmlFor="eventDate" className="mb-2 block text-sm font-medium text-slate-700">
-                      Event Date
-                      <span className="ml-1 text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="eventDate"
-                      name="eventDate"
-                      type="date"
-                      value={formData.eventDate}
-                      onChange={handleChange}
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="eventType" className="mb-2 block text-sm font-medium text-slate-700">
-                      Event Type
-                      <span className="ml-1 text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="eventType"
-                      name="eventType"
-                      value={formData.eventType}
-                      onChange={handleChange}
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    >
-                      <option value="">Select event type</option>
-                      <option value="Academic">Academic</option>
-                      <option value="Cultural">Cultural</option>
-                      <option value="Sports">Sports</option>
-                      <option value="Workshop">Workshop</option>
-                      <option value="Seminar">Seminar</option>
-                      <option value="Conference">Conference</option>
-                      <option value="Celebration">Celebration</option>
-                      <option value="Other">Other</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Start Time + End Time */}
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <div>
-                    <label htmlFor="startTime" className="mb-2 block text-sm font-medium text-slate-700">
-                      Start Time
-                      <span className="ml-1 text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="startTime"
-                      name="startTime"
-                      type="time"
-                      value={formData.startTime}
-                      onChange={handleChange}
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="endTime" className="mb-2 block text-sm font-medium text-slate-700">
-                      End Time
-                      <span className="ml-1 text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="endTime"
-                      name="endTime"
-                      type="time"
-                      value={formData.endTime}
-                      onChange={handleChange}
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    />
-                  </div>
-                </div>
-
-                {/* Venue / Location */}
-                <div>
-                  <label htmlFor="location" className="mb-2 block text-sm font-medium text-slate-700">
-                    Venue / Location
-                    <span className="ml-1 text-rose-500">*</span>
-                  </label>
-                  <input
-                    id="location"
-                    name="location"
-                    type="text"
-                    value={formData.location}
-                    onChange={handleChange}
-                    placeholder="e.g. Auditorium Hall B, Medical College Block"
-                    disabled={loading || savingDraft}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                  />
-                </div>
-
-                {/* Department & Expected Participants */}
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <div>
-                    <label htmlFor="department" className="mb-2 block text-sm font-medium text-slate-700">
-                      Host Department / School
-                      <span className="ml-1 text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="department"
-                      name="department"
-                      type="text"
-                      value={formData.department}
-                      onChange={handleChange}
-                      placeholder="e.g. Department of Computer Science & Engineering"
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="expectedParticipants" className="mb-2 block text-sm font-medium text-slate-700">
-                      Expected Participants
-                      <span className="ml-2 font-normal text-slate-400">(Optional)</span>
-                    </label>
-                    <input
-                      id="expectedParticipants"
-                      name="expectedParticipants"
-                      type="text"
-                      value={formData.expectedParticipants}
-                      onChange={handleChange}
-                      placeholder="e.g. 150 Students & Faculty"
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    />
-                  </div>
-                </div>
-
-                {/* Organizer & Contact Info */}
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <div>
-                    <label htmlFor="organizer" className="mb-2 block text-sm font-medium text-slate-700">
-                      Organizer / Faculty Coordinator
-                      <span className="ml-1 text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="organizer"
-                      name="organizer"
-                      type="text"
-                      value={formData.organizer}
-                      onChange={handleChange}
-                      placeholder="e.g. Dr. Rajesh Sharma"
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="contactInfo" className="mb-2 block text-sm font-medium text-slate-700">
-                      Coordinator Contact Information
-                      <span className="ml-1 text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="contactInfo"
-                      name="contactInfo"
-                      type="text"
-                      value={formData.contactInfo}
-                      onChange={handleChange}
-                      placeholder="e.g. coordinator@srhu.edu.in / +91 9876543210"
-                      disabled={loading || savingDraft}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                    />
-                  </div>
-                </div>
-
-                {/* Description */}
-                <div>
-                  <label htmlFor="description" className="mb-2 block text-sm font-medium text-slate-700">
-                    Event Description
-                    <span className="ml-1 text-rose-500">*</span>
-                  </label>
-                  <textarea
-                    id="description"
-                    name="description"
-                    rows="5"
-                    value={formData.description}
-                    onChange={handleChange}
-                    placeholder="Describe event objectives, agenda, keynote speakers, target audience, and expected outcomes..."
-                    disabled={loading || savingDraft}
-                    className="w-full resize-none rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                  />
-                </div>
-
-                {/* Social Network Link */}
-                <div>
-                  <label htmlFor="socialNetworkUrl" className="mb-2 block text-sm font-medium text-slate-700">
-                    Social Network Link
-                    <span className="ml-2 font-normal text-slate-400">(Optional)</span>
-                  </label>
-                  <input
-                    id="socialNetworkUrl"
-                    name="socialNetworkUrl"
-                    type="url"
-                    value={formData.socialNetworkUrl}
-                    onChange={handleChange}
-                    placeholder="https://instagram.com/srhu_official"
-                    disabled={loading || savingDraft}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15 disabled:bg-slate-100"
-                  />
-                  <p className="mt-2 text-xs text-slate-500">
-                    You can add an Instagram, LinkedIn, YouTube, X/Twitter, or Facebook link.
-                  </p>
-                </div>
-              </div>
-
-              {/* Photos & Videos */}
-              <div className="border-t border-slate-100 px-6 py-7 sm:px-8">
-                <h3 className="font-display text-lg font-semibold text-slate-900">
-                  Photos & Videos
-                </h3>
-                <p className="mt-0.5 text-sm text-slate-500">
-                  Upload photos, posters, banners, or teaser videos (Max 10MB each).
-                </p>
-
-                <div className="mt-5">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*,video/*"
-                    multiple
-                    onChange={handleMediaChange}
-                    className="hidden"
-                    disabled={loading || savingDraft}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={loading || savingDraft}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 px-5 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 sm:w-auto"
-                  >
-                    <IconImagePlus />
-                    Add Photos / Videos
-                  </button>
-                </div>
-
-                {mediaFiles.length > 0 && (
-                  <div className="mt-5 space-y-2.5">
-                    {mediaFiles.map((file, index) => (
-                      <div
-                        key={`${file.name}-${index}`}
-                        className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-slate-800">{file.name}</p>
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            {file.type.startsWith("video/") ? "Video" : "Image"} • {formatFileSize(file.size)}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeMediaFile(index)}
-                          disabled={loading || savingDraft}
-                          className="flex shrink-0 items-center gap-1 text-sm font-medium text-rose-600 transition hover:text-rose-700"
-                        >
-                          <IconX className="h-3.5 w-3.5" />
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Supporting Documents */}
-              <div className="border-t border-slate-100 px-6 py-7 sm:px-8">
-                <h3 className="font-display text-lg font-semibold text-slate-900">
-                  Supporting Documents
-                </h3>
-                <p className="mt-0.5 text-sm text-slate-500">
-                  Upload PDF, Word, Excel, or presentation files (Max 25MB each).
-                </p>
-
-                <div className="mt-5">
-                  <input
-                    ref={documentInputRef}
-                    type="file"
-                    multiple
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
-                    onChange={handleDocumentChange}
-                    className="hidden"
-                    disabled={loading || savingDraft}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => documentInputRef.current?.click()}
-                    disabled={loading || savingDraft}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 px-5 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 sm:w-auto"
-                  >
-                    <IconFilePlus />
-                    Add Documents
-                  </button>
-                </div>
-
-                {documentFiles.length > 0 && (
-                  <div className="mt-5 space-y-2.5">
-                    {documentFiles.map((file, index) => (
-                      <div
-                        key={`${file.name}-${index}`}
-                        className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
-                      >
-                        <div className="flex min-w-0 items-center gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#101A33]/5">
-                            <span className="text-xs font-bold text-[#101A33]">
-                              {getFileExtension(file.name)}
-                            </span>
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-slate-800">{file.name}</p>
-                            <p className="mt-0.5 text-xs text-slate-500">
-                              {formatFileSize(file.size)}
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeDocumentFile(index)}
-                          disabled={loading || savingDraft}
-                          className="flex shrink-0 items-center gap-1 text-sm font-medium text-rose-600 transition hover:text-rose-700"
-                        >
-                          <IconX className="h-3.5 w-3.5" />
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Submission Information Notice */}
-              <div className="border-t border-slate-100 px-6 py-7 sm:px-8">
-                <div className="flex items-start gap-3 rounded-xl border border-[#101A33]/10 bg-[#101A33]/5 p-4">
-                  <IconInfo className="mt-0.5 h-5 w-5 shrink-0 text-[#101A33]" />
-                  <p className="text-sm text-[#101A33]">
-                    {editingEvent
-                      ? "Resubmitting will set the event status back to Pending and notify the Dean for re-evaluation."
-                      : "Once submitted, your event will enter the approval workflow and be reviewed by the Dean."}
-                  </p>
-                </div>
-              </div>
-
-              {/* Dual Action Buttons (Save Draft vs Submit for Approval) */}
-              <div className="flex flex-col-reverse gap-3 border-t border-slate-100 px-6 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+              {/* Distinct keys matter: with one key React would reuse a single
+                  DOM button and only swap its type, which is what let a click
+                  on "Next" fall through into a form submit. */}
+              {step < STEPS.length ? (
                 <button
+                  key="wizard-next"
                   type="button"
-                  onClick={() => navigate("/teacher/my-events")}
-                  disabled={loading || savingDraft}
-                  className="w-full rounded-xl border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 sm:w-auto"
+                  onClick={handleNext}
+                  disabled={busy}
+                  className="btn btn-primary btn-sm"
                 >
-                  Cancel
+                  <span className="sm:hidden">Next</span>
+                  <span className="hidden sm:inline">Next: {STEPS[step].label}</span>
+                  <IconArrowRight />
                 </button>
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  {/* Save Draft Button (does not require all fields) */}
-                  {!editingEvent && (
-                    <button
-                      type="button"
-                      onClick={handleSaveDraft}
-                      disabled={loading || savingDraft}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 sm:w-auto"
-                    >
-                      <IconBookmark className="h-4 w-4 text-slate-500" />
-                      {savingDraft ? "Saving Draft..." : "Save Draft"}
-                    </button>
-                  )}
-
-                  {/* Submit / Resubmit for Approval Button */}
-                  <button
-                    type="submit"
-                    disabled={loading || savingDraft}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#101A33] px-6 py-3 text-sm font-semibold text-white shadow-md shadow-black/10 transition hover:bg-[#1B2748] disabled:cursor-not-allowed disabled:bg-slate-400 sm:w-auto"
-                  >
-                    {loading ? (
-                      <>
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></span>
-                        {editingEvent ? "Resubmitting..." : "Submitting..."}
-                      </>
-                    ) : editingEvent ? (
-                      "Update & Resubmit for Approval"
-                    ) : (
-                      "Submit for Approval"
-                    )}
-                  </button>
-                </div>
-              </div>
-            </form>
+              ) : (
+                <button
+                  key="wizard-submit"
+                  type="submit"
+                  disabled={busy || uploading}
+                  className="btn btn-primary btn-sm"
+                >
+                  {loading && <span className="spin h-4 w-4" />}
+                  <span className="sm:hidden">
+                    {loading ? "Sending…" : uploading ? "Uploading…" : resubmitting ? "Resubmit" : "Submit"}
+                  </span>
+                  <span className="hidden sm:inline">
+                    {loading
+                      ? resubmitting
+                        ? "Resubmitting…"
+                        : "Submitting…"
+                      : uploading
+                      ? "Waiting for uploads…"
+                      : resubmitting
+                      ? "Update & Resubmit for Approval"
+                      : "Submit for Approval"}
+                  </span>
+                </button>
+              )}
+            </div>
           </div>
-        </main>
+        </form>
+
       </div>
-    </div>
+
+      {/* Confirmation that the draft is stored. A dialog, not a banner: it is
+          centred wherever the page happens to be scrolled, and it names the
+          two ways out instead of leaving the teacher on a form they have
+          already saved. */}
+      <Modal
+        open={Boolean(draftSaved)}
+        onClose={() => setDraftSaved(null)}
+        eyebrow="Draft saved"
+        title="Your event is saved as a draft"
+        subtitle="Nothing has been sent to the Dean yet."
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setDraftSaved(null)}
+              className="btn btn-ghost"
+            >
+              Keep editing
+            </button>
+            <Link to="/teacher/my-events?filter=draft" className="btn btn-primary">
+              Go to My Events
+              <IconArrowRight />
+            </Link>
+          </>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-ok" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink">
+              “{formData.eventName.trim() || "Untitled event"}” has been saved.
+            </p>
+
+            {/* The distinction matters: a browser draft is the one that does
+                not follow the teacher to another machine. */}
+            <p className="prose-muted mt-1.5 text-sm">
+              {draftSaved?.where === "server"
+                ? "It is stored on your Campus Capture account, with any files you have already uploaded. Pick it up from My Events whenever you like, on any device."
+                : "It is kept in this browser until the required details are filled in, so nothing you have typed is lost. Complete the event details to store it on your account."}
+            </p>
+
+            <p className="prose-muted mt-3 text-xs">
+              Submit it for Dean approval from the last step when it is ready.
+            </p>
+          </div>
+        </div>
+      </Modal>
+
+      {/* -------------------------------------------------- 1. are you sure?
+          Nothing has been sent while this is open. Cancel (or Escape, or a
+          click outside) returns to the form with every field as it was. */}
+      <Modal
+        open={confirmOpen}
+        onClose={cancelSubmit}
+        eyebrow="Confirm"
+        title={
+          resubmitting
+            ? "Are you sure you want to resubmit this event?"
+            : "Are you sure you want to submit this event?"
+        }
+        subtitle="It will be sent to the Dean for approval."
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={cancelSubmit}
+              disabled={loading}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmSubmit}
+              disabled={loading}
+              className="btn btn-primary btn-sm"
+              autoFocus
+            >
+              {loading ? <span className="spin h-4 w-4" /> : <IconCheck />}
+              {loading
+                ? resubmitting
+                  ? "Resubmitting…"
+                  : "Submitting…"
+                : resubmitting
+                ? "Confirm & resubmit"
+                : "Confirm & submit"}
+            </button>
+          </>
+        }
+      >
+        {/* What is about to go out, so the teacher confirms this event and
+            not merely "an event". */}
+        <dl className="grid gap-x-6 gap-y-3 rounded-xl border hairline bg-raised/40 p-4 sm:grid-cols-2">
+          {[
+            ["Event", formData.eventName.trim() || "Untitled event"],
+            ["Type", formData.eventType || "Not set"],
+            ["Date", formatSummaryDate(formData.eventDate)],
+            ["Venue", formData.location.trim() || "Not set"],
+          ].map(([label, value]) => (
+            <div key={label} className="min-w-0">
+              <dt className="text-[11px] font-semibold uppercase tracking-[.12em] text-muted">
+                {label}
+              </dt>
+              <dd className="mt-0.5 truncate text-sm font-medium text-ink" title={value}>
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+
+        <p className="prose-muted mt-3 text-xs">
+          {photos.length} photo{photos.length === 1 ? "" : "s"} · {videos.length} video
+          {videos.length === 1 ? "" : "s"} · {documentItems.length} document
+          {documentItems.length === 1 ? "" : "s"} attached. You can still edit the
+          event until the Dean approves it.
+        </p>
+
+        {confirmError && (
+          <div
+            className="mt-4 flex items-start gap-2.5 rounded-xl border px-3.5 py-3"
+            data-tint=""
+            style={{ "--track": trackOf("rejected") }}
+            role="alert"
+          >
+            <IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-err" />
+            <p className="text-sm text-ink">
+              {confirmError} Nothing was submitted — try again, or cancel to keep editing.
+            </p>
+          </div>
+        )}
+      </Modal>
+
+      {/* ---------------------------------------------------- 2. submitted
+          Shown only once the server has accepted it, with the status the
+          server gave it, so "pending" here is the real state, not a guess. */}
+      <Modal
+        open={Boolean(submitted)}
+        onClose={finishSubmission}
+        eyebrow={resubmitting ? "Resubmitted" : "Submitted"}
+        title={
+          resubmitting
+            ? "Event resubmitted successfully!"
+            : "Event submitted successfully!"
+        }
+        subtitle="It is now with the Dean for approval."
+        footer={
+          <>
+            {submitted?.id && (
+              <Link
+                to={`/teacher/events/${submitted.id}`}
+                onClick={() => setSubmitted(null)}
+                className="btn btn-ghost btn-sm"
+              >
+                View event
+              </Link>
+            )}
+            <button type="button" onClick={finishSubmission} className="btn btn-primary btn-sm">
+              Go to My Events
+              <IconArrowRight />
+            </button>
+          </>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <span
+            className="icon-tile icon-tile-track shrink-0"
+            style={{ "--track": trackOf("approved") }}
+          >
+            <IconCheckCircle />
+          </span>
+
+          <div className="min-w-0">
+            <p className="font-display text-sm font-semibold text-ink">
+              “{submitted?.event_name || formData.eventName.trim() || "Your event"}”
+            </p>
+
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted">
+              Status:
+              <StatusChip status={submitted?.status || "pending"} />
+              <span>— submitted for Dean approval</span>
+            </div>
+
+            <p className="prose-muted mt-3 text-sm">
+              You will get a notification when the Dean approves it or asks for
+              changes, and every step appears in the event’s progress history.
+            </p>
+          </div>
+        </div>
+      </Modal>
+    </TeacherShell>
   );
 }
 

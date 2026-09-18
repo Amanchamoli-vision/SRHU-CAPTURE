@@ -1,27 +1,16 @@
-from io import BytesIO
-from datetime import datetime, timezone
 from urllib.parse import urlparse
-from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from pymongo import ASCENDING
 
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-)
-
-from app.database import supabase
-from app.routers.events import get_current_user, check_dean
+from app.database import event_documents, event_media, event_reports, events, users
+from app.models.documents import APPROVED_STAGES, new_report_document
+from app.services.report_pdf import build_event_report_pdf, split_description
+from app.services.storage_service import absolutize
+from app.utils.auth import check_dean, get_current_user
+from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
 
 router = APIRouter(tags=["Reports", "Dean"])
@@ -39,32 +28,16 @@ class SocialLinkRequest(BaseModel):
 # HELPERS
 # ============================================================
 
-def get_event(event_id: str):
-    response = (
-        supabase
-        .table("events")
-        .select(
-            """
-            id,
-            teacher_id,
-            event_name,
-            event_date,
-            event_type,
-            location,
-            description,
-            social_network_url,
-            status,
-            rejection_reason,
-            created_at,
-            updated_at
-            """
-        )
-        .eq("id", event_id)
-        .maybe_single()
-        .execute()
-    )
+# Statuses at or beyond approval. The report must remain generatable once the
+# Dean advances an approved event through its delivery stages.
 
-    event = response.data
+def is_approved(event) -> bool:
+    return (event or {}).get("status") in APPROVED_STAGES
+
+
+def get_event(event_id: str):
+    object_id = to_object_id(event_id)
+    event = events.find_one({"_id": object_id}) if object_id else None
 
     if not event:
         raise HTTPException(
@@ -72,7 +45,7 @@ def get_event(event_id: str):
             detail="Event not found"
         )
 
-    return event
+    return serialize(event)
 
 
 def validate_social_url(url: str) -> str:
@@ -100,58 +73,25 @@ def validate_social_url(url: str) -> str:
 
 
 def get_event_media(event_id: str):
-    response = (
-        supabase
-        .table("event_media")
-        .select(
-            """
-            id,
-            media_url,
-            media_type,
-            created_at
-            """
-        )
-        .eq("event_id", event_id)
-        .order("created_at", desc=False)
-        .execute()
-    )
-
-    return response.data or []
+    cursor = event_media.find({"event_id": event_id}).sort("created_at", ASCENDING)
+    return serialize_many(cursor)
 
 
 def get_event_documents(event_id: str):
-    response = (
-        supabase
-        .table("event_documents")
-        .select(
-            """
-            id,
-            file_name,
-            file_url,
-            file_type,
-            file_size,
-            created_at
-            """
-        )
-        .eq("event_id", event_id)
-        .order("created_at", desc=False)
-        .execute()
-    )
-
-    return response.data or []
+    cursor = event_documents.find({"event_id": event_id}).sort("created_at", ASCENDING)
+    return serialize_many(cursor)
 
 
 def get_teacher(event):
-    response = (
-        supabase
-        .table("users")
-        .select("id, name, email")
-        .eq("id", event["teacher_id"])
-        .maybe_single()
-        .execute()
+    teacher = users.find_one(
+        {"_id": to_object_id(event.get("teacher_id"))},
+        {"name": 1, "email": 1},
     )
+    return serialize(teacher) or {}
 
-    return response.data or {}
+
+def get_report(event_id: str):
+    return serialize(event_reports.find_one({"event_id": event_id}))
 
 
 # ============================================================
@@ -164,26 +104,10 @@ def get_report_status(
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user.id)
+    check_dean(user)
 
     event = get_event(event_id)
-
-    report_response = (
-        supabase
-        .table("event_reports")
-        .select(
-            """
-            id,
-            event_id,
-            generated_at
-            """
-        )
-        .eq("event_id", event_id)
-        .maybe_single()
-        .execute()
-    )
-
-    report = report_response.data
+    report = get_report(event["id"])
 
     return {
         "success": True,
@@ -210,11 +134,11 @@ def save_social_link(
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user.id)
+    check_dean(user)
 
     event = get_event(event_id)
 
-    if event.get("status") != "approved":
+    if not is_approved(event):
         raise HTTPException(
             status_code=400,
             detail="Social Network Link can only be added after event approval"
@@ -224,30 +148,19 @@ def save_social_link(
         payload.social_network_url
     )
 
-    response = (
-        supabase
-        .table("events")
-        .update({
-            "social_network_url": social_url
-        })
-        .eq("id", event_id)
-        .execute()
+    result = events.update_one(
+        {"_id": to_object_id(event_id)},
+        {"$set": {"social_network_url": social_url, "updated_at": utc_now()}},
     )
 
-    if not response.data:
+    if result.matched_count == 0:
         raise HTTPException(
             status_code=404,
             detail="Event not found"
         )
 
     # If the link changes, an old report should not remain valid.
-    (
-        supabase
-        .table("event_reports")
-        .delete()
-        .eq("event_id", event_id)
-        .execute()
-    )
+    event_reports.delete_many({"event_id": event["id"]})
 
     return {
         "success": True,
@@ -263,14 +176,18 @@ def save_social_link(
 @router.get("/dean/events/{event_id}/documents")
 def get_documents(
     event_id: str,
+    request: Request,
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user.id)
+    check_dean(user)
 
     event = get_event(event_id)
 
-    documents = get_event_documents(event["id"])
+    documents = [
+        absolutize(request, document, "file_url")
+        for document in get_event_documents(event["id"])
+    ]
 
     return {
         "success": True,
@@ -296,7 +213,7 @@ def build_report_content(
     document_count = len(documents)
 
     description = (
-        event.get("description")
+        split_description(event.get("description"))[0]
         or "No description provided."
     )
 
@@ -352,7 +269,7 @@ def generate_report(
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user.id)
+    check_dean(user)
 
     event = get_event(event_id)
 
@@ -360,7 +277,7 @@ def generate_report(
     # Event must be approved
     # --------------------------------------------------------
 
-    if event.get("status") != "approved":
+    if not is_approved(event):
         raise HTTPException(
             status_code=400,
             detail="Report can only be generated for approved events"
@@ -385,8 +302,8 @@ def generate_report(
     # Collect event information
     # --------------------------------------------------------
 
-    media = get_event_media(event_id)
-    documents = get_event_documents(event_id)
+    media = get_event_media(event["id"])
+    documents = get_event_documents(event["id"])
     teacher = get_teacher(event)
 
     report_title = (
@@ -400,43 +317,23 @@ def generate_report(
         documents
     )
 
-    generated_at = datetime.now(
-        timezone.utc
-    ).isoformat()
-
     # --------------------------------------------------------
-    # Remove old report
+    # Replace any old report
     # --------------------------------------------------------
 
-    (
-        supabase
-        .table("event_reports")
-        .delete()
-        .eq("event_id", event_id)
-        .execute()
+    report = new_report_document(
+        event_id=event["id"],
+        report_title=report_title,
+        report_content=report_content,
     )
 
-    # --------------------------------------------------------
-    # Save new report
-    # --------------------------------------------------------
-
-    response = (
-        supabase
-        .table("event_reports")
-        .insert({
-            "event_id": event_id,
-            "report_title": report_title,
-            "report_content": report_content,
-            "generated_at": generated_at,
-        })
-        .execute()
+    event_reports.replace_one(
+        {"event_id": event["id"]},
+        report,
+        upsert=True,
     )
 
-    if not response.data:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to generate report"
-        )
+    generated_at = report["generated_at"].isoformat()
 
     return {
         "success": True,
@@ -445,252 +342,6 @@ def generate_report(
         "generated_at": generated_at,
         "download_available": True
     }
-
-
-# ============================================================
-# BUILD PDF
-# ============================================================
-
-def build_pdf(
-    event,
-    teacher,
-    media,
-    documents
-):
-    buffer = BytesIO()
-
-    document = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=18 * mm,
-        leftMargin=18 * mm,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
-    )
-
-    styles = getSampleStyleSheet()
-
-    title_style = ParagraphStyle(
-        "ReportTitle",
-        parent=styles["Title"],
-        alignment=TA_CENTER,
-        fontSize=20,
-        spaceAfter=8,
-    )
-
-    subtitle_style = ParagraphStyle(
-        "Subtitle",
-        parent=styles["Normal"],
-        alignment=TA_CENTER,
-        fontSize=10,
-        spaceAfter=18,
-    )
-
-    heading_style = ParagraphStyle(
-        "Heading",
-        parent=styles["Heading2"],
-        fontSize=13,
-        spaceBefore=12,
-        spaceAfter=7,
-    )
-
-    normal_style = ParagraphStyle(
-        "NormalReport",
-        parent=styles["Normal"],
-        fontSize=9.5,
-        leading=14,
-        spaceAfter=5,
-    )
-
-    story = []
-
-    story.append(
-        Paragraph(
-            "Campus Capture",
-            title_style
-        )
-    )
-
-    story.append(
-        Paragraph(
-            "Swami Rama Himalayan University",
-            subtitle_style
-        )
-    )
-
-    story.append(
-        Paragraph(
-            "EVENT REPORT",
-            heading_style
-        )
-    )
-
-    event_name = escape(
-        str(event.get("event_name") or "")
-    )
-
-    event_date = escape(
-        str(event.get("event_date") or "")
-    )
-
-    event_type = escape(
-        str(event.get("event_type") or "")
-    )
-
-    location = escape(
-        str(event.get("location") or "")
-    )
-
-    teacher_name = escape(
-        str(teacher.get("name") or "Not available")
-    )
-
-    teacher_email = escape(
-        str(teacher.get("email") or "Not available")
-    )
-
-    social_url = escape(
-        str(event.get("social_network_url") or "")
-    )
-
-    rows = [
-        ["Event Name", event_name],
-        ["Event Date", event_date],
-        ["Event Type", event_type],
-        ["Location", location],
-        ["Teacher", teacher_name],
-        ["Teacher Email", teacher_email],
-        ["Social Network Link", social_url],
-        ["Status", "Approved"],
-        ["Photos / Videos", str(len(media))],
-        ["Supporting Documents", str(len(documents))],
-    ]
-
-    table_data = []
-
-    for key, value in rows:
-        table_data.append([
-            Paragraph(
-                escape(key),
-                normal_style
-            ),
-            Paragraph(
-                value,
-                normal_style
-            ),
-        ])
-
-    table = Table(
-        table_data,
-        colWidths=[48 * mm, 125 * mm]
-    )
-
-    table.setStyle(
-        TableStyle([
-            (
-                "GRID",
-                (0, 0),
-                (-1, -1),
-                0.5,
-                colors.grey
-            ),
-            (
-                "BACKGROUND",
-                (0, 0),
-                (0, -1),
-                colors.whitesmoke
-            ),
-            (
-                "VALIGN",
-                (0, 0),
-                (-1, -1),
-                "TOP"
-            ),
-            (
-                "LEFTPADDING",
-                (0, 0),
-                (-1, -1),
-                6
-            ),
-            (
-                "RIGHTPADDING",
-                (0, 0),
-                (-1, -1),
-                6
-            ),
-            (
-                "TOPPADDING",
-                (0, 0),
-                (-1, -1),
-                6
-            ),
-            (
-                "BOTTOMPADDING",
-                (0, 0),
-                (-1, -1),
-                6
-            ),
-        ])
-    )
-
-    story.append(table)
-
-    story.append(
-        Paragraph(
-            "Event Description",
-            heading_style
-        )
-    )
-
-    description = escape(
-        str(
-            event.get("description")
-            or "No description provided."
-        )
-    )
-
-    story.append(
-        Paragraph(
-            description,
-            normal_style
-        )
-    )
-
-    story.append(
-        Paragraph(
-            "Report Summary",
-            heading_style
-        )
-    )
-
-    story.append(
-Paragraph(
-f"This report presents the official documentation and relevant details "
-f"pertaining to the approved event <b>{event_name}</b>. "
-f"The event record comprises {len(media)} photo/video files and "
-f"{len(documents)} supporting documents submitted in connection "
-f"with the event.",
-normal_style
-)
-)
-
-
-    story.append(
-        Spacer(1, 10)
-    )
-
-    story.append(
-        Paragraph(
-            "Generated automatically by Campus Capture SRHU.",
-            subtitle_style
-        )
-    )
-
-    document.build(story)
-
-    buffer.seek(0)
-
-    return buffer
 
 
 # ============================================================
@@ -703,11 +354,11 @@ def download_report(
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user.id)
+    check_dean(user)
 
     event = get_event(event_id)
 
-    if event.get("status") != "approved":
+    if not is_approved(event):
         raise HTTPException(
             status_code=400,
             detail="Only approved events can have a report"
@@ -722,16 +373,7 @@ def download_report(
             detail="Social Network Link is required"
         )
 
-    report_response = (
-        supabase
-        .table("event_reports")
-        .select("id, event_id, generated_at")
-        .eq("event_id", event_id)
-        .maybe_single()
-        .execute()
-    )
-
-    report = report_response.data
+    report = get_report(event["id"])
 
     if not report:
         raise HTTPException(
@@ -739,16 +381,11 @@ def download_report(
             detail="Please generate the report first"
         )
 
-    media = get_event_media(event_id)
-    documents = get_event_documents(event_id)
+    media = get_event_media(event["id"])
+    documents = get_event_documents(event["id"])
     teacher = get_teacher(event)
 
-    pdf = build_pdf(
-        event,
-        teacher,
-        media,
-        documents
-    )
+    pdf = build_event_report_pdf(event, teacher, media, documents)
 
     safe_name = (
         event.get("event_name")

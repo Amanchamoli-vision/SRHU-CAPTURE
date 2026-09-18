@@ -1,392 +1,373 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabase } from "../../services/supabase";
-import { API_BASE_URL } from "../../services/api";
-import srhuLogo from "../../assets/logo.png";
+import { Link, useNavigate } from "react-router-dom";
+import { apiJson } from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
+import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
+import PageHero from "../../components/teacher/PageHero";
+import { ROLE_TRACK } from "../../components/common/roles";
+import {
+  IconAlertTriangle,
+  IconArrowRight,
+  IconAward,
+  IconCheck,
+  IconCheckCircle,
+  IconCopy,
+  IconKey,
+  IconMail,
+  IconUser,
+  IconUserPlus,
+  IconUsers,
+} from "../../components/teacher/icons";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const STEPS = [
+  {
+    title: "Enter their details",
+    body: "The name appears on every approval they issue. Use the address they will sign in with.",
+  },
+  {
+    title: "A temporary password is generated",
+    body: "It is shown once on this screen, and emailed to the Dean when mail delivery is configured. Copy it before you leave the page.",
+  },
+  {
+    title: "Hand it over securely",
+    body: "Share it in person or over a trusted channel. The Dean should change it after first sign-in.",
+  },
+];
 
 function CreateDean() {
   const navigate = useNavigate();
+  const { profile, signOut } = useAuth();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [created, setCreated] = useState(null); // { message, email, name, temporaryPassword }
+  const [copied, setCopied] = useState(false);
 
-  // =========================================================
-  // Create Dean
-  // =========================================================
+  const validate = () => {
+    const errors = {};
+    if (!name.trim()) errors.name = "Enter the Dean's full name.";
+    if (!email.trim()) errors.email = "Enter the Dean's email address.";
+    else if (!EMAIL_RE.test(email.trim())) errors.email = "That does not look like a valid email address.";
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleCreateDean = async (e) => {
     e.preventDefault();
-
     setError("");
-    setSuccess("");
-    setTemporaryPassword("");
+    setCreated(null);
+    setCopied(false);
 
-    // Basic validation
-    if (!name.trim() || !email.trim()) {
-      setError("Please enter name and email.");
-      return;
-    }
+    if (!validate()) return;
 
     setLoading(true);
 
     try {
-      // -----------------------------------------------------
-      // Get currently logged-in user
-      // -----------------------------------------------------
+      const payload = { name: name.trim(), email: email.trim().toLowerCase() };
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      const data = await apiJson("/superadmin/create-dean", { method: "POST", body: payload });
 
-      if (userError) {
-        throw userError;
-      }
-
-      if (!user) {
-        navigate("/login");
-        return;
-      }
-
-
-      // -----------------------------------------------------
-      // Check Admin Profile
-      // -----------------------------------------------------
-
-      const {
-        data: profile,
-        error: profileError,
-      } = await supabase
-        .from("users")
-        .select("name, email, role")
-        .eq("id", user.id)
-        .single();
-
-      if (profileError) {
-        throw profileError;
-      }
-
-      if (profile?.role !== "admin") {
-        setError("Only admin can create a Dean.");
-        return;
-      }
-
-
-      // -----------------------------------------------------
-      // Get Current Session
-      // -----------------------------------------------------
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        setError("Admin session expired. Please login again.");
-        navigate("/login");
-        return;
-      }
-
-
-      // -----------------------------------------------------
-      // Call FastAPI Backend
-      // -----------------------------------------------------
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/create-dean`,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-
-          body: JSON.stringify({
-            name: name.trim(),
-            email: email.trim().toLowerCase(),
-          }),
-        }
-      );
-
-
-      // -----------------------------------------------------
-      // Read Backend Response
-      // -----------------------------------------------------
-
-      const data = await response.json();
-
-
-      if (!response.ok) {
-        throw new Error(
-          data.detail || "Failed to create Dean account."
-        );
-      }
-
-
-      // -----------------------------------------------------
-      // Success
-      // -----------------------------------------------------
-
-      setSuccess(
-        data.message || "Dean account created successfully."
-      );
-
-      setTemporaryPassword(
-        data.temporary_password || ""
-      );
-
-      // Clear form
+      setCreated({
+        message: data.message || "Dean account created successfully.",
+        name: payload.name,
+        email: payload.email,
+        temporaryPassword: data.temporary_password || "",
+        emailSent: Boolean(data.email_sent),
+      });
       setName("");
       setEmail("");
-
-
+      setFieldErrors({});
     } catch (err) {
+      // 401 means the token is gone or rejected even after a refresh; apiJson
+      // has already cleared the stored session by then.
+      if (err?.status === 401) {
+        setError("Super Admin session expired. Please login again.");
+        navigate("/login");
+        return;
+      }
       console.error("Create Dean Error:", err);
-
-      setError(
-        err?.message ||
-          "Something went wrong while creating Dean account."
-      );
-
+      setError(err?.message || "Something went wrong while creating the Dean account.");
     } finally {
       setLoading(false);
     }
   };
 
-
-  // =========================================================
-  // Logout
-  // =========================================================
+  const copyPassword = async () => {
+    if (!created?.temporaryPassword) return;
+    try {
+      await navigator.clipboard.writeText(created.temporaryPassword);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await signOut();
     navigate("/login");
   };
 
-
-  // =========================================================
-  // UI
-  // =========================================================
-
   return (
-    <div className="min-h-screen bg-gray-100 flex">
+    <SuperAdminShell
+      active="create-dean"
+      profile={profile}
+      onLogout={handleLogout}
+      railNote="A Dean reviews and approves event proposals. Only a super admin can create one."
+    >
+      <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
 
-      {/* ================= SIDEBAR ================= */}
+        <PageHero
+          eyebrow="Super Admin"
+          title="Create"
+          accent="Dean"
+          subtitle="Open a new Dean account for the university. The Dean will receive a temporary password to sign in with."
+          actions={
+            <Link to="/superadmin/users" className="btn btn-ghost">
+              <IconUsers />
+              View all users
+            </Link>
+          }
+        />
 
-      <aside className="w-64 bg-white border-r min-h-screen p-5 flex flex-col">
+        <div className="mt-7 grid gap-4 lg:grid-cols-5">
 
-        <div className="mb-8 flex items-center gap-3.5">
-          <img
-            src={srhuLogo}
-            alt="Swami Rama Himalayan University"
-            className="h-12 w-auto object-contain shrink-0"
-          />
-          <div>
-            <h1 className="text-lg font-bold text-gray-900 leading-tight">
-              Campus Capture
-            </h1>
-            <p className="text-xs text-gray-500">
-              Admin Panel
-            </p>
-          </div>
-        </div>
+          {/* ---------------------------------------------------- form */}
+          <div className="lg:col-span-3">
+            {created ? (
+              <section
+                className="glass reveal overflow-hidden"
+                style={{ "--i": 1 }}
+                aria-live="polite"
+              >
+                <div
+                  className="flex items-start gap-3 border-b p-5"
+                  data-tint=""
+                  style={{ "--track": "#10B981" }}
+                >
+                  <span className="icon-tile icon-tile-track">
+                    <IconCheckCircle />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="eyebrow" style={{ color: "#10B981" }}>Account created</p>
+                    <h2 className="h3 mt-0.5 text-ink">{created.message}</h2>
+                    <p className="prose-muted mt-1 text-sm">
+                      <span className="font-semibold text-ink">{created.name}</span>
+                      {" · "}
+                      {created.email}
+                    </p>
+                    <span className={`chip chip-sm mt-2.5 ${created.emailSent ? "chip-track" : ""}`} style={{ "--track": "#10B981" }}>
+                      <IconMail />
+                      {created.emailSent ? "Login details emailed to the Dean" : "Not emailed — share the password manually"}
+                    </span>
+                  </div>
+                </div>
 
+                <div className="p-5 sm:p-6">
+                  {created.temporaryPassword ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <IconKey className="h-4 w-4 text-accent" />
+                        <p className="text-sm font-semibold text-ink">Temporary password</p>
+                      </div>
 
-        <nav className="space-y-2">
+                      <div className="mt-2.5 flex items-stretch gap-2">
+                        <code className="num flex min-h-12 flex-1 items-center overflow-x-auto rounded-xl border hairline bg-raised/60 px-4 font-mono text-base tracking-wide text-ink select-all">
+                          {created.temporaryPassword}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={copyPassword}
+                          className={`btn btn-sm shrink-0 ${copied ? "btn-brand" : "btn-ghost"}`}
+                          aria-live="polite"
+                        >
+                          {copied ? <IconCheck /> : <IconCopy />}
+                          {copied ? "Copied" : "Copy"}
+                        </button>
+                      </div>
 
-          <button
-            onClick={() => navigate("/admin/dashboard")}
-            className="w-full text-left px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-100 transition"
-          >
-            Dashboard
-          </button>
+                      <div
+                        className="mt-4 flex items-start gap-3 rounded-2xl border p-3.5"
+                        data-tint=""
+                        style={{ "--track": ROLE_TRACK.superadmin }}
+                      >
+                        <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-emberink" />
+                        <p className="text-sm text-ink">
+                          This password is shown once. Save it now and share it with the Dean securely.
+                          It will not be visible again after you leave this page.
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="prose-muted text-sm">
+                      No temporary password was returned. The Dean can use the password reset
+                      flow on the login page to set one.
+                    </p>
+                  )}
 
+                  <div className="mt-6 flex flex-wrap gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => { setCreated(null); setCopied(false); }}
+                      className="btn btn-primary"
+                    >
+                      <IconUserPlus />
+                      Create another Dean
+                    </button>
+                    <Link to="/superadmin/users?role=dean" className="btn btn-ghost">
+                      View Deans
+                      <IconArrowRight />
+                    </Link>
+                  </div>
+                </div>
+              </section>
+            ) : (
+              <section className="glass reveal p-5 sm:p-7" style={{ "--i": 1 }}>
+                <div className="flex items-center gap-3">
+                  <span className="icon-tile icon-tile-track" style={{ "--track": ROLE_TRACK.dean }}>
+                    <IconAward />
+                  </span>
+                  <div>
+                    <p className="eyebrow">New account</p>
+                    <h2 className="h3 text-ink">Dean details</h2>
+                  </div>
+                </div>
 
-          <button
-            onClick={() => navigate("/admin/users")}
-            className="w-full text-left px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-100 transition"
-          >
-            User Management
-          </button>
+                {error && (
+                  <div
+                    className="mt-5 flex items-start gap-3 rounded-2xl border p-3.5"
+                    data-tint=""
+                    style={{ "--track": "#EF4444" }}
+                    role="alert"
+                  >
+                    <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+                    <p className="text-sm text-ink">{error}</p>
+                  </div>
+                )}
 
-
-          <button
-            className="w-full text-left px-4 py-3 rounded-lg bg-purple-50 text-purple-700 font-medium"
-          >
-            Create Dean
-          </button>
-
-        </nav>
-
-
-        <div className="mt-auto pt-10">
-
-          <button
-            onClick={handleLogout}
-            className="w-full px-4 py-3 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 font-medium transition"
-          >
-            Logout
-          </button>
-
-        </div>
-
-      </aside>
-
-
-      {/* ================= MAIN CONTENT ================= */}
-
-      <main className="flex-1 p-8">
-
-        <div className="max-w-2xl mx-auto">
-
-
-          {/* Header */}
-
-          <div className="mb-8">
-
-            <button
-              onClick={() => navigate("/admin/dashboard")}
-              className="text-sm text-blue-600 hover:text-blue-700 mb-4"
-            >
-              ← Back to Dashboard
-            </button>
-
-            <h2 className="text-3xl font-bold text-gray-900">
-              Create Dean
-            </h2>
-
-            <p className="text-gray-500 mt-2">
-              Create a new Dean account for Campus Capture.
-            </p>
-
-          </div>
-
-
-          {/* Success */}
-
-          {success && (
-            <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4">
-
-              <p className="text-green-700 font-medium">
-                {success}
-              </p>
-
-              {temporaryPassword && (
-                <div className="mt-3">
-
-                  <p className="text-sm text-green-700">
-                    Temporary Password:
-                  </p>
-
-                  <div className="mt-1 bg-white border border-green-300 rounded-lg px-4 py-3 font-mono text-gray-900">
-                    {temporaryPassword}
+                <form onSubmit={handleCreateDean} noValidate className="mt-6 space-y-5">
+                  <div className="field">
+                    <label htmlFor="dean-name">
+                      Full name<span className="req">*</span>
+                    </label>
+                    <div className="relative">
+                      <IconUser className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                      <input
+                        id="dean-name"
+                        type="text"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="e.g. Dr. Meera Joshi"
+                        autoComplete="off"
+                        disabled={loading}
+                        aria-invalid={fieldErrors.name ? "true" : undefined}
+                        aria-describedby={fieldErrors.name ? "dean-name-error" : undefined}
+                        className="input pl-10"
+                      />
+                    </div>
+                    {fieldErrors.name && (
+                      <p id="dean-name-error" className="field-error">{fieldErrors.name}</p>
+                    )}
                   </div>
 
-                  <p className="text-xs text-green-600 mt-2">
-                    Please save this password and share it securely with the Dean.
-                  </p>
+                  <div className="field">
+                    <label htmlFor="dean-email">
+                      Email address<span className="req">*</span>
+                    </label>
+                    <div className="relative">
+                      <IconMail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                      <input
+                        id="dean-email"
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="dean@srhu.edu.in"
+                        autoComplete="off"
+                        disabled={loading}
+                        aria-invalid={fieldErrors.email ? "true" : undefined}
+                        aria-describedby={fieldErrors.email ? "dean-email-error" : undefined}
+                        className="input pl-10"
+                      />
+                    </div>
+                    {fieldErrors.email ? (
+                      <p id="dean-email-error" className="field-error">{fieldErrors.email}</p>
+                    ) : (
+                      <p className="text-xs text-muted">They will sign in with this address.</p>
+                    )}
+                  </div>
 
-                </div>
-              )}
-
-            </div>
-          )}
-
-
-          {/* Error */}
-
-          {error && (
-            <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
-
-              <p className="text-red-600">
-                {error}
-              </p>
-
-            </div>
-          )}
-
-
-          {/* Form */}
-
-          <div className="bg-white rounded-xl shadow-sm border p-8">
-
-            <form
-              onSubmit={handleCreateDean}
-              className="space-y-6"
-            >
-
-              {/* Name */}
-
-              <div>
-
-                <label
-                  htmlFor="name"
-                  className="block text-sm font-medium text-gray-700 mb-2"
-                >
-                  Dean Name
-                </label>
-
-                <input
-                  id="name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Enter Dean name"
-                  disabled={loading}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                />
-
-              </div>
-
-
-              {/* Email */}
-
-              <div>
-
-                <label
-                  htmlFor="email"
-                  className="block text-sm font-medium text-gray-700 mb-2"
-                >
-                  Dean Email
-                </label>
-
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Enter Dean email"
-                  disabled={loading}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                />
-
-              </div>
-
-
-              {/* Submit */}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 px-4 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:bg-purple-400 disabled:cursor-not-allowed transition"
-              >
-                {loading ? "Creating..." : "Create Dean"}
-              </button>
-
-            </form>
-
+                  <div className="flex flex-col-reverse gap-2.5 pt-1 sm:flex-row sm:items-center sm:justify-end">
+                    <Link to="/superadmin/dashboard" className="btn btn-ghost">
+                      Cancel
+                    </Link>
+                    <button type="submit" disabled={loading} className="btn btn-primary">
+                      {loading ? (
+                        <>
+                          <span className="spin h-4 w-4" />
+                          Creating…
+                        </>
+                      ) : (
+                        <>
+                          <IconUserPlus />
+                          Create Dean account
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </section>
+            )}
           </div>
 
+          {/* ------------------------------------------------- guidance */}
+          <aside className="space-y-4 lg:col-span-2">
+            <section className="glass reveal p-5 sm:p-6" style={{ "--i": 2 }}>
+              <p className="eyebrow">How it works</p>
+              <ol className="mt-4 space-y-4">
+                {STEPS.map((step, i) => (
+                  <li key={step.title} className="step">
+                    <i>{i + 1}</i>
+                    <div>
+                      <p className="font-display text-sm font-semibold text-ink">{step.title}</p>
+                      <p className="prose-muted mt-0.5 text-xs">{step.body}</p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </section>
+
+            <section
+              className="reveal rounded-2xl border p-5"
+              data-tint=""
+              style={{ "--track": ROLE_TRACK.dean, "--i": 3 }}
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="dot" style={{ "--track": ROLE_TRACK.dean }} />
+                <p className="font-display text-sm font-semibold text-ink">What a Dean can do</p>
+              </div>
+              <ul className="prose-muted mt-3 space-y-1.5 text-xs">
+                <li>Review every event proposal submitted by teachers.</li>
+                <li>Approve, reject, and record remarks on a proposal.</li>
+                <li>Track approved events through to completion.</li>
+              </ul>
+              <p className="prose-muted mt-3 text-xs">
+                Already have a teacher who should be a Dean?{" "}
+                <Link to="/superadmin/users?role=teacher" className="link">
+                  Promote them from User Management
+                </Link>{" "}
+                instead of creating a second account.
+              </p>
+            </section>
+          </aside>
         </div>
-
-      </main>
-
-    </div>
+      </div>
+    </SuperAdminShell>
   );
 }
 

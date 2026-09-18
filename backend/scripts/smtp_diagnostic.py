@@ -1,8 +1,9 @@
 """Check whether this host can reach an SMTP server, and whether the credentials work.
 
 Standalone by design: it reads SMTP_* straight from the environment and imports
-nothing from ``app``, so it still runs when app.config cannot be imported. It
-never sends an email.
+nothing from ``app``, so it still runs when app.config cannot be imported. A
+``backend/.env`` file, when present, fills in anything the environment lacks.
+It never sends an email.
 
 Run from the backend directory, or in a Railway console:
     python scripts/smtp_diagnostic.py
@@ -15,6 +16,17 @@ import os
 import smtplib
 import socket
 import ssl
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # the script must keep working without python-dotenv
+    load_dotenv = None
+
+if load_dotenv:
+    load_dotenv(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"),
+        override=False,
+    )
 
 # Ports worth probing: 587 STARTTLS submission, 465 implicit TLS, 25 relay.
 # Hosts that block outbound mail usually block all three, and 25 almost always.
@@ -161,11 +173,11 @@ def _verdict(outcome: str, tcp: dict[int, str], port: int) -> None:
             print("  route for outbound SMTP at all - the provider null-routes it. This")
             print("  is a plan-level block, not a configuration problem, and no code")
             print("  change works around it. Upgrade the plan, or have Supabase Auth")
-            print("  send the mail using these same SMTP credentials.")
+            print("  in place of raw SMTP for this deployment.")
         elif timed_out:
             print("  Every SMTP port timed out. A silent timeout is the signature of")
             print("  provider-level egress filtering, which the free Railway plan applies.")
-            print("  Either upgrade the plan or let Supabase Auth send the mail instead.")
+            print("  Either upgrade the plan or switch to a hosted mail API.")
         elif len(refused) == len(PROBE_PORTS):
             print("  Every port actively refused the connection. The network path is NOT")
             print("  filtered - a filtered port hangs instead of resetting. Nothing is")

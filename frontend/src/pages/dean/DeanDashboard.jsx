@@ -1,155 +1,58 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import {
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts";
-import { supabase } from "../../services/supabase";
+  fetchCurrentUser,
+  getSession as getStoredSession,
+  refreshSession,
+  signOut,
+} from "../../services/auth";
 import { API_BASE_URL } from "../../services/api";
-import srhuLogo from "../../assets/logo.png";
+import DeanShell from "../../components/dean/DeanShell";
+import { programShare } from "../../components/dean/programShades";
+import PageHero from "../../components/teacher/PageHero";
+import StatusChip from "../../components/teacher/StatusChip";
+import { trackOf } from "../../components/teacher/status";
+import useThemeTokens from "../../components/theme/useThemeTokens";
+import {
+  IconAlertTriangle,
+  IconArrowRight,
+  IconCalendar,
+  IconChartBar,
+  IconCheckCircle,
+  IconChartPie,
+  IconClock,
+  IconEye,
+  IconFilter,
+  IconInbox,
+  IconLayers,
+  IconRefresh,
+  IconRotateCcw,
+  IconSearch,
+  IconX,
+  IconXCircle,
+  RidgeDivider,
+} from "../../components/teacher/icons";
+import { decodeEventMetadata } from "../../utils/draftStorage";
+import {
+  DEAN_STATUS_FILTERS,
+  EVENT_TYPES,
+  countByStatusBucket,
+  matchesEventSearch,
+  matchesStatusFilter,
+} from "../../utils/constants";
 
-const PIE_COLORS = [
-  "#101A33",
-  "#D4AF6A",
-  "#3B82F6",
-  "#10B981",
-  "#F59E0B",
-  "#EF4444",
-  "#06B6D4",
-  "#EC4899",
-  "#84CC16",
-  "#F97316",
-  "#6366F1",
-  "#A855F7",
-];
-
-/* ============ Inline icons (no external icon library needed) ============ */
-const IconRefresh = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M20 11A8 8 0 0 0 6.3 6.3L4 8.5" />
-    <path d="M4 4v4.5h4.5" />
-    <path d="M4 13a8 8 0 0 0 13.7 4.7L20 15.5" />
-    <path d="M20 20v-4.5h-4.5" />
-  </svg>
-);
-const IconLogout = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-    <path d="M16 17l5-5-5-5" />
-    <path d="M21 12H9" />
-  </svg>
-);
-const IconLayers = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 3 3 8l9 5 9-5-9-5Z" />
-    <path d="M3 13l9 5 9-5" />
-  </svg>
-);
-const IconClock = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M12 7.5V12l3 2" />
-  </svg>
-);
-const IconCheckCircle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M8.5 12.2l2.4 2.4 4.6-5" />
-  </svg>
-);
-const IconXCircle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M9.5 9.5l5 5M14.5 9.5l-5 5" />
-  </svg>
-);
-const IconFilter = ({ className = "h-[18px] w-[18px]" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M4 5h16M7 12h10M10 19h4" />
-  </svg>
-);
-const IconX = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M6 6l12 12M18 6L6 18" />
-  </svg>
-);
-const IconPieChart = ({ className = "h-[18px] w-[18px]" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 3.5v8.5h8.5A8.5 8.5 0 1 1 12 3.5Z" />
-  </svg>
-);
-const IconBarChart = ({ className = "h-9 w-9" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M4 20V10M10 20V4M16 20v-7M4 20h16" />
-  </svg>
-);
-const IconInbox = ({ className = "h-6 w-6" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M4 12h4l2 3h4l2-3h4" />
-    <path d="M5.5 5h13l2 7v6a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3.5 18v-6l2-7Z" />
-  </svg>
-);
-const IconAlertTriangle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 3.5 21.5 20h-19L12 3.5Z" />
-    <path d="M12 9.5v4.5M12 17h.01" />
-  </svg>
-);
-const IconGrid = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
-  </svg>
-);
-const IconCalendar = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
-    <path d="M3.5 9.5h17M8 3v4M16 3v4" />
-  </svg>
-);
-const IconBell = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 13 6 9Z" />
-    <path d="M10 19a2 2 0 0 0 4 0" />
-  </svg>
-);
-const IconSparkle = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
-    <path d="M12 2l1.6 5.2L19 9l-5.4 1.8L12 16l-1.6-5.2L5 9l5.4-1.8L12 2Z" />
-  </svg>
-);
-
-// ============================================
-// TIME AGO HELPER
-// ============================================
-const timeAgo = (isoString) => {
-  if (!isoString) return "";
-  const seconds = Math.floor(
-    (Date.now() - new Date(isoString).getTime()) / 1000
-  );
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-};
+/** The whole submission set — not a status, so it takes its own hue. */
+const TOTAL_TRACK = "#0EA5E9"; // sky
 
 export default function DeanDashboard() {
   const navigate = useNavigate();
+  const tokens = useThemeTokens();
 
-  // ============================================
-  // SIDEBAR VIEW STATE
-  // ============================================
-
-  const [activeView, setActiveView] = useState("dashboard"); // "dashboard" | "events"
+  // "overview" is the numbers and the program mix; "submissions" is the same
+  // events as a filterable list. Both live on this screen, as they did before
+  // the two views shared a sidebar toggle.
+  const [activeView, setActiveView] = useState("overview");
 
   // ============================================
   // STATES
@@ -167,41 +70,32 @@ export default function DeanDashboard() {
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedEventType, setSelectedEventType] = useState("");
 
+  // Signed-in Dean, used for the header and rail account blocks.
+  const [deanProfile, setDeanProfile] = useState(null);
+
+  // Client-side filters. Intentionally kept out of filtersRef: they narrow
+  // the events already fetched and must never trigger a server refetch.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingEvents, setLoadingEvents] = useState(true);
 
   const [error, setError] = useState("");
 
-  // ============================================
-  // NOTIFICATION STATES
-  // ============================================
-
-  const [notifications, setNotifications] = useState([]);
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [toasts, setToasts] = useState([]);
-
+  // The filters in force, read by the refresh a new notification triggers.
   const filtersRef = useRef({ selectedDate: "", selectedEventType: "" });
 
   useEffect(() => {
     filtersRef.current = { selectedDate, selectedEventType };
   }, [selectedDate, selectedEventType]);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
-
   // ============================================
-  // GET SUPABASE SESSION
+  // GET SESSION
   // ============================================
 
   const getSession = async () => {
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
-
-    if (sessionError) {
-      console.error("Session error:", sessionError);
-      throw sessionError;
-    }
+    const session = getStoredSession();
 
     if (!session) {
       navigate("/login");
@@ -216,16 +110,7 @@ export default function DeanDashboard() {
   // ============================================
 
   const handleLogout = async () => {
-    const confirmed = window.confirm(
-      "Are you sure you want to logout?"
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    await supabase.auth.signOut();
-
+    await signOut();
     navigate("/login");
   };
 
@@ -253,34 +138,24 @@ export default function DeanDashboard() {
     let response = await doFetch(session.access_token);
 
     if (response.status === 401) {
-      console.warn(
-        "Access token rejected (401). Attempting session refresh..."
-      );
+      console.warn("Access token rejected (401). Attempting session refresh...");
 
-      const { data: refreshed, error: refreshError } =
-        await supabase.auth.refreshSession();
+      const refreshed = await refreshSession();
 
-      if (refreshError || !refreshed?.session) {
-        console.error(
-          "Session refresh failed, redirecting to login.",
-          refreshError
-        );
+      if (!refreshed?.access_token) {
+        console.error("Session refresh failed, redirecting to login.");
 
-        await supabase.auth.signOut();
+        await signOut();
         navigate("/login");
         return null;
       }
 
-      response = await doFetch(
-        refreshed.session.access_token
-      );
+      response = await doFetch(refreshed.access_token);
 
       if (response.status === 401) {
-        console.error(
-          "Still unauthorized after refresh, redirecting to login."
-        );
+        console.error("Still unauthorized after refresh, redirecting to login.");
 
-        await supabase.auth.signOut();
+        await signOut();
         navigate("/login");
         return null;
       }
@@ -307,9 +182,7 @@ export default function DeanDashboard() {
       }
 
       if (!response.ok) {
-        throw new Error(
-          `Stats API failed: ${response.status}`
-        );
+        throw new Error(`Stats API failed: ${response.status}`);
       }
 
       const data = await response.json();
@@ -332,10 +205,7 @@ export default function DeanDashboard() {
   // LOAD EVENTS
   // ============================================
 
-  const loadEvents = async (
-    date = "",
-    eventType = ""
-  ) => {
+  const loadEvents = async (date = "", eventType = "") => {
     try {
       setLoadingEvents(true);
       setError("");
@@ -356,18 +226,14 @@ export default function DeanDashboard() {
         ? `${API_BASE_URL}/dean/events?${queryString}`
         : `${API_BASE_URL}/dean/events`;
 
-      const response = await authorizedFetch(url, {
-        method: "GET",
-      });
+      const response = await authorizedFetch(url, { method: "GET" });
 
       if (!response) {
         return;
       }
 
       if (!response.ok) {
-        throw new Error(
-          `Events API failed: ${response.status}`
-        );
+        throw new Error(`Events API failed: ${response.status}`);
       }
 
       const data = await response.json();
@@ -388,175 +254,128 @@ export default function DeanDashboard() {
   // INITIAL LOAD
   // ============================================
 
+  const loadDeanProfile = async () => {
+    try {
+      const data = await fetchCurrentUser();
+
+      if (data) {
+        setDeanProfile(data);
+      }
+    } catch (err) {
+      // Non-blocking: the shell falls back to a neutral initial.
+      console.error("Load dean profile error:", err);
+    }
+  };
+
   useEffect(() => {
     loadStats();
     loadEvents("", "");
+    loadDeanProfile();
   }, []);
 
   // ============================================
-  // REALTIME: NEW EVENT NOTIFICATIONS
+  // WHEN A NOTIFICATION ARRIVES
+  //
+  // The bell in the shell polls the Dean's own notification feed — which the
+  // server fills on every submission *and* resubmission — and calls this when
+  // something new lands, so the counts and the list stay current.
   // ============================================
 
-  useEffect(() => {
-    const channel = supabase
-      .channel("dean-new-events")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "events",
-        },
-        (payload) => {
-          const newEvent = payload.new;
-
-          const notification = {
-            id: `${newEvent.id}-${Date.now()}`,
-            event_id: newEvent.id,
-            event_name: newEvent.event_name || "Untitled Program",
-            event_type: newEvent.event_type,
-            created_at: newEvent.created_at || new Date().toISOString(),
-            read: false,
-          };
-
-          // Add to notification list (bell dropdown)
-          setNotifications((prev) => [notification, ...prev].slice(0, 30));
-
-          // Show toast popup
-          setToasts((prev) => [...prev, notification]);
-
-          // Auto refresh stats + currently visible events
-          loadStats();
-          loadEvents(
-            filtersRef.current.selectedDate,
-            filtersRef.current.selectedEventType
-          );
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  // ============================================
-  // AUTO-DISMISS TOASTS
-  // ============================================
-
-  useEffect(() => {
-    if (toasts.length === 0) return;
-
-    const timer = setTimeout(() => {
-      setToasts((prev) => prev.slice(1));
-    }, 5000);
-
-    return () => clearTimeout(timer);
-  }, [toasts]);
-
-  const dismissToast = (id) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
-
-  const markAllNotificationsRead = () => {
-    setNotifications((prev) =>
-      prev.map((n) => ({ ...n, read: true }))
+  const refreshAfterNotification = () => {
+    loadStats();
+    loadEvents(
+      filtersRef.current.selectedDate,
+      filtersRef.current.selectedEventType
     );
-  };
-
-  const toggleNotifications = () => {
-    setShowNotifications((prev) => {
-      const next = !prev;
-      if (next) markAllNotificationsRead();
-      return next;
-    });
-  };
-
-  const handleNotificationClick = (notification) => {
-    setShowNotifications(false);
-    setActiveView("events");
-    navigate(`/dean/events/${notification.event_id}`);
   };
 
   // ============================================
   // GET UNIQUE EVENT TYPES
   // ============================================
 
-  const eventTypes = useMemo(() => {
-    const types = [];
+  // Sourced from the fixed list the API accepts, not from the currently
+  // loaded rows -- otherwise selecting a type collapses the dropdown to that
+  // one option and the Dean cannot switch without clearing filters.
+  const eventTypes = EVENT_TYPES;
 
-    events.forEach((event) => {
-      const type = event.event_type?.trim();
+  // Status chip counts and the client-filtered list. Counts always come from
+  // the full fetch scope so they stay stable while filtering.
+  const statusCounts = useMemo(() => countByStatusBucket(events), [events]);
 
-      if (!type) {
-        return;
-      }
+  const visibleEvents = useMemo(
+    () =>
+      events.filter(
+        (event) =>
+          matchesEventSearch(event, searchQuery) &&
+          matchesStatusFilter(event, statusFilter)
+      ),
+    [events, searchQuery, statusFilter]
+  );
 
-      const alreadyExists = types.some(
-        (existingType) =>
-          existingType.toLowerCase() ===
-          type.toLowerCase()
-      );
-
-      if (!alreadyExists) {
-        types.push(type);
-      }
-    });
-
-    return types;
-  }, [events]);
-
-  // ============================================
-  // CREATE PIE CHART DATA
-  // ============================================
-
-  const eventTypeData = useMemo(() => {
-    const typeMap = {};
-
-    events.forEach((event) => {
-      const rawType = event.event_type?.trim();
-
-      if (!rawType) {
-        return;
-      }
-
-      const existingKey = Object.keys(typeMap).find(
-        (key) =>
-          key.toLowerCase() ===
-          rawType.toLowerCase()
-      );
-
-      if (existingKey) {
-        typeMap[existingKey] += 1;
-      } else {
-        typeMap[rawType] = 1;
-      }
-    });
-
-    return Object.entries(typeMap).map(([name, value]) => ({
-      name,
-      value,
-    }));
-  }, [events]);
+  const isFiltered =
+    searchQuery.trim() !== "" ||
+    statusFilter !== "all" ||
+    selectedDate !== "" ||
+    selectedEventType !== "";
 
   // ============================================
-  // PIE CHART CLICK
+  // PROGRAM MIX
   // ============================================
 
-  const handlePieClick = (data) => {
-    if (!data || !data.name) {
-      return;
-    }
+  // Largest share first, each row carrying its own shade of the accent. The
+  // shades are rebuilt when the theme flips, because the chart is SVG and
+  // cannot inherit the token itself.
+  const programMix = useMemo(
+    () => programShare(events, tokens.accent),
+    [events, tokens.accent]
+  );
 
-    const clickedType = data.name;
+  const statCards = [
+    {
+      key: "total",
+      label: "Total Events",
+      value: stats.total_events,
+      hint: "Everything submitted across campus",
+      track: TOTAL_TRACK,
+      Icon: IconLayers,
+    },
+    {
+      key: "pending",
+      label: "Pending",
+      value: stats.pending_events,
+      hint: "Awaiting your decision",
+      track: trackOf("pending"),
+      Icon: IconClock,
+    },
+    {
+      key: "approved",
+      label: "Approved",
+      value: stats.approved_events,
+      hint: "Cleared to go ahead",
+      track: trackOf("approved"),
+      Icon: IconCheckCircle,
+    },
+    {
+      key: "rejected",
+      label: "Rejected",
+      value: stats.rejected_events,
+      hint: "Sent back to the teacher",
+      track: trackOf("rejected"),
+      Icon: IconXCircle,
+    },
+  ];
 
-    setSelectedEventType(clickedType);
-    setActiveView("events");
+  // ============================================
+  // FILTER A PROGRAM TYPE
+  // ============================================
 
-    loadEvents(
-      selectedDate,
-      clickedType
-    );
+  const handleTypeSelect = (name) => {
+    if (!name) return;
+
+    setSelectedEventType(name);
+    setActiveView("submissions");
+
+    loadEvents(selectedDate, name);
   };
 
   // ============================================
@@ -568,10 +387,7 @@ export default function DeanDashboard() {
 
     setSelectedDate(date);
 
-    loadEvents(
-      date,
-      selectedEventType
-    );
+    loadEvents(date, selectedEventType);
   };
 
   // ============================================
@@ -583,10 +399,7 @@ export default function DeanDashboard() {
 
     setSelectedEventType(eventType);
 
-    loadEvents(
-      selectedDate,
-      eventType
-    );
+    loadEvents(selectedDate, eventType);
   };
 
   // ============================================
@@ -596,6 +409,8 @@ export default function DeanDashboard() {
   const clearFilters = () => {
     setSelectedDate("");
     setSelectedEventType("");
+    setSearchQuery("");
+    setStatusFilter("all");
 
     loadEvents("", "");
   };
@@ -609,679 +424,549 @@ export default function DeanDashboard() {
 
     await Promise.all([
       loadStats(),
-      loadEvents(
-        selectedDate,
-        selectedEventType
-      ),
+      loadEvents(selectedDate, selectedEventType),
     ]);
   };
 
-  // ============================================
-  // STATUS STYLE
-  // ============================================
-
-  const getStatusStyle = (status) => {
-    switch (status?.toLowerCase()) {
-      case "approved":
-        return "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20";
-      case "rejected":
-        return "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20";
-      case "pending":
-        return "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/20";
-      default:
-        return "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-500/10";
-    }
-  };
-
-  const getStatusDot = (status) => {
-    switch (status?.toLowerCase()) {
-      case "approved":
-        return "bg-emerald-500";
-      case "rejected":
-        return "bg-rose-500";
-      case "pending":
-        return "bg-amber-500";
-      default:
-        return "bg-slate-400";
-    }
-  };
+  const busy = loadingStats || loadingEvents;
 
   // ============================================
   // RENDER
   // ============================================
 
   return (
-    <div className="min-h-screen bg-[#F3F5F9]">
+    <DeanShell
+      active="dashboard"
+      profile={deanProfile}
+      onLogout={handleLogout}
+      railBadge={events.length}
+      railNote="Teachers propose events, you approve them. Pending submissions are the queue that needs you."
+      onNotification={refreshAfterNotification}
+    >
+      <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
 
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&display=swap');
-        .font-display { font-family: 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif; }
-        @keyframes ccFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes ccToastIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
-        @keyframes ccPulseRing { 0% { box-shadow: 0 0 0 0 rgba(212,175,106,0.55);} 70% { box-shadow: 0 0 0 8px rgba(212,175,106,0);} 100% { box-shadow: 0 0 0 0 rgba(212,175,106,0);} }
-      `}</style>
-
-      {/* ================= TOASTS ================= */}
-      <div className="fixed right-5 top-[84px] z-50 flex w-[340px] flex-col gap-3">
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            style={{ animation: "ccToastIn 0.3s ease-out both" }}
-            className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl"
-          >
-            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#101A33] text-[#D4AF6A]">
-              <IconSparkle />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-slate-900">
-                New event submitted
-              </p>
-              <p className="mt-0.5 truncate text-sm text-slate-500">
-                {toast.event_name}
-                {toast.event_type ? ` · ${toast.event_type}` : ""}
-              </p>
+        <PageHero
+          eyebrow="Dean Panel"
+          title="Campus Event"
+          accent="Overview"
+          subtitle={`Welcome back, ${
+            deanProfile?.name || "Dean"
+          }. Review, filter and track every event submitted across campus.`}
+          actions={
+            <>
               <button
-                onClick={() => {
-                  dismissToast(toast.id);
-                  handleNotificationClick(toast);
-                }}
-                className="mt-1.5 text-xs font-semibold text-[#101A33] hover:text-[#c79a54]"
+                type="button"
+                onClick={refreshDashboard}
+                disabled={busy}
+                className="btn btn-ghost"
               >
-                View event →
+                {busy ? <span className="spin h-4 w-4" /> : <IconRefresh />}
+                Refresh
               </button>
+
+              <Link to="/dean/events" className="btn btn-primary">
+                <IconCalendar />
+                Review queue
+              </Link>
+            </>
+          }
+        />
+
+        {error && (
+          <div
+            className="mt-6 flex items-start gap-3 rounded-2xl border p-4"
+            data-tint=""
+            style={{ "--track": trackOf("rejected") }}
+            role="alert"
+          >
+            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink">Something didn’t load</p>
+              <p className="prose-muted mt-0.5 text-sm">{error}</p>
             </div>
             <button
-              onClick={() => dismissToast(toast.id)}
-              className="shrink-0 text-slate-400 hover:text-slate-600"
+              type="button"
+              onClick={refreshDashboard}
+              className="btn btn-ghost btn-xs shrink-0"
             >
-              <IconX />
+              Retry
             </button>
           </div>
-        ))}
-      </div>
+        )}
 
-      {/* ================= HEADER ================= */}
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="flex h-[76px] items-center justify-between px-6">
+        {/* ------------------------------------------------------- the views */}
+        <div
+          role="tablist"
+          aria-label="Dashboard views"
+          className="mt-7 flex flex-wrap items-center gap-1.5"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeView === "overview"}
+            onClick={() => setActiveView("overview")}
+            className="tab"
+          >
+            <IconChartPie className="h-4 w-4" />
+            Overview
+          </button>
 
-          <div className="flex items-center gap-3.5">
-            <img
-              src={srhuLogo}
-              alt="Swami Rama Himalayan University"
-              className="h-12 sm:h-14 w-auto object-contain shrink-0"
-            />
-            <div>
-              <h1 className="font-display text-lg font-semibold leading-tight text-[#101A33]">
-                Campus Capture
-              </h1>
-              <p className="text-xs font-medium text-slate-400">
-                Swami Rama Himalayan University
-              </p>
-            </div>
-          </div>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeView === "submissions"}
+            onClick={() => setActiveView("submissions")}
+            className="tab"
+          >
+            <IconInbox className="h-4 w-4" />
+            Submissions
+            <span className="tab-count">{statusCounts.all}</span>
+          </button>
+        </div>
 
-          <div className="flex items-center gap-3">
+        {/* ==================================================== OVERVIEW === */}
+        {activeView === "overview" && (
+          <>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {statCards.map((card, i) => (
+                <div
+                  key={card.key}
+                  style={{ "--track": card.track, "--i": i + 1 }}
+                  className="stat-card reveal"
+                >
+                  <span className="stat-watermark" aria-hidden="true">{i + 1}</span>
 
-            {/* NOTIFICATION BELL */}
-            <div className="relative">
-              <button
-                onClick={toggleNotifications}
-                style={
-                  unreadCount > 0
-                    ? { animation: "ccPulseRing 1.8s infinite" }
-                    : undefined
-                }
-                className="relative inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50"
-              >
-                <IconBell />
-                {unreadCount > 0 && (
-                  <span className="absolute -right-1 -top-1 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-500 px-1 text-[11px] font-bold text-white">
-                    {unreadCount > 9 ? "9+" : unreadCount}
-                  </span>
-                )}
-              </button>
-
-              {showNotifications && (
-                <>
-                  <div
-                    className="fixed inset-0 z-30"
-                    onClick={() => setShowNotifications(false)}
-                  ></div>
-
-                  <div className="absolute right-0 z-40 mt-2 w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
-                    <div className="border-b border-slate-100 px-4 py-3">
-                      <p className="text-sm font-semibold text-slate-900">
-                        Notifications
+                  <div className="relative flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-muted">{card.label}</p>
+                      <p className="stat-num mt-1.5" style={{ color: card.track }}>
+                        {loadingStats ? "—" : card.value}
                       </p>
                     </div>
-
-                    <div className="max-h-80 overflow-y-auto">
-                      {notifications.length === 0 ? (
-                        <div className="px-4 py-8 text-center text-sm text-slate-400">
-                          No notifications yet
-                        </div>
-                      ) : (
-                        notifications.map((n) => (
-                          <button
-                            key={n.id}
-                            onClick={() => handleNotificationClick(n)}
-                            className="flex w-full items-start gap-3 border-b border-slate-50 px-4 py-3 text-left transition hover:bg-slate-50"
-                          >
-                            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#101A33]/5 text-[#101A33]">
-                              <IconCalendar className="h-4 w-4" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium text-slate-800">
-                                {n.event_name}
-                              </p>
-                              <p className="mt-0.5 text-xs text-slate-400">
-                                {n.event_type ? `${n.event_type} · ` : ""}
-                                {timeAgo(n.created_at)}
-                              </p>
-                            </div>
-                          </button>
-                        ))
-                      )}
-                    </div>
+                    <span className="icon-tile icon-tile-track">
+                      <card.Icon />
+                    </span>
                   </div>
-                </>
-              )}
+
+                  <p className="mt-4 text-xs font-medium text-muted">{card.hint}</p>
+                </div>
+              ))}
             </div>
 
-            <button
-              onClick={refreshDashboard}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#101A33] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1B2748]"
-            >
-              <IconRefresh />
-              Refresh
-            </button>
+            <RidgeDivider className="divider my-4" />
 
-            <button
-              onClick={handleLogout}
-              className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-100"
-            >
-              <IconLogout />
-              Logout
-            </button>
-
-          </div>
-
-        </div>
-      </header>
-
-      <div className="flex">
-
-        {/* ================= SIDEBAR ================= */}
-        <aside className="sticky top-[76px] h-[calc(100vh-76px)] w-60 shrink-0 border-r border-slate-200 bg-white px-3 py-6">
-          <nav className="space-y-1.5">
-
-            <button
-              onClick={() => setActiveView("dashboard")}
-              className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition ${
-                activeView === "dashboard"
-                  ? "bg-[#101A33] text-white"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              <IconGrid className="h-5 w-5" />
-              Dashboard
-            </button>
-
-            <button
-              onClick={() => setActiveView("events")}
-              className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition ${
-                activeView === "events"
-                  ? "bg-[#101A33] text-white"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              <IconCalendar className="h-5 w-5" />
-              Events
-              {events.length > 0 && (
-                <span
-                  className={`ml-auto rounded-full px-2 py-0.5 text-xs font-semibold ${
-                    activeView === "events"
-                      ? "bg-white/15 text-white"
-                      : "bg-[#101A33]/5 text-[#101A33]"
-                  }`}
-                >
-                  {events.length}
-                </span>
-              )}
-            </button>
-
-          </nav>
-        </aside>
-
-        {/* ================= MAIN ================= */}
-        <main className="mx-auto w-full max-w-7xl px-5 py-8 lg:px-10">
-
-          {/* Hero */}
-          <div
-            style={{ animation: "ccFadeUp 0.5s ease-out both" }}
-            className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#101A33] via-[#182449] to-[#1B2748] p-7 sm:p-9"
-          >
-            <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full border border-white/10"></div>
-            <div className="pointer-events-none absolute -right-6 -top-6 h-40 w-40 rounded-full border border-[#D4AF6A]/20"></div>
-
-            <p className="relative text-xs font-semibold uppercase tracking-[0.14em] text-[#D4AF6A]">
-              Dean Dashboard
-            </p>
-            <h2 className="font-display relative mt-2 text-3xl font-semibold text-white sm:text-4xl">
-              {activeView === "dashboard"
-                ? "Campus Event Overview"
-                : "All Campus Events"}
-            </h2>
-            <p className="relative mt-2 max-w-md text-sm text-slate-300">
-              {activeView === "dashboard"
-                ? "Review, filter, and track every event submitted across campus."
-                : "Browse, filter, and manage every submitted event."}
-            </p>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="mt-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4">
-              <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-500" />
-              <p className="text-sm font-medium text-rose-700">
-                {error}
-              </p>
-            </div>
-          )}
-
-          {/* ================= DASHBOARD VIEW ================= */}
-          {activeView === "dashboard" && (
-            <>
-              {/* STATS */}
-              <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-
-                <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md">
-                  <div className="absolute inset-y-0 left-0 w-1 bg-[#101A33]"></div>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-sm text-slate-500">Total Events</p>
-                      <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-slate-900">
-                        {loadingStats ? "…" : stats.total_events}
-                      </h3>
-                    </div>
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#101A33]/5 text-[#101A33]">
-                      <IconLayers />
-                    </div>
+            {/* ---------------------------------------------- program mix */}
+            <section className="glass reveal overflow-hidden" style={{ "--i": 5 }}>
+              <div className="flex flex-col gap-3 border-b hairline px-6 py-5 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="icon-tile">
+                    <IconChartPie />
+                  </span>
+                  <div>
+                    <p className="eyebrow">Distribution</p>
+                    <h2 className="h3 text-ink">Programs by type</h2>
+                    <p className="prose-muted mt-0.5 text-xs">
+                      Pick a program to see only its events.
+                    </p>
                   </div>
                 </div>
 
-                <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md">
-                  <div className="absolute inset-y-0 left-0 w-1 bg-amber-500"></div>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-sm text-slate-500">Pending</p>
-                      <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-amber-600">
-                        {loadingStats ? "…" : stats.pending_events}
-                      </h3>
-                    </div>
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-                      <IconClock />
-                    </div>
+                {selectedEventType && (
+                  <div className="flex items-center gap-2.5">
+                    <span className="chip chip-solid">{selectedEventType}</span>
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="btn btn-ghost btn-xs"
+                    >
+                      <IconRotateCcw />
+                      Show all
+                    </button>
                   </div>
-                </div>
-
-                <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md">
-                  <div className="absolute inset-y-0 left-0 w-1 bg-emerald-500"></div>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-sm text-slate-500">Approved</p>
-                      <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-emerald-600">
-                        {loadingStats ? "…" : stats.approved_events}
-                      </h3>
-                    </div>
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-                      <IconCheckCircle />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md">
-                  <div className="absolute inset-y-0 left-0 w-1 bg-rose-500"></div>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-sm text-slate-500">Rejected</p>
-                      <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-rose-600">
-                        {loadingStats ? "…" : stats.rejected_events}
-                      </h3>
-                    </div>
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-                      <IconXCircle />
-                    </div>
-                  </div>
-                </div>
-
+                )}
               </div>
 
-              {/* PIE CHART */}
-              <div className="mt-7 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-md">
-
-                <div className="flex flex-col gap-3 border-b border-slate-100 px-6 py-5 md:flex-row md:items-center md:justify-between">
-
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#101A33]/5 text-[#101A33]">
-                      <IconPieChart />
-                    </div>
-                    <div>
-                      <h3 className="font-display text-lg font-semibold text-slate-900">
-                        Programs by Type
-                      </h3>
-                      <p className="text-sm text-slate-500">
-                        Click a slice to view events by that program
-                      </p>
-                    </div>
+              <div className="p-6">
+                {loadingEvents ? (
+                  <div className="flex h-65 flex-col items-center justify-center gap-3">
+                    <span className="spin h-10 w-10 text-accent" />
+                    <p className="prose-muted text-sm">Loading programs…</p>
                   </div>
+                ) : programMix.length === 0 ? (
+                  <div className="flex h-65 flex-col items-center justify-center text-center">
+                    <span className="icon-tile mb-4 h-14 w-14 rounded-2xl">
+                      <IconChartBar className="h-6 w-6" />
+                    </span>
+                    <p className="h3 text-ink">No program data yet</p>
+                    <p className="prose-muted mt-1 text-sm">
+                      Once teachers submit events, their mix appears here.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-8 lg:flex-row">
 
-                  {selectedEventType && (
-                    <div className="flex items-center gap-2.5">
-                      <span className="rounded-full bg-[#101A33]/5 px-3 py-1.5 text-sm font-semibold text-[#101A33]">
-                        {selectedEventType}
-                      </span>
-                      <button
-                        onClick={clearFilters}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                      >
-                        <IconX className="h-3.5 w-3.5" />
-                        Show All
-                      </button>
-                    </div>
-                  )}
-
-                </div>
-
-                <div className="p-6">
-                  {loadingEvents ? (
-                    <div className="flex h-[430px] items-center justify-center">
-                      <div className="text-center">
-                        <div className="relative mx-auto mb-4 h-10 w-10">
-                          <div className="absolute inset-0 rounded-full border-4 border-slate-200"></div>
-                          <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[#101A33]"></div>
-                        </div>
-                        <p className="text-sm text-slate-500">Loading programs...</p>
-                      </div>
-                    </div>
-                  ) : eventTypeData.length === 0 ? (
-                    <div className="flex h-[430px] flex-col items-center justify-center text-center">
-                      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-                        <IconBarChart />
-                      </div>
-                      <p className="text-lg font-medium text-slate-700">
-                        No program data available
-                      </p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Create some events to see the chart.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="h-[430px] w-full">
+                    {/* The ring. One hue, shaded by share — identity is
+                        carried by the labelled rows beside it, never by the
+                        colour alone. */}
+                    <div
+                      className="h-60 w-full shrink-0 lg:w-75"
+                      role="img"
+                      aria-label={`Programs by type: ${programMix
+                        .map((entry) => `${entry.name} ${entry.value}`)
+                        .join(", ")}`}
+                    >
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-
                           <Pie
-                            data={eventTypeData}
+                            data={programMix}
                             dataKey="value"
                             nameKey="name"
                             cx="50%"
-                            cy="45%"
-                            outerRadius={145}
-                            innerRadius={65}
-                            paddingAngle={3}
-                            onClick={handlePieClick}
+                            cy="50%"
+                            outerRadius={104}
+                            innerRadius={68}
+                            paddingAngle={2}
+                            onClick={(slice) => handleTypeSelect(slice?.name)}
                             cursor="pointer"
-                            label={({ name, value }) => `${name} (${value})`}
-                            labelLine={true}
+                            isAnimationActive={false}
                           >
-                            {eventTypeData.map((entry, index) => (
+                            {programMix.map((entry) => (
                               <Cell
-                                key={`cell-${entry.name}`}
-                                fill={PIE_COLORS[index % PIE_COLORS.length]}
-                                stroke="#ffffff"
-                                strokeWidth={3}
+                                key={entry.name}
+                                fill={entry.shade}
+                                stroke={`rgb(${tokens.surface})`}
+                                strokeWidth={2}
                                 opacity={
                                   selectedEventType &&
-                                  selectedEventType.toLowerCase() !== entry.name.toLowerCase()
-                                    ? 0.35
+                                  selectedEventType.toLowerCase() !==
+                                    entry.name.toLowerCase()
+                                    ? 0.3
                                     : 1
                                 }
                               />
                             ))}
                           </Pie>
 
+                          {/* The total, reading through the hole. */}
                           <text
                             x="50%"
-                            y="43%"
+                            y="50%"
                             textAnchor="middle"
                             dominantBaseline="middle"
-                            className="fill-slate-800"
+                            fill={`rgb(${tokens.ink})`}
+                            style={{ fontFamily: "Sora, system-ui, sans-serif" }}
                           >
-                            <tspan x="50%" dy="-5" fontSize="28" fontWeight="700">
+                            <tspan x="50%" dy="-6" fontSize="28" fontWeight="700">
                               {events.length}
                             </tspan>
-                            <tspan x="50%" dy="28" fontSize="13" fill="#6B7280">
-                              Events
+                            <tspan
+                              x="50%"
+                              dy="26"
+                              fontSize="11"
+                              fontWeight="600"
+                              letterSpacing="1.6"
+                              fill={`rgb(${tokens.muted})`}
+                            >
+                              EVENTS
                             </tspan>
                           </text>
 
                           <Tooltip
+                            cursor={false}
                             formatter={(value, name) => [
-                              `${value} Event${value !== 1 ? "s" : ""}`,
+                              `${value} event${value !== 1 ? "s" : ""}`,
                               name,
                             ]}
+                            contentStyle={{
+                              background: `rgb(${tokens.surface})`,
+                              border: "1px solid rgb(15 23 42 / .1)",
+                              borderRadius: "0.75rem",
+                              boxShadow: "0 18px 50px -20px rgb(15 23 42 / .28)",
+                              fontSize: "0.8rem",
+                              padding: "0.5rem 0.7rem",
+                            }}
+                            itemStyle={{ color: `rgb(${tokens.ink})` }}
+                            labelStyle={{ color: `rgb(${tokens.muted})` }}
                           />
-
-                          <Legend verticalAlign="bottom" height={50} />
-
                         </PieChart>
                       </ResponsiveContainer>
                     </div>
-                  )}
-                </div>
 
-              </div>
-            </>
-          )}
+                    {/* The rows: the same data, directly labelled, and each
+                        one filters exactly like a slice. */}
+                    <ul className="w-full min-w-0 flex-1 space-y-1">
+                      {programMix.map((entry) => {
+                        const total = events.length || 1;
+                        const pct = Math.round((entry.value / total) * 100);
+                        const active =
+                          selectedEventType &&
+                          selectedEventType.toLowerCase() === entry.name.toLowerCase();
 
-          {/* ================= EVENTS VIEW ================= */}
-          {activeView === "events" && (
-            <>
-              {/* FILTERS */}
-              <div className="mt-7 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-md">
-
-                <div className="flex items-center gap-2.5 border-b border-slate-100 px-6 py-5">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#101A33]/5 text-[#101A33]">
-                    <IconFilter />
-                  </div>
-                  <h3 className="font-display text-lg font-semibold text-slate-900">
-                    Filters
-                  </h3>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 px-6 py-6 md:grid-cols-3">
-
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-slate-700">
-                      Filter by Date
-                    </label>
-                    <input
-                      type="date"
-                      value={selectedDate}
-                      onChange={handleDateChange}
-                      className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-slate-700">
-                      Program Type
-                    </label>
-                    <select
-                      value={selectedEventType}
-                      onChange={handleEventTypeChange}
-                      className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm text-slate-800 outline-none transition focus:border-[#101A33] focus:ring-2 focus:ring-[#101A33]/15"
-                    >
-                      <option value="">All Programs</option>
-                      {eventTypes.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex items-end">
-                    <button
-                      onClick={clearFilters}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                    >
-                      <IconX className="h-3.5 w-3.5" />
-                      Clear Filters
-                    </button>
-                  </div>
-
-                </div>
-
-              </div>
-
-              {/* EVENTS LIST */}
-              <div className="mt-7 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-md">
-
-                <div className="flex flex-col gap-3 border-b border-slate-100 px-6 py-5 md:flex-row md:items-center md:justify-between">
-
-                  <div>
-                    <h3 className="font-display text-lg font-semibold text-slate-900">
-                      {selectedEventType ? `${selectedEventType} Programs` : "All Programs"}
-                    </h3>
-                    <p className="mt-0.5 text-sm text-slate-500">
-                      {events.length} event{events.length !== 1 ? "s" : ""} found
-                    </p>
-                  </div>
-
-                  {selectedEventType && (
-                    <button
-                      onClick={clearFilters}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                    >
-                      <IconX className="h-3.5 w-3.5" />
-                      View All Events
-                    </button>
-                  )}
-
-                </div>
-
-                {loadingEvents ? (
-                  <div className="p-10 text-center text-sm text-slate-500">
-                    Loading events...
-                  </div>
-                ) : events.length === 0 ? (
-                  <div className="flex flex-col items-center px-6 py-16 text-center">
-                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-                      <IconInbox />
-                    </div>
-                    <p className="text-sm font-medium text-slate-700">
-                      No events found
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Try changing the selected filters.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-
-                    <table className="w-full text-left">
-
-                      <thead>
-                        <tr className="border-b border-slate-100">
-                          <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Program
-                          </th>
-                          <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Type
-                          </th>
-                          <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Date
-                          </th>
-                          <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Location
-                          </th>
-                          <th className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Status
-                          </th>
-                          <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Action
-                          </th>
-                        </tr>
-                      </thead>
-
-                      <tbody className="divide-y divide-slate-100">
-
-                        {events.map((event) => (
-                          <tr key={event.id} className="transition hover:bg-slate-50/80">
-
-                            <td className="px-6 py-4">
-                              <p className="text-sm font-semibold text-slate-800">
-                                {event.event_name || "Untitled Program"}
-                              </p>
-                              {event.description && (
-                                <p className="mt-0.5 max-w-xs truncate text-xs text-slate-400">
-                                  {event.description}
-                                </p>
-                              )}
-                            </td>
-
-                            <td className="px-6 py-4">
-                              <span className="inline-flex rounded-full bg-[#101A33]/5 px-3 py-1 text-sm font-medium text-[#101A33]">
-                                {event.event_type || "—"}
-                              </span>
-                            </td>
-
-                            <td className="px-6 py-4 text-sm text-slate-600">
-                              {event.event_date || "—"}
-                            </td>
-
-                            <td className="px-6 py-4 text-sm text-slate-600">
-                              {event.location || "—"}
-                            </td>
-
-                            <td className="px-6 py-4">
+                        return (
+                          <li key={entry.name}>
+                            <button
+                              type="button"
+                              onClick={() => handleTypeSelect(entry.name)}
+                              aria-pressed={Boolean(active)}
+                              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition ${
+                                active ? "bg-accent/8" : "hover:bg-raised/45"
+                              }`}
+                            >
                               <span
-                                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold capitalize ${getStatusStyle(
-                                  event.status
-                                )}`}
-                              >
-                                <span className={`h-1.5 w-1.5 rounded-full ${getStatusDot(event.status)}`}></span>
-                                {event.status || "Unknown"}
+                                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                style={{ background: entry.shade }}
+                              />
+
+                              <span className="w-24 shrink-0 truncate text-sm font-medium text-ink">
+                                {entry.name}
                               </span>
-                            </td>
 
-                            <td className="px-6 py-4 text-right">
-                              <button
-                                onClick={() => navigate(`/dean/events/${event.id}`)}
-                                className="text-sm font-semibold text-[#101A33] transition hover:text-[#c79a54]"
-                              >
-                                View
-                              </button>
-                            </td>
+                              <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
+                                <span
+                                  className="block h-full rounded-full transition-[width] duration-300"
+                                  style={{ width: `${pct}%`, background: entry.shade }}
+                                />
+                              </span>
 
-                          </tr>
-                        ))}
-
-                      </tbody>
-
-                    </table>
-
+                              <span className="num w-20 shrink-0 text-right text-sm text-muted">
+                                <span className="font-semibold text-ink">{entry.value}</span>{" "}
+                                ({pct}%)
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
                 )}
-
               </div>
-            </>
-          )}
+            </section>
+          </>
+        )}
 
-        </main>
+        {/* ================================================= SUBMISSIONS === */}
+        {activeView === "submissions" && (
+          <>
+            {/* ------------------------------------------------------ filters
+                One toolbar line for the inputs, one for the status chips. The
+                labels live on the controls themselves (placeholder, first
+                option, aria-label), so nothing is lost to a screen reader. */}
+            <div className="glass mt-4 overflow-hidden">
+              <div className="flex flex-wrap items-center gap-2.5 px-4 py-3.5 sm:px-5">
+
+                <div className="mr-auto flex shrink-0 items-center gap-2.5">
+                  <span className="icon-tile h-9 w-9 rounded-xl">
+                    <IconFilter className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="eyebrow">Narrow</p>
+                    <h2 className="mt-0.5 font-display text-sm font-semibold text-ink">
+                      Filters
+                    </h2>
+                  </div>
+                </div>
+
+                {/* Search + status narrow the loaded events; no refetch. */}
+                <div className="relative w-full sm:w-60 xl:w-72">
+                  <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-muted">
+                    <IconSearch className="h-4 w-4" />
+                  </span>
+
+                  <input
+                    id="deanEventSearch"
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search name, venue, or type…"
+                    aria-label="Search events"
+                    className="input pl-10 pr-9"
+                  />
+
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      aria-label="Clear search"
+                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted transition hover:text-ink"
+                    >
+                      <IconX className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={handleDateChange}
+                  aria-label="Filter by date"
+                  title="Filter by date"
+                  className="input w-full sm:w-auto"
+                />
+
+                <select
+                  value={selectedEventType}
+                  onChange={handleEventTypeChange}
+                  aria-label="Filter by program type"
+                  title="Filter by program type"
+                  className="input w-full sm:w-auto"
+                >
+                  <option value="">All programs</option>
+                  {eventTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Only once there is something to clear — an always-on
+                    button reads as a control rather than an escape hatch. */}
+                {isFiltered && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="btn btn-ghost btn-sm shrink-0"
+                  >
+                    <IconRotateCcw />
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 border-t hairline bg-raised/35 px-4 py-2.5 sm:px-5">
+                {DEAN_STATUS_FILTERS.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={statusFilter === tab.key}
+                    onClick={() => setStatusFilter(tab.key)}
+                    className="tab"
+                  >
+                    {tab.label}
+                    <span className="tab-count">{statusCounts[tab.key] ?? 0}</span>
+                  </button>
+                ))}
+
+                <p className="num ml-auto text-xs font-medium text-muted">
+                  Showing {visibleEvents.length} of {statusCounts.all}
+                </p>
+              </div>
+            </div>
+
+            {/* -------------------------------------------------------- list */}
+            <div className="glass mt-4 overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b hairline px-5 py-4 sm:px-6">
+                <h2 className="h3 text-base text-ink">
+                  {selectedEventType ? `${selectedEventType} programs` : "All programs"}
+                </h2>
+
+                <Link to="/dean/events" className="btn btn-ghost btn-xs">
+                  Open review queue
+                  <IconArrowRight />
+                </Link>
+              </div>
+
+              {loadingEvents ? (
+                <div className="flex items-center justify-center gap-2.5 p-10 text-sm font-medium text-muted">
+                  <span className="spin h-4 w-4 text-accent" />
+                  Loading events…
+                </div>
+              ) : visibleEvents.length === 0 ? (
+                <div className="flex flex-col items-center px-6 py-16 text-center">
+                  <span className="icon-tile mb-4 h-14 w-14 rounded-2xl">
+                    <IconInbox className="h-6 w-6" />
+                  </span>
+
+                  <p className="h3 text-ink">No events found</p>
+
+                  <p className="prose-muted mt-1 text-sm">
+                    {isFiltered
+                      ? "No events match the current filters."
+                      : "No events have been submitted yet."}
+                  </p>
+
+                  {isFiltered && (
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="btn btn-brand btn-sm mt-5"
+                    >
+                      <IconRotateCcw />
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr>
+                        {["Program", "Status", "Type", "Date", "Location", "Action"].map(
+                          (label) => (
+                            <th
+                              key={label}
+                              className={`whitespace-nowrap border-b hairline bg-raised/45 px-5 py-3 text-[11px] font-semibold uppercase tracking-[.12em] text-muted ${
+                                label === "Action" ? "text-right" : ""
+                              }`}
+                            >
+                              {label}
+                            </th>
+                          )
+                        )}
+                      </tr>
+                    </thead>
+
+                    <tbody className="divide-y divide-line/8">
+                      {visibleEvents.map((event) => (
+                        <tr key={event.id} className="transition hover:bg-raised/35">
+                          <td className="max-w-72 px-5 py-3.5">
+                            <p className="truncate font-display text-sm font-semibold text-ink">
+                              {event.event_name || "Untitled Program"}
+                            </p>
+                            {event.description && (
+                              <p className="mt-0.5 truncate text-xs text-muted">
+                                {decodeEventMetadata(event.description).description}
+                              </p>
+                            )}
+                          </td>
+
+                          <td className="whitespace-nowrap px-5 py-3.5">
+                            <StatusChip status={event.status} />
+                          </td>
+
+                          <td className="whitespace-nowrap px-5 py-3.5 text-sm text-muted">
+                            {event.event_type || "—"}
+                          </td>
+
+                          <td className="whitespace-nowrap px-5 py-3.5 text-sm text-muted">
+                            {event.event_date || "—"}
+                          </td>
+
+                          <td className="max-w-48 px-5 py-3.5 text-sm text-muted">
+                            <span className="block truncate" title={event.location}>
+                              {event.location || "—"}
+                            </span>
+                          </td>
+
+                          <td className="whitespace-nowrap px-5 py-3.5 text-right">
+                            <Link
+                              to={`/dean/events/${event.id}`}
+                              className="btn btn-ghost btn-xs"
+                            >
+                              <IconEye />
+                              View
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
-    </div>
+    </DeanShell>
   );
 }

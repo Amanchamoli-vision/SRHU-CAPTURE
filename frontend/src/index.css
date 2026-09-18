@@ -1,1 +1,1414 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap');
 @import "tailwindcss";
+
+/* ============================================================================
+   HIMOVATION theme — Campus Capture
+   Ported from himovation-ui-theme.md. Colours are stored as space-separated
+   RGB channel triplets so any token can take an arbitrary alpha, and so a
+   single `data-theme` / `.theme-dark` switch retints everything at once.
+   ========================================================================== */
+
+:root {
+  --c-base: 245 247 251;    /* #F5F7FB cool off-white page */
+  --c-surface: 255 255 255; /* white bands and cards */
+  --c-raised: 232 237 245;  /* #E8EDF5 chips, tabs, inputs */
+  --c-brand: 13 54 104;     /* #0D3668 SRHU Prussian Blue */
+  --c-ink: 15 26 46;        /* #0F1A2E text */
+  --c-muted: 75 90 115;     /* #4B5A73 secondary text */
+  --c-line: 15 23 42;       /* hairlines, always at low alpha */
+  --c-accent: 3 105 161;    /* #0369A1 deep sky */
+  --c-ember: 245 165 36;    /* #F5A524 warm CTA fill */
+  --c-ember-ink: 180 83 9;  /* #B45309 warm text on light */
+  --c-ok: 4 120 87;         /* #047857 */
+  --c-err: 185 28 28;       /* #B91C1C */
+
+  --card-bg: #ffffff;
+  --card-border: rgb(15 23 42 / .08);
+  --card-shadow: 0 1px 2px rgb(15 23 42 / .04), 0 10px 28px -14px rgb(15 23 42 / .14);
+  --input-bg: #ffffff;
+  --backdrop: rgb(15 23 42 / .45);
+  --shadow-strong: rgb(15 23 42 / .16);
+  --hero-tint: rgb(13 54 104 / .10);
+  --hero-grad: linear-gradient(100deg, #0D3668 0%, #0369A1 50%, #D97706 100%);
+  --header-h: 4.25rem;
+  color-scheme: light;
+}
+
+/* Dark: the navbar toggle sets data-theme on <html>; .theme-dark makes one
+   section a permanently dark island (here: the teacher navigation rail). */
+:root[data-theme="dark"],
+.theme-dark {
+  --c-base: 7 11 20;
+  --c-surface: 11 21 38;
+  --c-raised: 18 33 66;
+  --c-ink: 230 237 247;
+  --c-muted: 154 169 191;
+  --c-line: 255 255 255;
+  --c-accent: 56 189 248;
+  --c-ember-ink: 245 165 36;
+  --c-ok: 110 231 183;
+  --c-err: 252 165 165;
+
+  --card-bg: rgb(255 255 255 / .035);
+  --card-border: rgb(255 255 255 / .08);
+  --card-shadow: none;
+  --input-bg: rgb(18 33 66 / .55);
+  --backdrop: rgb(7 11 20 / .72);
+  --shadow-strong: rgb(0 0 0 / .8);
+  --hero-tint: rgb(13 54 104 / .35);
+  --hero-grad: linear-gradient(100deg, #38BDF8 0%, #7dd3fc 45%, #F5A524 100%);
+  color-scheme: dark;
+}
+
+.theme-dark {
+  color: rgb(var(--c-ink));
+  background: rgb(var(--c-surface));
+}
+
+/* `inline` matters: it substitutes the token into each utility instead of
+   freezing it on :root, which is what lets .theme-dark retint a subtree. */
+@theme inline {
+  --color-ground: rgb(var(--c-base));
+  --color-surface: rgb(var(--c-surface));
+  --color-raised: rgb(var(--c-raised));
+  --color-brand: rgb(var(--c-brand));
+  --color-ink: rgb(var(--c-ink));
+  --color-muted: rgb(var(--c-muted));
+  --color-line: rgb(var(--c-line));
+  --color-accent: rgb(var(--c-accent));
+  --color-ember: rgb(var(--c-ember));
+  --color-emberink: rgb(var(--c-ember-ink));
+  --color-ok: rgb(var(--c-ok));
+  --color-err: rgb(var(--c-err));
+
+  /* Sora only — deliberately NOT overriding `--font-sans`, which would swap
+     the body font on the Landing, auth, Dean and Super Admin screens too. Inter is
+     applied inside `.hv-root` instead. */
+  --font-display: Sora, system-ui, sans-serif;
+
+  --container-wrap: 76rem;
+
+  --shadow-glow: 0 0 0 1px rgb(var(--c-accent) / .35), 0 16px 48px -16px rgb(var(--c-accent) / .45);
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--header-h) + 1rem);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Edge draws its own reveal eye (and IE-era clear cross) inside every password
+   field as soon as one has content. The auth forms supply their own toggle, so
+   the native control only duplicated it and collided with the button sitting in
+   the same corner. */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+
+/* Everything below lives in Tailwind's `components` layer, so a utility always
+   wins over a component class. Without this, `.hamburger`'s own
+   `display: inline-flex` beat `lg:hidden` and the menu button stayed visible
+   next to the desktop nav. */
+@layer components {
+
+  /* Scoped to the themed subtree so screens that have not been converted yet
+     keep rendering exactly as they did. */
+  .hv-root {
+    background: rgb(var(--c-base));
+    color: rgb(var(--c-ink));
+    font-family: Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .hv-root h1,
+  .hv-root h2,
+  .hv-root h3,
+  .hv-root h4 {
+    font-family: Sora, system-ui, sans-serif;
+    text-wrap: balance;
+  }
+
+  /* Pages that have not been converted inject their own `.font-display`
+     (Fraunces) rule; win inside the themed subtree regardless of load order. */
+  .hv-root .font-display {
+    font-family: Sora, system-ui, sans-serif;
+  }
+
+  .hv-root :focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  .hv-root ::selection {
+    background: rgb(var(--c-accent) / .35);
+  }
+
+  /* ---------------------------------------------------------------- typography */
+
+  .eyebrow {
+    font-family: Sora, system-ui, sans-serif;
+    font-size: .75rem;
+    font-weight: 600;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: rgb(var(--c-accent));
+  }
+
+  .h2 {
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 700;
+    font-size: clamp(1.9rem, 4vw, 3rem);
+    line-height: 1.06;
+    letter-spacing: -.02em;
+  }
+
+  .h3 {
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 1.25rem;
+    line-height: 1.25;
+    letter-spacing: -.01em;
+  }
+
+  .num {
+    font-family: Sora, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+  }
+
+  .stat-num {
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 700;
+    font-size: clamp(2rem, 4.5vw, 3rem);
+    line-height: 1;
+    letter-spacing: -.03em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .prose-muted {
+    color: rgb(var(--c-muted));
+    line-height: 1.7;
+  }
+
+  .prose-muted strong {
+    color: rgb(var(--c-ink));
+    font-weight: 600;
+  }
+
+  .link {
+    color: rgb(var(--c-accent));
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: rgb(var(--c-accent) / .4);
+  }
+
+  .link:hover {
+    text-decoration-color: rgb(var(--c-accent));
+  }
+
+  .hero-title {
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 800;
+    line-height: .95;
+    letter-spacing: -.03em;
+    font-size: clamp(2rem, 5vw, 3.25rem);
+  }
+
+  .hero-accent {
+    background: var(--hero-grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* ---------------------------------------------------------------- buttons */
+
+  .btn {
+    position: relative;
+    isolation: isolate;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    min-height: 2.9rem;
+    padding: .8rem 1.5rem;
+    border-radius: .8rem;
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 600;
+    font-size: .95rem;
+    letter-spacing: .01em;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: transform .25s cubic-bezier(.2, .7, .2, 1), box-shadow .25s, background-color .25s, border-color .25s, color .25s;
+  }
+
+  .btn svg {
+    width: 1.1em;
+    height: 1.1em;
+    flex: none;
+  }
+
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
+    opacity: .55;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .btn-primary {
+    background: rgb(var(--c-ember));
+    color: #12100a;
+    box-shadow: 0 10px 30px -12px rgb(var(--c-ember) / .7);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #ffb43a;
+    transform: translateY(-1px);
+    box-shadow: 0 14px 34px -12px rgb(var(--c-ember) / .8);
+  }
+
+  .btn-brand {
+    background: rgb(var(--c-accent));
+    color: #fff;
+    box-shadow: 0 10px 30px -14px rgb(var(--c-accent) / .8);
+  }
+
+  .btn-brand:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 34px -14px rgb(var(--c-accent) / .9);
+  }
+
+  .btn-ghost {
+    color: rgb(var(--c-ink));
+    background: rgb(var(--c-line) / .03);
+    border: 1px solid rgb(var(--c-line) / .14);
+  }
+
+  .btn-ghost:hover:not(:disabled) {
+    border-color: rgb(var(--c-accent) / .6);
+    background: rgb(var(--c-accent) / .08);
+    transform: translateY(-1px);
+  }
+
+  .btn-danger {
+    background: rgb(var(--c-err));
+    color: #fff;
+    box-shadow: 0 10px 30px -14px rgb(var(--c-err) / .8);
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+  }
+
+  /* On dark, --c-err is a pale error *text* colour; as a fill it cannot carry
+     white text, so the destructive button keeps a saturated red. */
+  :root[data-theme="dark"] .btn-danger,
+  .theme-dark .btn-danger {
+    background: #DC2626;
+    color: #fff;
+    box-shadow: 0 10px 30px -14px rgb(220 38 38 / .8);
+  }
+
+  /* The affirmative half of a decision pair — the Dean's Approve beside its
+     Reject. Ember is the page's one primary action, so a decision that is not
+     the page's purpose does not get to wear it. */
+  .btn-ok {
+    background: rgb(var(--c-ok));
+    color: #fff;
+    box-shadow: 0 10px 30px -14px rgb(var(--c-ok) / .8);
+  }
+
+  .btn-ok:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+  }
+
+  /* Same reason as .btn-danger: on dark, --c-ok is a pale success *text*
+     colour and cannot carry white text as a fill. */
+  :root[data-theme="dark"] .btn-ok,
+  .theme-dark .btn-ok {
+    background: #059669;
+    color: #fff;
+    box-shadow: 0 10px 30px -14px rgb(5 150 105 / .8);
+  }
+
+  .btn-sm {
+    min-height: 2.3rem;
+    padding: .5rem 1rem;
+    font-size: .85rem;
+    border-radius: .65rem;
+  }
+
+  .btn-xs {
+    min-height: 2rem;
+    padding: .35rem .75rem;
+    font-size: .78rem;
+    border-radius: .6rem;
+    gap: .35rem;
+  }
+
+  .btn-block {
+    width: 100%;
+  }
+
+  /* ---------------------------------------------------------------- chips */
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    padding: .4rem .8rem;
+    border-radius: 999px;
+    font-size: .8rem;
+    font-weight: 500;
+    line-height: 1;
+    color: rgb(var(--c-muted));
+    border: 1px solid rgb(var(--c-line) / .1);
+    background: rgb(var(--c-line) / .04);
+    white-space: nowrap;
+  }
+
+  .chip svg {
+    width: .95rem;
+    height: .95rem;
+    flex: none;
+    color: rgb(var(--c-accent));
+  }
+
+  .chip-ember {
+    color: rgb(var(--c-ember-ink));
+    border-color: rgb(var(--c-ember) / .45);
+    background: rgb(var(--c-ember) / .12);
+  }
+
+  .chip-ember svg {
+    color: rgb(var(--c-ember));
+  }
+
+  .chip-solid {
+    background: rgb(var(--c-raised) / .8);
+    border-color: rgb(var(--c-line) / .08);
+    color: rgb(var(--c-ink));
+  }
+
+  .chip-sm {
+    padding: .3rem .6rem;
+    font-size: .72rem;
+    gap: .35rem;
+  }
+
+  /* A status pill tinted entirely from one --track hex, the way the festival
+     site tints everything per event track. */
+  .chip-track {
+    color: color-mix(in srgb, var(--track) 78%, rgb(var(--c-ink)));
+    border-color: color-mix(in srgb, var(--track) 42%, transparent);
+    background: color-mix(in srgb, var(--track) 13%, transparent);
+  }
+
+  .chip-track .dot {
+    background: var(--track);
+  }
+
+  /* A callout tinted from the `--track` set on the element — the rejection
+     notice, the draft banner, the Dean's remarks. */
+  [data-tint] {
+    border-color: color-mix(in srgb, var(--track) 30%, transparent);
+    background: color-mix(in srgb, var(--track) 8%, transparent);
+  }
+
+  /* ---------------------------------------------------------------- surfaces */
+
+  .glass {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 1.25rem;
+    box-shadow: var(--card-shadow);
+  }
+
+  .glass-blur {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .hairline {
+    border-color: rgb(var(--c-line) / .08);
+  }
+
+  .dot {
+    display: inline-block;
+    width: .55rem;
+    height: .55rem;
+    border-radius: 50%;
+    background: var(--track, rgb(var(--c-accent)));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--track, #38BDF8) 22%, transparent);
+    flex: none;
+  }
+
+  .dot-sm {
+    width: .4rem;
+    height: .4rem;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--track, #38BDF8) 22%, transparent);
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: .75rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: rgb(var(--c-ink));
+    transition: border-color .2s, background-color .2s, color .2s;
+  }
+
+  .icon-btn:hover {
+    border-color: rgb(var(--c-accent) / .6);
+  }
+
+  .icon-btn svg {
+    width: 1.2rem;
+    height: 1.2rem;
+  }
+
+  .icon-btn-sm {
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: .6rem;
+  }
+
+  .icon-btn-sm svg {
+    width: .95rem;
+    height: .95rem;
+  }
+
+  .icon-tile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: .9rem;
+    background: rgb(var(--c-accent) / .1);
+    color: rgb(var(--c-accent));
+    border: 1px solid rgb(var(--c-accent) / .18);
+    flex: none;
+  }
+
+  .icon-tile svg {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+
+  .icon-tile-track {
+    background: color-mix(in srgb, var(--track) 12%, transparent);
+    border-color: color-mix(in srgb, var(--track) 22%, transparent);
+    color: var(--track);
+  }
+
+  /* ---------------------------------------------------------------- cards */
+
+  .stat-card {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 1.35rem;
+    border-radius: 1.25rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow);
+    transition: transform .35s cubic-bezier(.2, .7, .2, 1), border-color .35s, box-shadow .35s;
+  }
+
+  .stat-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--track), transparent 70%);
+    opacity: .7;
+  }
+
+  .stat-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    opacity: 0;
+    transition: opacity .35s;
+    pointer-events: none;
+    background: radial-gradient(420px circle at 50% 0%, color-mix(in srgb, var(--track) 16%, transparent), transparent 65%);
+  }
+
+  .stat-card:hover,
+  .stat-card:focus-within {
+    transform: translateY(-4px);
+    border-color: color-mix(in srgb, var(--track) 45%, transparent);
+    box-shadow: 0 24px 60px -30px color-mix(in srgb, var(--track) 55%, transparent);
+  }
+
+  .stat-card:hover::after,
+  .stat-card:focus-within::after {
+    opacity: 1;
+  }
+
+  .stat-watermark {
+    position: absolute;
+    right: 1rem;
+    top: .4rem;
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 800;
+    font-size: 4rem;
+    line-height: 1;
+    color: rgb(var(--c-line) / .045);
+    letter-spacing: -.05em;
+    pointer-events: none;
+  }
+
+  /* ---------------------------------------------------------------- forms */
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+  }
+
+  .field > label {
+    font-size: .85rem;
+    font-weight: 500;
+    color: rgb(var(--c-ink));
+  }
+
+  .input {
+    width: 100%;
+    min-height: 2.9rem;
+    padding: .7rem .9rem;
+    border-radius: .75rem;
+    background: var(--input-bg);
+    border: 1px solid rgb(var(--c-line) / .14);
+    color: rgb(var(--c-ink));
+    font: inherit;
+    transition: border-color .2s, box-shadow .2s;
+  }
+
+  .input::placeholder {
+    color: rgb(var(--c-muted) / .7);
+  }
+
+  .input:focus {
+    outline: none;
+    border-color: rgb(var(--c-accent) / .7);
+    box-shadow: 0 0 0 3px rgb(var(--c-accent) / .18);
+  }
+
+  .input:disabled {
+    background: rgb(var(--c-raised) / .6);
+    cursor: not-allowed;
+  }
+
+  .input[aria-invalid="true"] {
+    border-color: rgb(var(--c-err));
+  }
+
+  .field-error {
+    font-size: .8rem;
+    color: rgb(var(--c-err));
+  }
+
+  select.input {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%239AA9BF' stroke-width='2' viewBox='0 0 24 24'><path d='m6 9 6 6 6-6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right .8rem center;
+    padding-right: 2.4rem;
+  }
+
+  select.input option {
+    background: rgb(var(--c-surface));
+    color: rgb(var(--c-ink));
+  }
+
+  textarea.input {
+    min-height: 7rem;
+    resize: vertical;
+    line-height: 1.6;
+  }
+
+  .req {
+    color: rgb(var(--c-err));
+    margin-left: .2rem;
+  }
+
+  /* ------------------------------------------------- upload wizard */
+
+  /* The step rail across the top of the create-event form. Each step is a
+     button so a completed step can be jumped back to. */
+  .wiz-rail {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .wiz-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .wiz-step {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .5rem .75rem;
+    border-radius: .8rem;
+    font-family: Sora, system-ui, sans-serif;
+    font-size: .82rem;
+    font-weight: 600;
+    white-space: nowrap;
+    color: rgb(var(--c-muted));
+    transition: color .2s, background-color .2s;
+  }
+
+  .wiz-step:disabled {
+    cursor: not-allowed;
+  }
+
+  .wiz-step i {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    flex: none;
+    border-radius: 50%;
+    font-style: normal;
+    font-size: .72rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    border: 1px solid rgb(var(--c-line) / .18);
+    color: rgb(var(--c-muted));
+    transition: background-color .2s, border-color .2s, color .2s;
+  }
+
+  .wiz-step[aria-current="step"] {
+    color: rgb(var(--c-ink));
+    background: rgb(var(--c-accent) / .08);
+  }
+
+  .wiz-step[aria-current="step"] i {
+    background: rgb(var(--c-accent));
+    border-color: rgb(var(--c-accent));
+    color: #fff;
+  }
+
+  /* A step already completed: filled tick, and clickable to go back. */
+  .wiz-step[data-done="true"] i {
+    background: rgb(var(--c-ok) / .14);
+    border-color: rgb(var(--c-ok) / .4);
+    color: rgb(var(--c-ok));
+  }
+
+  .wiz-step[data-done="true"]:hover:not(:disabled) {
+    color: rgb(var(--c-ink));
+    background: rgb(var(--c-line) / .04);
+  }
+
+  .wiz-sep {
+    height: 1px;
+    width: 1rem;
+    flex: none;
+    background: rgb(var(--c-line) / .14);
+  }
+
+  .dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 2rem 1.25rem;
+    border-radius: 1.25rem;
+    border: 1.5px dashed rgb(var(--c-line) / .18);
+    background: rgb(var(--c-line) / .02);
+    transition: border-color .2s, background-color .2s;
+  }
+
+  .dropzone.is-dragging {
+    border-color: rgb(var(--c-accent) / .65);
+    background: rgb(var(--c-accent) / .07);
+  }
+
+  .dropzone.is-locked {
+    opacity: .6;
+  }
+
+  .progress-track {
+    height: 5px;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgb(var(--c-line) / .1);
+  }
+
+  .progress-bar {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgb(var(--c-accent)), rgb(var(--c-ember)));
+    transition: width .2s cubic-bezier(.2, .7, .2, 1);
+  }
+
+  /* Before the browser can measure the total size there is no percentage to
+     show, so the bar slides instead of filling. */
+  .progress-bar.is-indeterminate {
+    width: 35%;
+    animation: hvSlide 1.1s cubic-bezier(.4, 0, .6, 1) infinite;
+  }
+
+  @keyframes hvSlide {
+    0% { transform: translateX(-110%); }
+    100% { transform: translateX(340%); }
+  }
+
+  .media-tile {
+    overflow: hidden;
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+  }
+
+  .media-thumb {
+    display: block;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    background: rgb(var(--c-raised));
+  }
+
+  /* ---------------------------------------------------------------- shell */
+
+  #hv-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 60;
+    height: 2px;
+    width: 100%;
+    transform-origin: 0 50%;
+    transform: scaleX(0);
+    background: linear-gradient(90deg, rgb(var(--c-accent)), rgb(var(--c-ember)));
+    pointer-events: none;
+  }
+
+  .hv-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    height: var(--header-h);
+    border-bottom: 1px solid transparent;
+    background: rgb(var(--c-base) / .78);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    transition: background-color .35s, border-color .35s, box-shadow .35s;
+  }
+
+  .hv-header.is-scrolled {
+    border-bottom-color: rgb(var(--c-line) / .07);
+    box-shadow: 0 10px 40px -20px var(--shadow-strong);
+  }
+
+  .wordmark {
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 800;
+    letter-spacing: .12em;
+    font-size: 1.05rem;
+    text-transform: uppercase;
+  }
+
+  .nav-link {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .5rem .15rem;
+    font-size: .9rem;
+    font-weight: 500;
+    color: rgb(var(--c-muted));
+    text-decoration: none;
+    transition: color .2s;
+  }
+
+  .nav-link::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: .1rem;
+    height: 2px;
+    border-radius: 2px;
+    background: rgb(var(--c-accent));
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    transition: transform .25s cubic-bezier(.2, .7, .2, 1);
+  }
+
+  .nav-link:hover {
+    color: rgb(var(--c-ink));
+  }
+
+  .nav-link[aria-current="page"] {
+    color: rgb(var(--c-ink));
+  }
+
+  .nav-link[aria-current="page"]::after {
+    transform: scaleX(1);
+  }
+
+  /* The navigation rail reads as part of the page, not as a slab pasted beside
+     it: the same ground tone, a hairline instead of an edge, and the accent
+     only where it marks the current section. */
+  .hv-rail {
+    background: rgb(var(--c-base));
+    border-right: 1px solid rgb(var(--c-line) / .08);
+  }
+
+  .rail-label {
+    font-family: Sora, system-ui, sans-serif;
+    font-size: .65rem;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: rgb(var(--c-muted) / .8);
+  }
+
+  .rail-link {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    padding: .65rem .8rem;
+    border-radius: .8rem;
+    font-family: Sora, system-ui, sans-serif;
+    font-size: .875rem;
+    font-weight: 500;
+    color: rgb(var(--c-muted));
+    text-decoration: none;
+    transition: background-color .2s, color .2s;
+  }
+
+  /* The marker is a pseudo-element rather than a border, so a link does not
+     shift sideways by 3px the moment it becomes current. */
+  .rail-link::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    height: 0;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: rgb(var(--c-ember));
+    transform: translateY(-50%);
+    transition: height .25s cubic-bezier(.2, .7, .2, 1);
+  }
+
+  .rail-link:hover {
+    background: rgb(var(--c-line) / .04);
+    color: rgb(var(--c-ink));
+  }
+
+  .rail-link[aria-current="page"] {
+    background: rgb(var(--c-accent) / .08);
+    color: rgb(var(--c-ink));
+    font-weight: 600;
+  }
+
+  .rail-link[aria-current="page"]::before {
+    height: 1.4rem;
+  }
+
+  .rail-link svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    flex: none;
+    color: rgb(var(--c-muted));
+    transition: color .2s;
+  }
+
+  .rail-link:hover svg,
+  .rail-link[aria-current="page"] svg {
+    color: rgb(var(--c-accent));
+  }
+
+  .rail-count {
+    margin-left: auto;
+    border-radius: 999px;
+    padding: .1rem .45rem;
+    font-size: .68rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    background: rgb(var(--c-line) / .07);
+    color: rgb(var(--c-muted));
+  }
+
+  .rail-link[aria-current="page"] .rail-count {
+    background: rgb(var(--c-accent) / .16);
+    color: rgb(var(--c-accent));
+  }
+
+  .rail-note {
+    border-radius: 1rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
+    padding: .9rem 1rem;
+  }
+
+  .rail-account {
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    padding: .5rem .55rem;
+    border-radius: .8rem;
+  }
+
+
+  /* The box the three bars sit in. Lives in the components layer so the
+     page's `lg:hidden` utility still wins over its display value. */
+  .hamburger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: .75rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    flex: none;
+  }
+
+  .hamburger span {
+    position: absolute;
+    left: .8rem;
+    right: .8rem;
+    height: 2px;
+    border-radius: 2px;
+    background: rgb(var(--c-ink));
+    transition: transform .3s cubic-bezier(.2, .7, .2, 1), opacity .2s;
+  }
+
+  .hamburger span:nth-child(1) { transform: translateY(-6px); }
+  .hamburger span:nth-child(3) { transform: translateY(6px); }
+  .hamburger.is-open span:nth-child(1) { transform: rotate(45deg); }
+  .hamburger.is-open span:nth-child(2) { opacity: 0; transform: scaleX(.2); }
+  .hamburger.is-open span:nth-child(3) { transform: rotate(-45deg); }
+
+  .hv-menu {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    padding-top: var(--header-h);
+    background: rgb(var(--c-base) / .96);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity .28s, transform .28s cubic-bezier(.2, .7, .2, 1);
+    overflow-y: auto;
+    pointer-events: none;
+  }
+
+  .hv-menu.is-open {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .menu-link {
+    display: flex;
+    align-items: center;
+    gap: .9rem;
+    padding: .9rem 0;
+    font-family: Sora, system-ui, sans-serif;
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -.01em;
+    color: rgb(var(--c-ink));
+    text-decoration: none;
+    border-bottom: 1px solid rgb(var(--c-line) / .07);
+  }
+
+  .menu-link[aria-current="page"] {
+    color: rgb(var(--c-accent));
+  }
+
+  #hv-to-top {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 45;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgb(var(--c-raised) / .9);
+    border: 1px solid rgb(var(--c-line) / .12);
+    color: rgb(var(--c-ink));
+    backdrop-filter: blur(10px);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .25s, transform .25s;
+    pointer-events: none;
+  }
+
+  #hv-to-top.is-shown {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -4rem;
+    z-index: 100;
+    padding: .6rem 1rem;
+    border-radius: .6rem;
+    background: rgb(var(--c-ember));
+    color: #12100a;
+    font-weight: 600;
+    text-decoration: none;
+    transition: top .2s;
+  }
+
+  .skip-link:focus {
+    top: 1rem;
+  }
+
+  /* ---------------------------------------------------------------- motifs */
+
+  .divider {
+    display: block;
+    width: 100%;
+    height: 2.5rem;
+    color: rgb(var(--c-line) / .12);
+  }
+
+  @media (min-width: 768px) {
+    .divider { height: 3.5rem; }
+  }
+
+  .divider.flip {
+    transform: scaleX(-1);
+  }
+
+  .hero-band {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border-radius: 1.25rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
+  }
+
+  .hero-grid {
+    position: absolute;
+    inset: 0;
+    opacity: .35;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgb(var(--c-line) / .05) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--c-line) / .05) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(70% 60% at 50% 50%, #000 30%, transparent 100%);
+    -webkit-mask-image: radial-gradient(70% 60% at 50% 50%, #000 30%, transparent 100%);
+  }
+
+  .hero-vignette {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(70% 70% at 15% 0%, var(--hero-tint), transparent 70%),
+      radial-gradient(50% 60% at 100% 100%, rgb(var(--c-ember) / .08), transparent 70%);
+  }
+
+  .contour-bg {
+    position: absolute;
+    inset: 0;
+    opacity: .5;
+    pointer-events: none;
+    color: rgb(var(--c-line) / .1);
+  }
+
+  /* ---------------------------------------------------------------- timeline */
+
+  .tl {
+    position: relative;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .75rem;
+  }
+
+  .tl::before {
+    content: "";
+    position: absolute;
+    top: .5rem;
+    bottom: .5rem;
+    left: .9rem;
+    width: 2px;
+    background: linear-gradient(to bottom, rgb(var(--c-accent) / .55), rgb(var(--c-accent) / .08));
+  }
+
+  .tl-row {
+    position: relative;
+    padding-left: 2.6rem;
+  }
+
+  .tl-node {
+    position: absolute;
+    left: calc(.9rem - 6px);
+    top: 1.05rem;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--track, rgb(var(--c-accent)));
+    box-shadow: 0 0 0 4px rgb(var(--c-surface)), 0 0 0 6px color-mix(in srgb, var(--track, #38BDF8) 30%, transparent);
+  }
+
+  .tl-card {
+    position: relative;
+    padding: .9rem 1.1rem;
+    border-radius: 1rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow);
+    border-left: 2px solid var(--track, rgb(var(--c-accent)));
+  }
+
+  .tl-time {
+    font-family: Sora, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    font-size: .75rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    color: rgb(var(--c-accent));
+  }
+
+  /* Numbered lifecycle rail used by the approval tracker. */
+  .step {
+    display: grid;
+    grid-template-columns: 1.75rem 1fr;
+    gap: .75rem;
+    align-items: start;
+  }
+
+  .step > i {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+    font-style: normal;
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 700;
+    font-size: .75rem;
+    background: rgb(var(--c-accent) / .12);
+    color: rgb(var(--c-accent));
+    border: 1px solid rgb(var(--c-accent) / .25);
+    flex: none;
+  }
+
+  /* ---------------------------------------------------------------- tabs */
+
+  .tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    padding: .5rem .9rem;
+    border-radius: .8rem;
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 600;
+    font-size: .85rem;
+    color: rgb(var(--c-muted));
+    transition: color .2s, background-color .2s, box-shadow .2s;
+  }
+
+  .tab:hover {
+    color: rgb(var(--c-ink));
+  }
+
+  .tab[aria-selected="true"] {
+    color: rgb(var(--c-ink));
+    background: rgb(var(--c-raised) / .85);
+    box-shadow: inset 0 0 0 1px rgb(var(--c-line) / .08);
+  }
+
+  .tab-count {
+    border-radius: 999px;
+    padding: .1rem .4rem;
+    font-size: .68rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    background: rgb(var(--c-line) / .07);
+    color: rgb(var(--c-muted));
+  }
+
+  .tab[aria-selected="true"] .tab-count {
+    background: rgb(var(--c-accent) / .16);
+    color: rgb(var(--c-accent));
+  }
+
+  /* ---------------------------------------------------------------- modal */
+
+  .hv-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    background: var(--backdrop);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  .modal-panel {
+    width: 100%;
+    max-height: 92svh;
+    display: flex;
+    flex-direction: column;
+    background: rgb(var(--c-surface));
+    border: 1px solid rgb(var(--c-line) / .1);
+    border-radius: 1.5rem 1.5rem 0 0;
+    box-shadow: 0 -20px 80px -20px var(--shadow-strong);
+    animation: hvPanelIn .32s cubic-bezier(.2, .7, .2, 1) both;
+  }
+
+  @keyframes hvPanelIn {
+    from { transform: translateY(28px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+
+  @media (min-width: 640px) {
+    .hv-backdrop {
+      align-items: center;
+      padding: 1.5rem;
+    }
+
+    .modal-panel {
+      max-width: 34rem;
+      max-height: 86svh;
+      border-radius: 1.5rem;
+    }
+
+    .modal-panel-lg {
+      max-width: 46rem;
+    }
+  }
+
+  /* ---------------------------------------------------------------- toasts */
+
+  .toast {
+    display: flex;
+    align-items: flex-start;
+    gap: .75rem;
+    padding: .9rem 1rem;
+    border-radius: 1rem;
+    background: rgb(var(--c-surface));
+    border: 1px solid var(--card-border);
+    box-shadow: 0 18px 50px -20px var(--shadow-strong);
+    animation: hvToastIn .3s cubic-bezier(.2, .7, .2, 1) both;
+  }
+
+  .toast-ok { border-color: rgb(var(--c-ok) / .35); }
+  .toast-err { border-color: rgb(var(--c-err) / .35); }
+
+  @keyframes hvToastIn {
+    from { opacity: 0; transform: translateX(24px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  /* ---------------------------------------------------------------- reveal */
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(16px);
+    animation: hvReveal .42s cubic-bezier(.2, .7, .2, 1) both;
+    animation-delay: calc(var(--i, 0) * 55ms);
+  }
+
+  @keyframes hvReveal {
+    to { opacity: 1; transform: none; }
+  }
+
+  .spin {
+    display: inline-block;
+    border-radius: 999px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    animation: hvSpin .7s linear infinite;
+  }
+
+  @keyframes hvSpin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ---------------------------------------------------------------- motion */
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+
+    .reveal,
+    .toast,
+    .modal-panel {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+
+    .btn,
+    .stat-card,
+    .nav-link::after,
+    .hv-menu,
+    .hamburger span,
+    .rail-link,
+    .progress-bar,
+    .dropzone {
+      transition: none !important;
+    }
+
+    /* Keep the bar visible, just stop it sliding. */
+    .progress-bar.is-indeterminate {
+      animation: none;
+      width: 100%;
+      opacity: .6;
+    }
+
+    .stat-card:hover {
+      transform: none;
+    }
+
+    .spin {
+      animation-duration: 2s;
+    }
+  }
+}

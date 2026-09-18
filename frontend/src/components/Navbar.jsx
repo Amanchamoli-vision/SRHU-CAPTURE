@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../services/supabase";
+import { signOut } from "../services/auth";
 import srhuLogo from "../assets/logo.png";
 
 function Navbar({ title = "Dean Panel", actions = null }) {
@@ -14,7 +14,7 @@ function Navbar({ title = "Dean Panel", actions = null }) {
       return;
     }
 
-    await supabase.auth.signOut();
+    await signOut();
 
     navigate("/login");
   };

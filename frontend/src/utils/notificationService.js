@@ -1,12 +1,27 @@
 /**
  * Notification Service & Event Reminder Engine for Campus Capture
- * Supports real-time notification fetching, read state management, and upcoming event reminders.
+ *
+ * Notifications live in MongoDB behind the API and are read by every role
+ * through the same role-neutral endpoints (`/notifications`): the server scopes
+ * each list to the signed-in user, so a Dean receives review-queue updates and
+ * a teacher receives decisions about their own events.
+ *
+ * A small localStorage cache keeps the bell populated while the API is
+ * unreachable. Only notifications that never reached the server are kept from
+ * that cache — anything the server has ever issued is taken from the server
+ * alone, so a notification it deletes (say, with its event) disappears here too
+ * instead of lingering in the cache forever.
  */
-import { supabase } from "../services/supabase";
+import { apiJson } from "../services/api";
 import { decodeEventMetadata } from "./draftStorage";
 
 const STORAGE_PREFIX = "cc_teacher_notifs_";
 const REMINDER_STORAGE_PREFIX = "cc_sent_reminders_";
+
+/** Ids minted in the browser for notifications the server has not stored. */
+const LOCAL_ID_PREFIX = "notif_";
+const isLocalOnly = (notification) =>
+  String(notification?.id ?? "").startsWith(LOCAL_ID_PREFIX);
 
 /**
  * Format relative time (e.g., "5m ago", "2h ago", "Yesterday")
@@ -34,9 +49,6 @@ export function timeAgo(isoDate) {
   }
 }
 
-/**
- * Get cached local notifications
- */
 function getLocalNotifications(userId) {
   if (!userId || typeof window === "undefined") return [];
   try {
@@ -47,60 +59,45 @@ function getLocalNotifications(userId) {
   }
 }
 
-/**
- * Save cached local notifications
- */
 function saveLocalNotifications(userId, list) {
   if (!userId || typeof window === "undefined") return;
   try {
-    localStorage.setItem(`${STORAGE_PREFIX}${userId}`, JSON.stringify(list));
+    localStorage.setItem(`${STORAGE_PREFIX}${userId}`, JSON.stringify(list.slice(0, 100)));
   } catch (err) {
     console.error("Failed to save local notifications:", err);
   }
 }
 
+const newestFirst = (a, b) =>
+  new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+
 /**
- * Fetch all notifications for the teacher
- * Queries Supabase database and gracefully merges with local cache
+ * All notifications for the signed-in user, newest first.
+ *
+ * When the server answers, its list is the truth, plus any local-only entries
+ * still waiting to be stored. When it does not, the last cached list is shown.
  */
-export async function fetchTeacherNotifications(userId) {
+export async function fetchNotifications(userId) {
   if (!userId) return [];
 
-  let dbNotifications = [];
-  try {
-    const { data, error } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+  const cached = getLocalNotifications(userId);
 
-    if (!error && Array.isArray(data)) {
-      dbNotifications = data;
-    }
+  let server;
+  try {
+    const data = await apiJson("/notifications");
+    server = Array.isArray(data?.notifications) ? data.notifications : [];
   } catch (err) {
-    console.warn("Notifications table query warning (fallback to local cache):", err);
+    console.warn("Notifications unavailable, showing the cached list:", err);
+    return cached.sort(newestFirst);
   }
 
-  const localList = getLocalNotifications(userId);
-
-  // Merge db and local by id, avoiding duplicates
-  const map = new Map();
-  dbNotifications.forEach((n) => map.set(n.id, n));
-  localList.forEach((n) => {
-    if (!map.has(n.id)) {
-      map.set(n.id, n);
-    }
-  });
-
-  const merged = Array.from(map.values()).sort((a, b) => {
-    const tA = new Date(a.created_at || 0).getTime();
-    const tB = new Date(b.created_at || 0).getTime();
-    return tB - tA;
-  });
-
+  const merged = [...server, ...cached.filter(isLocalOnly)].sort(newestFirst);
   saveLocalNotifications(userId, merged);
   return merged;
 }
+
+/** @deprecated Kept for older imports; every role now uses fetchNotifications. */
+export const fetchTeacherNotifications = fetchNotifications;
 
 /**
  * Mark a single notification as read
@@ -110,56 +107,50 @@ export async function markNotificationAsRead(userId, notificationId) {
 
   const now = new Date().toISOString();
 
-  // 1. Update Supabase if available
-  try {
-    await supabase
-      .from("notifications")
-      .update({ is_read: true, read_at: now })
-      .eq("id", notificationId)
-      .eq("user_id", userId);
-  } catch (err) {
-    console.warn("Mark as read DB update warning:", err);
+  if (!String(notificationId).startsWith(LOCAL_ID_PREFIX)) {
+    try {
+      await apiJson(`/notifications/${notificationId}/read`, { method: "PATCH" });
+    } catch (err) {
+      console.warn("Mark as read DB update warning:", err);
+    }
   }
 
-  // 2. Update local cache
   const list = getLocalNotifications(userId);
-  const updated = list.map((n) =>
-    n.id === notificationId ? { ...n, is_read: true, read_at: now } : n
+  saveLocalNotifications(
+    userId,
+    list.map((n) => (n.id === notificationId ? { ...n, is_read: true, read_at: now } : n))
   );
-  saveLocalNotifications(userId, updated);
 }
 
 /**
- * Mark all notifications as read for a teacher
+ * Mark all notifications as read for the signed-in user
  */
 export async function markAllNotificationsAsRead(userId) {
   if (!userId) return;
 
   const now = new Date().toISOString();
 
-  // 1. Update Supabase
   try {
-    await supabase
-      .from("notifications")
-      .update({ is_read: true, read_at: now })
-      .eq("user_id", userId)
-      .eq("is_read", false);
+    await apiJson("/notifications/read-all", { method: "PATCH" });
   } catch (err) {
     console.warn("Mark all read DB update warning:", err);
   }
 
-  // 2. Update local cache
   const list = getLocalNotifications(userId);
-  const updated = list.map((n) => ({ ...n, is_read: true, read_at: now }));
-  saveLocalNotifications(userId, updated);
+  saveLocalNotifications(
+    userId,
+    list.map((n) => ({ ...n, is_read: true, read_at: n.read_at || now }))
+  );
 }
 
 /**
- * Create a new notification for a teacher (client or system)
+ * Create a new notification for the signed-in user (client-generated, such as
+ * an event-date reminder). Stored on the server when it is reachable, and kept
+ * locally with a browser-minted id until it is.
  */
 export async function createTeacherNotification(userId, {
   eventId = null,
-  notificationType = "approved",
+  notificationType = "reminder",
   title = "",
   message = "",
   data = {},
@@ -167,7 +158,7 @@ export async function createTeacherNotification(userId, {
   if (!userId) return null;
 
   const newNotif = {
-    id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    id: `${LOCAL_ID_PREFIX}${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
     user_id: userId,
     event_id: eventId,
     notification_type: notificationType,
@@ -179,50 +170,52 @@ export async function createTeacherNotification(userId, {
     read_at: null,
   };
 
-  // Try saving to Supabase
   try {
-    const { data: dbItem, error } = await supabase
-      .from("notifications")
-      .insert({
-        user_id: userId,
+    const result = await apiJson("/notifications", {
+      method: "POST",
+      body: {
         event_id: eventId,
         notification_type: notificationType,
         title,
         message,
         data,
-      })
-      .select()
-      .single();
+      },
+    });
 
-    if (!error && dbItem) {
-      newNotif.id = dbItem.id;
+    if (result?.notification?.id) {
+      newNotif.id = result.notification.id;
+      newNotif.created_at = result.notification.created_at || newNotif.created_at;
     }
   } catch (err) {
     console.warn("Insert notification DB warning (saved to local cache):", err);
   }
 
-  // Update local cache
   const list = getLocalNotifications(userId);
   list.unshift(newNotif);
-  saveLocalNotifications(userId, list.slice(0, 100));
+  saveLocalNotifications(userId, list);
 
   return newNotif;
 }
 
 /**
- * Section 9.8: Event Date Reminder Logic
- * Scans upcoming valid events and creates non-duplicate reminders for tomorrow or today
+ * Event Date Reminder Logic
+ *
+ * Creates one reminder per event for the day before and one for the day
+ * itself. Duplicates are ruled out against the reminders the server already
+ * holds — not only against this browser's memory — so opening the portal on a
+ * second device does not remind the teacher twice.
+ *
+ * Returns true when at least one reminder was created.
  */
-export async function evaluateEventReminders(userId, events = []) {
-  if (!userId || !Array.isArray(events) || events.length === 0) return;
+export async function evaluateEventReminders(userId, events = [], existing = []) {
+  if (!userId || !Array.isArray(events) || events.length === 0) return false;
 
-  const todayStr = new Date().toISOString().split("T")[0];
-
+  const toKey = (date) => date.toISOString().split("T")[0];
+  const todayStr = toKey(new Date());
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split("T")[0];
+  const tomorrowStr = toKey(tomorrow);
 
-  // Retrieve sent reminder tracking keys
   let sentKeys = new Set();
   try {
     const raw = localStorage.getItem(`${REMINDER_STORAGE_PREFIX}${userId}`);
@@ -231,50 +224,51 @@ export async function evaluateEventReminders(userId, events = []) {
     sentKeys = new Set();
   }
 
+  // Reminders the server already has, keyed the same way as sentKeys.
+  for (const n of existing) {
+    if (n.notification_type === "reminder" && n.event_id && n.data?.event_date) {
+      sentKeys.add(`${n.event_id}_${n.data.event_date}_${n.data.when || ""}`);
+    }
+  }
+
+  let created = false;
+
   for (const event of events) {
-    // Only remind for non-rejected, non-draft events
+    // Only for events that are going ahead.
     if (event.status === "rejected" || event.status === "draft") continue;
 
     const eventDate = event.event_date || event.eventDate;
     if (!eventDate) continue;
 
-    const isToday = eventDate === todayStr;
-    const isTomorrow = eventDate === tomorrowStr;
+    const when = eventDate === todayStr ? "today" : eventDate === tomorrowStr ? "tomorrow" : null;
+    if (!when) continue;
 
-    if (!isToday && !isTomorrow) continue;
+    const key = `${event.id}_${eventDate}_${when}`;
+    if (sentKeys.has(key)) continue;
 
-    const reminderCycleKey = `${event.id}_${eventDate}_${isToday ? "today" : "tomorrow"}`;
-
-    if (sentKeys.has(reminderCycleKey)) {
-      continue; // Duplicate prevention
-    }
-
-    // Extract venue and start time
     const venue = event.location || "Campus Venue";
     const { meta } = decodeEventMetadata(event.description || "");
     const timeStr = meta.startTime ? ` at ${meta.startTime}` : "";
-
-    const title = "Event Reminder";
-    const timingDesc = isToday ? "scheduled for today" : "scheduled for tomorrow";
-    const message = `Reminder: Your "${event.event_name || event.eventName}" event is ${timingDesc}${timeStr} in ${venue}.`;
+    const name = event.event_name || event.eventName;
 
     await createTeacherNotification(userId, {
       eventId: event.id,
       notificationType: "reminder",
-      title,
-      message,
+      title: when === "today" ? "Your event is today" : "Your event is tomorrow",
+      message: `"${name}" is scheduled for ${when}${timeStr} in ${venue}.`,
       data: {
-        event_name: event.event_name || event.eventName,
+        event_name: name,
         venue,
         event_date: eventDate,
+        when,
         time: meta.startTime || "",
       },
     });
 
-    sentKeys.add(reminderCycleKey);
+    sentKeys.add(key);
+    created = true;
   }
 
-  // Persist reminder sent keys
   try {
     localStorage.setItem(
       `${REMINDER_STORAGE_PREFIX}${userId}`,
@@ -283,4 +277,6 @@ export async function evaluateEventReminders(userId, events = []) {
   } catch (err) {
     console.error("Failed to save sent reminders:", err);
   }
+
+  return created;
 }

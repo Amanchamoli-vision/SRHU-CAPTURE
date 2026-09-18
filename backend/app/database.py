@@ -1,28 +1,93 @@
-from supabase import create_client, Client, ClientOptions
-import httpx
+"""MongoDB connection, collections and index management.
+
+Every piece of persistent state lives in one MongoDB database:
+
+    users            accounts, roles and password hashes
+    events           events submitted by teachers
+    event_media      photo / video metadata (file bytes live in GridFS)
+    event_documents  supporting document metadata (file bytes live in GridFS)
+    notifications    in-app notifications for teachers
+    event_reports    generated report records
+    uploads.*        GridFS buckets holding the uploaded file bytes
+"""
+
+import logging
+
+from gridfs import GridFS
+from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo.errors import PyMongoError
 
 from app.config import settings
 
-http_client = httpx.Client(timeout=30.0)
 
-supabase: Client = create_client(
-    settings.supabase_url,
-    settings.supabase_service_role_key,
-    options=ClientOptions(httpx_client=http_client)
+logger = logging.getLogger(__name__)
+
+# One client per process; pymongo manages the connection pool internally.
+client: MongoClient = MongoClient(
+    settings.mongodb_uri,
+    serverSelectionTimeoutMS=5000,
+    tz_aware=True,
 )
 
-# Separate anon-key client for user-facing auth. Signup must not be a service-role
-# request: Supabase Auth only sends its confirmation email for an ordinary signup.
-# This gets its own httpx client because the SDK closes the one it is handed.
-#
-# Stays None when SUPABASE_ANON_KEY is unset, so the service starts and serves every
-# other route. /auth/register checks for None and reports 503.
-supabase_public: Client | None = None
+db = client[settings.mongodb_db_name]
 
-if settings.supabase_anon_key:
-    auth_http_client = httpx.Client(timeout=30.0)
-    supabase_public = create_client(
-        settings.supabase_url,
-        settings.supabase_anon_key,
-        options=ClientOptions(httpx_client=auth_http_client)
+users = db["users"]
+events = db["events"]
+event_media = db["event_media"]
+event_documents = db["event_documents"]
+notifications = db["notifications"]
+event_reports = db["event_reports"]
+
+# Uploaded file bytes are stored in GridFS so that MongoDB remains the single
+# store for the application, including media and documents.
+fs = GridFS(db, collection="uploads")
+
+
+def ensure_indexes() -> None:
+    """Create the indexes the application relies on. Safe to call repeatedly."""
+    users.create_index([("email", ASCENDING)], unique=True, name="email_unique")
+    users.create_index([("role", ASCENDING)], name="role")
+    users.create_index(
+        [("verification_token_hash", ASCENDING)],
+        name="verification_token",
+        sparse=True,
     )
+    users.create_index(
+        [("reset_token_hash", ASCENDING)],
+        name="reset_token",
+        sparse=True,
+    )
+
+    events.create_index([("teacher_id", ASCENDING)], name="teacher")
+    events.create_index([("status", ASCENDING)], name="status")
+    events.create_index([("event_date", ASCENDING)], name="event_date")
+    events.create_index([("event_type", ASCENDING)], name="event_type")
+    events.create_index([("created_at", DESCENDING)], name="created_at")
+
+    event_media.create_index([("event_id", ASCENDING)], name="event")
+    event_documents.create_index([("event_id", ASCENDING)], name="event")
+
+    notifications.create_index(
+        [("user_id", ASCENDING), ("created_at", DESCENDING)],
+        name="user_created",
+    )
+    notifications.create_index(
+        [("user_id", ASCENDING), ("is_read", ASCENDING)],
+        name="user_unread",
+    )
+
+    event_reports.create_index(
+        [("event_id", ASCENDING)],
+        unique=True,
+        name="event_unique",
+    )
+
+
+def ping() -> bool:
+    """Return True when the MongoDB server answers."""
+    try:
+        client.admin.command("ping")
+        return True
+    except PyMongoError as error:
+        logger.error("mongodb_ping_failed error=%s", error)
+        return False

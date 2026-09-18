@@ -1,1257 +1,589 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabase } from "../../services/supabase";
-import { API_BASE_URL } from "../../services/api";
-import srhuLogo from "../../assets/logo.png";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { apiJson } from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
+import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
+import PageHero from "../../components/teacher/PageHero";
+import Modal from "../../components/teacher/Modal";
+import RoleChip from "../../components/common/RoleChip";
+import { ROLE_TRACK, initialsOf, normalizeRole, trackOfRole } from "../../components/common/roles";
+import {
+  IconAlertTriangle,
+  IconAward,
+  IconCheckCircle,
+  IconInbox,
+  IconRefresh,
+  IconSearch,
+  IconShield,
+  IconTrash,
+  IconUser,
+  IconUserPlus,
+  IconX,
+} from "../../components/teacher/icons";
 
+const ROLE_TABS = [
+  { key: "all", label: "All" },
+  { key: "teacher", label: "Teachers" },
+  { key: "dean", label: "Deans" },
+  { key: "superadmin", label: "Super Admins" },
+];
+
+const TABLE_COLUMNS = ["User", "Role", "Joined", "Actions"];
+
+const formatJoined = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+};
+
+/**
+ * What each confirmation dialog says and does. Kept in one table so the
+ * phone cards and the desktop table can never offer different actions.
+ */
+const ACTIONS = {
+  dean: {
+    eyebrow: "Change role",
+    title: "Promote to Dean?",
+    body: (name) => `${name} will be able to review, approve and reject event proposals from every teacher.`,
+    confirm: "Make Dean",
+    busy: "Updating…",
+    tone: "btn-brand",
+    method: "PATCH",
+    path: (id) => `/superadmin/users/${id}/make-dean`,
+    success: (name) => `${name} is now a Dean.`,
+    failure: "Failed to make user Dean.",
+  },
+  teacher: {
+    eyebrow: "Change role",
+    title: "Change back to Teacher?",
+    body: (name) => `${name} will lose Dean access and return to submitting their own events for review.`,
+    confirm: "Make Teacher",
+    busy: "Updating…",
+    tone: "btn-brand",
+    method: "PATCH",
+    path: (id) => `/superadmin/users/${id}/make-teacher`,
+    success: (name) => `${name} is now a Teacher.`,
+    failure: "Failed to make user Teacher.",
+  },
+  delete: {
+    eyebrow: "Permanent",
+    title: "Delete this account?",
+    body: (name) => `${name} will be removed from Campus Capture along with their sign-in. This cannot be undone.`,
+    confirm: "Delete account",
+    busy: "Deleting…",
+    tone: "btn-danger",
+    method: "DELETE",
+    path: (id) => `/superadmin/users/${id}`,
+    success: () => "User deleted successfully.",
+    failure: "Failed to delete user.",
+  },
+};
 
 function UserManagement() {
-
   const navigate = useNavigate();
-
-  // ==========================================================
-  // STATE
-  // ==========================================================
+  const { profile, signOut } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [users, setUsers] = useState([]);
-
   const [loading, setLoading] = useState(true);
-
-  const [processingUserId, setProcessingUserId] =
-    useState(null);
-
+  const [processingUserId, setProcessingUserId] = useState(null);
   const [error, setError] = useState("");
-
   const [success, setSuccess] = useState("");
+  const [query, setQuery] = useState("");
 
+  // { kind: "dean" | "teacher" | "delete", user }
+  const [pending, setPending] = useState(null);
 
-  // ==========================================================
-  // LOAD USERS
-  // ==========================================================
+  const roleFilter = ROLE_TABS.some((t) => t.key === searchParams.get("role"))
+    ? searchParams.get("role")
+    : "all";
 
-  const loadUsers = async () => {
+  const setRoleFilter = (key) => {
+    const next = new URLSearchParams(searchParams);
+    if (key === "all") next.delete("role");
+    else next.set("role", key);
+    setSearchParams(next, { replace: true });
+  };
 
+  // A 401 means the login token is gone or rejected even after a refresh;
+  // apiJson has already cleared the stored session by then.
+  const handleUnauthorized = useCallback(() => {
+    setError("Your session has expired. Please login again.");
+    navigate("/login");
+  }, [navigate]);
+
+  // ------------------------------------------------------------ load
+  const loadUsers = useCallback(async () => {
     try {
-
       setLoading(true);
       setError("");
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-
-      // -----------------------------------------
-      // Check session
-      // -----------------------------------------
-
-      if (!session?.access_token) {
-
-        setError(
-          "Your session has expired. Please login again."
-        );
-
-        navigate("/login");
-
+      const data = await apiJson("/superadmin/users");
+      setUsers(data?.users || []);
+    } catch (err) {
+      if (err?.status === 401) {
+        handleUnauthorized();
         return;
       }
-
-
-      // -----------------------------------------
-      // API Request
-      // -----------------------------------------
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/users`,
-        {
-          method: "GET",
-
-          headers: {
-            Authorization:
-              `Bearer ${session.access_token}`,
-
-            "Content-Type":
-              "application/json",
-          },
-        }
-      );
-
-
-      const data = await response.json();
-
-
-      if (!response.ok) {
-
-        throw new Error(
-          data.detail ||
-          "Failed to fetch users"
-        );
-      }
-
-
-      setUsers(data.users || []);
-
-    }
-
-    catch (err) {
-
-      console.error(
-        "Load users error:",
-        err
-      );
-
-      setError(
-        err.message ||
-        "Failed to load users"
-      );
-
-    }
-
-    finally {
-
+      console.error("Load users error:", err);
+      setError(err.message || "Failed to load users");
+    } finally {
       setLoading(false);
-
     }
-  };
-
-
-  // ==========================================================
-  // MAKE DEAN
-  // ==========================================================
-
-  const handleMakeDean = async (
-    userId,
-    userName
-  ) => {
-
-    const confirmed =
-      window.confirm(
-        `Are you sure you want to make "${userName}" a Dean?`
-      );
-
-
-    if (!confirmed) {
-      return;
-    }
-
-
-    try {
-
-      setProcessingUserId(userId);
-
-      setError("");
-
-      setSuccess("");
-
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-
-      if (!session?.access_token) {
-
-        setError(
-          "Your session has expired. Please login again."
-        );
-
-        navigate("/login");
-
-        return;
-      }
-
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/users/${userId}/make-dean`,
-        {
-          method: "PATCH",
-
-          headers: {
-            Authorization:
-              `Bearer ${session.access_token}`,
-
-            "Content-Type":
-              "application/json",
-          },
-        }
-      );
-
-
-      const data = await response.json();
-
-
-      if (!response.ok) {
-
-        throw new Error(
-          data.detail ||
-          "Failed to make user Dean"
-        );
-      }
-
-
-      setSuccess(
-        data.message ||
-        `${userName} is now a Dean.`
-      );
-
-
-      await loadUsers();
-
-    }
-
-    catch (err) {
-
-      console.error(
-        "Make Dean error:",
-        err
-      );
-
-      setError(
-        err.message ||
-        "Failed to make user Dean"
-      );
-
-    }
-
-    finally {
-
-      setProcessingUserId(null);
-
-    }
-  };
-
-
-  // ==========================================================
-  // MAKE TEACHER
-  // ==========================================================
-
-  const handleMakeTeacher = async (
-    userId,
-    userName
-  ) => {
-
-    const confirmed =
-      window.confirm(
-        `Are you sure you want to change "${userName}" back to Teacher?`
-      );
-
-
-    if (!confirmed) {
-      return;
-    }
-
-
-    try {
-
-      setProcessingUserId(userId);
-
-      setError("");
-
-      setSuccess("");
-
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-
-      if (!session?.access_token) {
-
-        setError(
-          "Your session has expired. Please login again."
-        );
-
-        navigate("/login");
-
-        return;
-      }
-
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/users/${userId}/make-teacher`,
-        {
-          method: "PATCH",
-
-          headers: {
-            Authorization:
-              `Bearer ${session.access_token}`,
-
-            "Content-Type":
-              "application/json",
-          },
-        }
-      );
-
-
-      const data = await response.json();
-
-
-      if (!response.ok) {
-
-        throw new Error(
-          data.detail ||
-          "Failed to make user Teacher"
-        );
-      }
-
-
-      setSuccess(
-        data.message ||
-        `${userName} is now a Teacher.`
-      );
-
-
-      await loadUsers();
-
-    }
-
-    catch (err) {
-
-      console.error(
-        "Make Teacher error:",
-        err
-      );
-
-      setError(
-        err.message ||
-        "Failed to make user Teacher"
-      );
-
-    }
-
-    finally {
-
-      setProcessingUserId(null);
-
-    }
-  };
-
-
-  // ==========================================================
-  // DELETE USER
-  // ==========================================================
-
-  const handleDeleteUser = async (
-    userId,
-    userName,
-    userEmail
-  ) => {
-
-    const displayName =
-      userName ||
-      userEmail ||
-      "this user";
-
-
-    const confirmed =
-      window.confirm(
-        `Are you sure you want to permanently delete "${displayName}"?\n\n` +
-        `This will delete the user's account and cannot be undone.`
-      );
-
-
-    if (!confirmed) {
-      return;
-    }
-
-
-    try {
-
-      setProcessingUserId(userId);
-
-      setError("");
-
-      setSuccess("");
-
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-
-      if (!session?.access_token) {
-
-        setError(
-          "Your session has expired. Please login again."
-        );
-
-        navigate("/login");
-
-        return;
-      }
-
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/users/${userId}`,
-        {
-          method: "DELETE",
-
-          headers: {
-            Authorization:
-              `Bearer ${session.access_token}`,
-
-            "Content-Type":
-              "application/json",
-          },
-        }
-      );
-
-
-      const data = await response.json();
-
-
-      if (!response.ok) {
-
-        throw new Error(
-          data.detail ||
-          "Failed to delete user"
-        );
-      }
-
-
-      setSuccess(
-        data.message ||
-        "User deleted successfully."
-      );
-
-
-      await loadUsers();
-
-    }
-
-    catch (err) {
-
-      console.error(
-        "Delete user error:",
-        err
-      );
-
-      setError(
-        err.message ||
-        "Failed to delete user"
-      );
-
-    }
-
-    finally {
-
-      setProcessingUserId(null);
-
-    }
-  };
-
-
-  // ==========================================================
-  // LOGOUT
-  // ==========================================================
-
-  const handleLogout = async () => {
-
-    await supabase.auth.signOut();
-
-    navigate("/login");
-
-  };
-
-
-  // ==========================================================
-  // LOAD USERS ON PAGE LOAD
-  // ==========================================================
+  }, [handleUnauthorized]);
 
   useEffect(() => {
-
     loadUsers();
+  }, [loadUsers]);
 
-  }, []);
+  // A success line should not sit there forever; an error stays until read.
+  useEffect(() => {
+    if (!success) return undefined;
+    const t = setTimeout(() => setSuccess(""), 4500);
+    return () => clearTimeout(t);
+  }, [success]);
 
+  // ------------------------------------------------------------ actions
+  const runPendingAction = async () => {
+    if (!pending) return;
+    const { kind, user } = pending;
+    const action = ACTIONS[kind];
+    const displayName = user.name || user.email || "this user";
 
-  // ==========================================================
-  // ROLE BADGE
-  // ==========================================================
+    try {
+      setProcessingUserId(user.id);
+      setError("");
+      setSuccess("");
 
-  const getRoleBadge = (role) => {
+      const data = await apiJson(action.path(user.id), { method: action.method });
 
-    if (role === "admin") {
-
-      return (
-        <span
-          className="
-            inline-flex
-            rounded-full
-            bg-red-100
-            px-3
-            py-1
-            text-xs
-            font-semibold
-            text-red-700
-          "
-        >
-          Admin
-        </span>
-      );
+      setSuccess(data?.message || action.success(displayName));
+      setPending(null);
+      await loadUsers();
+    } catch (err) {
+      if (err?.status === 401) {
+        setPending(null);
+        handleUnauthorized();
+        return;
+      }
+      console.error(`${kind} action error:`, err);
+      setError(err.message || action.failure);
+      setPending(null);
+    } finally {
+      setProcessingUserId(null);
     }
-
-
-    if (role === "dean") {
-
-      return (
-        <span
-          className="
-            inline-flex
-            rounded-full
-            bg-purple-100
-            px-3
-            py-1
-            text-xs
-            font-semibold
-            text-purple-700
-          "
-        >
-          Dean
-        </span>
-      );
-    }
-
-
-    return (
-      <span
-        className="
-          inline-flex
-          rounded-full
-          bg-blue-100
-          px-3
-          py-1
-          text-xs
-          font-semibold
-          text-blue-700
-        "
-      >
-        Teacher
-      </span>
-    );
   };
 
+  const handleLogout = async () => {
+    await signOut();
+    navigate("/login");
+  };
 
-  // ==========================================================
-  // UI
-  // ==========================================================
+  // ------------------------------------------------------------ derived
+  const counts = useMemo(() => {
+    const c = { all: users.length, teacher: 0, dean: 0, superadmin: 0 };
+    for (const u of users) {
+      const r = normalizeRole(u.role);
+      if (r in c) c[r] += 1;
+    }
+    return c;
+  }, [users]);
 
+  const visibleUsers = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return users.filter((u) => {
+      if (roleFilter !== "all" && normalizeRole(u.role) !== roleFilter) return false;
+      if (!term) return true;
+      return [u.name, u.email].some((f) => String(f ?? "").toLowerCase().includes(term));
+    });
+  }, [users, roleFilter, query]);
+
+  const isSelf = (user) => profile?.id && user.id === profile.id;
+
+  const pendingAction = pending ? ACTIONS[pending.kind] : null;
+  const pendingName = pending ? pending.user.name || pending.user.email || "this user" : "";
+  const pendingBusy = pending ? processingUserId === pending.user.id : false;
+
+  // ------------------------------------------------------------ UI
   return (
+    <SuperAdminShell
+      active="users"
+      profile={profile}
+      onLogout={handleLogout}
+      railBadge={loading ? undefined : users.length}
+      railNote="Promoting a teacher to Dean takes effect immediately. Deleting an account cannot be undone."
+    >
+      <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
 
-    <div className="min-h-screen bg-slate-50">
+        <PageHero
+          eyebrow="Super Admin"
+          title="User"
+          accent="Management"
+          subtitle="Every account registered with Campus Capture: teachers, Deans and super admins."
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={loadUsers}
+                disabled={loading}
+                className="btn btn-ghost"
+              >
+                {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
+                Refresh
+              </button>
+              <Link to="/superadmin/create-dean" className="btn btn-primary">
+                <IconUserPlus />
+                Create Dean
+              </Link>
+            </>
+          }
+        />
 
-      {/* ======================================================
-          HEADER
-      ====================================================== */}
-
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="flex h-[76px] items-center justify-between px-6">
-
-          <div className="flex items-center gap-3.5">
-            <img
-              src={srhuLogo}
-              alt="Swami Rama Himalayan University"
-              className="h-12 sm:h-14 w-auto object-contain shrink-0"
-            />
-            <div>
-              <h1 className="text-lg font-bold text-slate-800 leading-tight">
-                Campus Capture
-              </h1>
-              <p className="text-xs font-medium text-slate-500">
-                Admin Panel
-              </p>
-            </div>
-          </div>
-
-
-          <button
-            onClick={handleLogout}
-            className="
-              rounded-lg
-              bg-slate-800
-              px-4
-              py-2
-              text-sm
-              font-medium
-              text-white
-              transition
-              hover:bg-slate-700
-            "
-          >
-            Logout
-          </button>
-
-        </div>
-
-      </header>
-
-
-      {/* ======================================================
-          MAIN
-      ====================================================== */}
-
-      <main
-        className="
-          mx-auto
-          max-w-7xl
-          px-6
-          py-8
-        "
-      >
-
-        {/* ====================================================
-            TITLE
-        ==================================================== */}
-
-        <div
-          className="
-            mb-6
-            flex
-            flex-col
-            justify-between
-            gap-4
-            sm:flex-row
-            sm:items-center
-          "
-        >
-
-          <div>
-
-            <h2
-              className="
-                text-2xl
-                font-bold
-                text-slate-800
-              "
-            >
-              User Management
-            </h2>
-
-            <p
-              className="
-                mt-1
-                text-sm
-                text-slate-500
-              "
-            >
-              Manage teachers, deans and administrators.
-            </p>
-
-          </div>
-
-
-          <button
-            onClick={loadUsers}
-            disabled={loading}
-            className="
-              rounded-lg
-              border
-              border-slate-300
-              bg-white
-              px-4
-              py-2
-              text-sm
-              font-medium
-              text-slate-700
-              transition
-              hover:bg-slate-100
-              disabled:cursor-not-allowed
-              disabled:opacity-50
-            "
-          >
-            {loading
-              ? "Refreshing..."
-              : "Refresh"}
-          </button>
-
-        </div>
-
-
-        {/* ====================================================
-            SUCCESS MESSAGE
-        ==================================================== */}
-
+        {/* ----------------------------------------------------- notices */}
         {success && (
-
-          <div
-            className="
-              mb-5
-              flex
-              items-center
-              justify-between
-              rounded-lg
-              border
-              border-green-200
-              bg-green-50
-              px-4
-              py-3
-              text-sm
-              text-green-700
-            "
-          >
-
-            <span>
-              {success}
-            </span>
-
-
+          <div className="toast toast-ok mt-6" role="status">
+            <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-ok" />
+            <p className="flex-1 text-sm font-medium text-ink">{success}</p>
             <button
+              type="button"
               onClick={() => setSuccess("")}
-              className="
-                ml-4
-                font-bold
-                text-green-700
-                hover:text-green-900
-              "
+              className="icon-btn icon-btn-sm -my-1 -mr-1 border-0 bg-transparent"
+              aria-label="Dismiss"
             >
-              ×
+              <IconX />
             </button>
-
           </div>
-
         )}
-
-
-        {/* ====================================================
-            ERROR MESSAGE
-        ==================================================== */}
 
         {error && (
-
-          <div
-            className="
-              mb-5
-              flex
-              items-center
-              justify-between
-              rounded-lg
-              border
-              border-red-200
-              bg-red-50
-              px-4
-              py-3
-              text-sm
-              text-red-700
-            "
-          >
-
-            <span>
-              {error}
-            </span>
-
-
+          <div className="toast toast-err mt-6" role="alert">
+            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+            <p className="flex-1 text-sm font-medium text-ink">{error}</p>
             <button
+              type="button"
               onClick={() => setError("")}
-              className="
-                ml-4
-                font-bold
-                text-red-700
-                hover:text-red-900
-              "
+              className="icon-btn icon-btn-sm -my-1 -mr-1 border-0 bg-transparent"
+              aria-label="Dismiss"
             >
-              ×
+              <IconX />
             </button>
-
           </div>
-
         )}
 
-
-        {/* ====================================================
-            USER COUNT
-        ==================================================== */}
-
-        {!loading && (
-
-          <div className="mb-4">
-
-            <p
-              className="
-                text-sm
-                text-slate-500
-              "
-            >
-
-              Total Users:{" "}
-
-              <span
-                className="
-                  font-semibold
-                  text-slate-800
-                "
+        {/* ----------------------------------------------------- toolbar */}
+        <div className="reveal mt-7 flex flex-col gap-3 md:flex-row md:items-center md:justify-between" style={{ "--i": 1 }}>
+          <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter by role">
+            {ROLE_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={roleFilter === tab.key}
+                onClick={() => setRoleFilter(tab.key)}
+                className="tab"
               >
-                {users.length}
-              </span>
-
-            </p>
-
+                {tab.key !== "all" && (
+                  <span className="dot dot-sm" style={{ "--track": ROLE_TRACK[tab.key] }} />
+                )}
+                {tab.label}
+                <span className="tab-count">{counts[tab.key]}</span>
+              </button>
+            ))}
           </div>
 
-        )}
-
-
-        {/* ====================================================
-            LOADING
-        ==================================================== */}
-
-        {loading ? (
-
-          <div
-            className="
-              rounded-xl
-              border
-              border-slate-200
-              bg-white
-              p-12
-              text-center
-              shadow-sm
-            "
-          >
-
-            <div
-              className="
-                mx-auto
-                mb-4
-                h-8
-                w-8
-                animate-spin
-                rounded-full
-                border-4
-                border-slate-200
-                border-t-slate-700
-              "
+          <label className="relative block w-full md:w-72">
+            <span className="sr-only">Search users</span>
+            <IconSearch className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name or email"
+              className="input pl-10"
             />
+          </label>
+        </div>
 
-            <p
-              className="
-                text-sm
-                text-slate-500
-              "
-            >
-              Loading users...
-            </p>
-
+        {/* ----------------------------------------------------- results */}
+        <section className="glass reveal mt-4 overflow-hidden" style={{ "--i": 2 }}>
+          <div className="flex items-center justify-between gap-3 border-b hairline px-5 py-4">
+            <div>
+              <p className="eyebrow">Directory</p>
+              <h2 className="h3 text-ink">
+                {roleFilter === "all" ? "All users" : ROLE_TABS.find((t) => t.key === roleFilter).label}
+              </h2>
+            </div>
+            {!loading && (
+              <p className="num text-sm text-muted">
+                <span className="font-semibold text-ink">{visibleUsers.length}</span>
+                {" of "}
+                {users.length}
+              </p>
+            )}
           </div>
 
-
-        ) : users.length === 0 ? (
-
-          /* ==================================================
-             NO USERS
-          ================================================== */
-
-          <div
-            className="
-              rounded-xl
-              border
-              border-slate-200
-              bg-white
-              p-12
-              text-center
-              shadow-sm
-            "
-          >
-
-            <h3
-              className="
-                text-lg
-                font-semibold
-                text-slate-800
-              "
-            >
-              No users found
-            </h3>
-
-            <p
-              className="
-                mt-2
-                text-sm
-                text-slate-500
-              "
-            >
-              There are no registered users in the system.
-            </p>
-
-          </div>
-
-
-        ) : (
-
-          /* ==================================================
-             USERS TABLE
-          ================================================== */
-
-          <div
-            className="
-              overflow-hidden
-              rounded-xl
-              border
-              border-slate-200
-              bg-white
-              shadow-sm
-            "
-          >
-
-            <div className="overflow-x-auto">
-
-              <table
-                className="
-                  w-full
-                  min-w-[950px]
-                "
-              >
-
-                {/* ============================================
-                    TABLE HEADER
-                ============================================ */}
-
-                <thead
-                  className="
-                    border-b
-                    border-slate-200
-                    bg-slate-50
-                  "
+          {loading ? (
+            <div className="px-6 py-16 text-center">
+              <span className="spin mx-auto mb-4 block h-9 w-9 text-accent" />
+              <p className="prose-muted text-sm">Loading users…</p>
+            </div>
+          ) : visibleUsers.length === 0 ? (
+            <div className="px-6 py-16 text-center">
+              <span className="icon-tile mx-auto">
+                <IconInbox />
+              </span>
+              <p className="h3 mt-4 text-ink">
+                {users.length === 0 ? "No users yet" : "No matches"}
+              </p>
+              <p className="prose-muted mt-1 text-sm">
+                {users.length === 0
+                  ? "There are no registered accounts in the system."
+                  : "Try a different search or clear the role filter."}
+              </p>
+              {users.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setQuery(""); setRoleFilter("all"); }}
+                  className="btn btn-ghost btn-sm mt-5"
                 >
+                  Clear filters
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Phone: one card per account. */}
+              <ul className="divide-y divide-line/8 md:hidden">
+                {visibleUsers.map((user) => (
+                  <li key={user.id} className="px-5 py-4">
+                    <div className="flex items-start gap-3">
+                      <Avatar user={user} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="min-w-0 truncate font-display text-sm font-semibold text-ink">
+                            {user.name || "Unnamed user"}
+                            {isSelf(user) && <span className="ml-1.5 text-xs font-medium text-muted">(you)</span>}
+                          </p>
+                          <RoleChip role={user.role} />
+                        </div>
+                        <p className="prose-muted mt-0.5 truncate text-xs">{user.email}</p>
+                        <p className="prose-muted mt-0.5 text-xs">Joined {formatJoined(user.created_at)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                      <RowActions
+                        user={user}
+                        self={isSelf(user)}
+                        busy={processingUserId === user.id}
+                        onAct={(kind) => setPending({ kind, user })}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
 
-                  <tr>
-
-                    <th
-                      className="
-                        px-6
-                        py-4
-                        text-left
-                        text-xs
-                        font-semibold
-                        uppercase
-                        tracking-wide
-                        text-slate-500
-                      "
-                    >
-                      Name
-                    </th>
-
-
-                    <th
-                      className="
-                        px-6
-                        py-4
-                        text-left
-                        text-xs
-                        font-semibold
-                        uppercase
-                        tracking-wide
-                        text-slate-500
-                      "
-                    >
-                      Email
-                    </th>
-
-
-                    <th
-                      className="
-                        px-6
-                        py-4
-                        text-left
-                        text-xs
-                        font-semibold
-                        uppercase
-                        tracking-wide
-                        text-slate-500
-                      "
-                    >
-                      Role
-                    </th>
-
-
-                    <th
-                      className="
-                        px-6
-                        py-4
-                        text-right
-                        text-xs
-                        font-semibold
-                        uppercase
-                        tracking-wide
-                        text-slate-500
-                      "
-                    >
-                      Action
-                    </th>
-
-                  </tr>
-
-                </thead>
-
-
-                {/* ============================================
-                    TABLE BODY
-                ============================================ */}
-
-                <tbody
-                  className="
-                    divide-y
-                    divide-slate-100
-                  "
-                >
-
-                  {users.map((user) => {
-
-                    const isProcessing =
-                      processingUserId === user.id;
-
-
-                    return (
-
-                      <tr
-                        key={user.id}
-                        className="
-                          transition
-                          hover:bg-slate-50
-                        "
-                      >
-
-                        {/* ==================================
-                            NAME
-                        ================================== */}
-
-                        <td className="px-6 py-4">
-
-                          <div
-                            className="
-                              font-medium
-                              text-slate-800
-                            "
-                          >
-                            {user.name ||
-                              "Unnamed User"}
-                          </div>
-
-                          <div
-                            className="
-                              mt-1
-                              text-xs
-                              text-slate-400
-                            "
-                          >
-                            ID: {user.id}
-                          </div>
-
-                        </td>
-
-
-                        {/* ==================================
-                            EMAIL
-                        ================================== */}
-
-                        <td
-                          className="
-                            px-6
-                            py-4
-                            text-sm
-                            text-slate-600
-                          "
+              <div className="hidden overflow-x-auto md:block">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b hairline bg-raised/45">
+                      {TABLE_COLUMNS.map((column) => (
+                        <th
+                          key={column}
+                          scope="col"
+                          className={`px-5 py-3 font-display text-[11px] font-semibold uppercase tracking-[.14em] text-muted ${
+                            column === "Actions" ? "text-right" : ""
+                          }`}
                         >
-                          {user.email}
-                        </td>
-
-
-                        {/* ==================================
-                            ROLE
-                        ================================== */}
-
-                        <td className="px-6 py-4">
-
-                          {getRoleBadge(
-                            user.role
-                          )}
-
-                        </td>
-
-
-                        {/* ==================================
-                            ACTION
-                        ================================== */}
-
-                        <td
-                          className="
-                            px-6
-                            py-4
-                            text-right
-                          "
-                        >
-
-                          <div
-                            className="
-                              flex
-                              justify-end
-                              gap-2
-                            "
-                          >
-
-                            {/* ==============================
-                                TEACHER
-                            ============================== */}
-
-                            {user.role ===
-                              "teacher" && (
-
-                              <button
-                                onClick={() =>
-                                  handleMakeDean(
-                                    user.id,
-                                    user.name ||
-                                      user.email
-                                  )
-                                }
-                                disabled={
-                                  isProcessing
-                                }
-                                className="
-                                  rounded-lg
-                                  bg-purple-600
-                                  px-4
-                                  py-2
-                                  text-sm
-                                  font-medium
-                                  text-white
-                                  transition
-                                  hover:bg-purple-700
-                                  disabled:cursor-not-allowed
-                                  disabled:opacity-50
-                                "
-                              >
-                                {isProcessing
-                                  ? "Updating..."
-                                  : "Make Dean"}
-                              </button>
-
-                            )}
-
-
-                            {/* ==============================
-                                DEAN
-                            ============================== */}
-
-                            {user.role ===
-                              "dean" && (
-
-                              <button
-                                onClick={() =>
-                                  handleMakeTeacher(
-                                    user.id,
-                                    user.name ||
-                                      user.email
-                                  )
-                                }
-                                disabled={
-                                  isProcessing
-                                }
-                                className="
-                                  rounded-lg
-                                  bg-blue-600
-                                  px-4
-                                  py-2
-                                  text-sm
-                                  font-medium
-                                  text-white
-                                  transition
-                                  hover:bg-blue-700
-                                  disabled:cursor-not-allowed
-                                  disabled:opacity-50
-                                "
-                              >
-                                {isProcessing
-                                  ? "Updating..."
-                                  : "Make Teacher"}
-                              </button>
-
-                            )}
-
-
-                            {/* ==============================
-                                DELETE
-                            ============================== */}
-
-                            {user.role !==
-                              "admin" && (
-
-                              <button
-                                onClick={() =>
-                                  handleDeleteUser(
-                                    user.id,
-                                    user.name,
-                                    user.email
-                                  )
-                                }
-                                disabled={
-                                  isProcessing
-                                }
-                                className="
-                                  rounded-lg
-                                  bg-red-600
-                                  px-4
-                                  py-2
-                                  text-sm
-                                  font-medium
-                                  text-white
-                                  transition
-                                  hover:bg-red-700
-                                  disabled:cursor-not-allowed
-                                  disabled:opacity-50
-                                "
-                              >
-                                {isProcessing
-                                  ? "Deleting..."
-                                  : "Delete"}
-                              </button>
-
-                            )}
-
-
-                            {/* ==============================
-                                ADMIN
-                            ============================== */}
-
-                            {user.role ===
-                              "admin" && (
-
-                              <span
-                                className="
-                                  text-sm
-                                  text-slate-400
-                                "
-                              >
-                                No action
-                              </span>
-
-                            )}
-
+                          {column}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line/8">
+                    {visibleUsers.map((user) => (
+                      <tr key={user.id} className="transition hover:bg-raised/35">
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <Avatar user={user} />
+                            <div className="min-w-0">
+                              <p className="truncate font-display text-sm font-semibold text-ink">
+                                {user.name || "Unnamed user"}
+                                {isSelf(user) && <span className="ml-1.5 text-xs font-medium text-muted">(you)</span>}
+                              </p>
+                              <p className="truncate text-xs text-muted">{user.email}</p>
+                            </div>
                           </div>
-
                         </td>
-
+                        <td className="whitespace-nowrap px-5 py-3.5">
+                          <RoleChip role={user.role} />
+                        </td>
+                        <td className="num whitespace-nowrap px-5 py-3.5 text-sm text-muted">
+                          {formatJoined(user.created_at)}
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3.5 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <RowActions
+                              user={user}
+                              self={isSelf(user)}
+                              busy={processingUserId === user.id}
+                              onAct={(kind) => setPending({ kind, user })}
+                            />
+                          </div>
+                        </td>
                       </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
 
-                    );
-
-                  })}
-
-                </tbody>
-
-              </table>
-
+      {/* --------------------------------------------- confirm dialog */}
+      <Modal
+        open={Boolean(pending)}
+        onClose={() => { if (!pendingBusy) setPending(null); }}
+        eyebrow={pendingAction?.eyebrow}
+        title={pendingAction?.title}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setPending(null)}
+              disabled={pendingBusy}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={runPendingAction}
+              disabled={pendingBusy}
+              className={`btn btn-sm ${pendingAction?.tone || "btn-brand"}`}
+            >
+              {pendingBusy ? (
+                <>
+                  <span className="spin h-4 w-4" />
+                  {pendingAction?.busy}
+                </>
+              ) : (
+                <>
+                  {pending?.kind === "delete" ? <IconTrash /> : pending?.kind === "dean" ? <IconAward /> : <IconUser />}
+                  {pendingAction?.confirm}
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        {pending && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 rounded-2xl border hairline bg-raised/40 p-3.5">
+              <Avatar user={pending.user} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-display text-sm font-semibold text-ink">
+                  {pending.user.name || "Unnamed user"}
+                </p>
+                <p className="truncate text-xs text-muted">{pending.user.email}</p>
+              </div>
+              <RoleChip role={pending.user.role} />
             </div>
 
+            <p className="prose-muted text-sm">{pendingAction.body(pendingName)}</p>
+
+            {pending.kind === "delete" && (
+              <div
+                className="flex items-start gap-3 rounded-2xl border p-3.5"
+                data-tint=""
+                style={{ "--track": "#EF4444" }}
+              >
+                <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+                <p className="text-sm text-ink">
+                  Their events and uploads stay in the record, but they will no longer be able to sign in.
+                </p>
+              </div>
+            )}
           </div>
-
         )}
-
-      </main>
-
-    </div>
-
+      </Modal>
+    </SuperAdminShell>
   );
 }
 
+/* ----------------------------------------------------------- small parts */
+
+function Avatar({ user }) {
+  return (
+    <span
+      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-display text-xs font-semibold ring-1"
+      style={{
+        "--track": trackOfRole(user.role),
+        background: "color-mix(in srgb, var(--track) 14%, transparent)",
+        color: "color-mix(in srgb, var(--track) 80%, rgb(var(--c-ink)))",
+        "--tw-ring-color": "color-mix(in srgb, var(--track) 30%, transparent)",
+      }}
+      aria-hidden="true"
+    >
+      {initialsOf(user.name, user.email)}
+    </span>
+  );
+}
+
+/**
+ * The actions an account allows. Super admins are protected: the platform has no
+ * flow for demoting or removing one from here, and the signed-in super admin can
+ * never act on themselves.
+ */
+function RowActions({ user, self, busy, onAct }) {
+  const role = normalizeRole(user.role);
+
+  if (role === "superadmin" || self) {
+    return (
+      <span className="chip chip-sm">
+        <IconShield />
+        Protected
+      </span>
+    );
+  }
+
+  return (
+    <>
+      {role === "teacher" && (
+        <button
+          type="button"
+          onClick={() => onAct("dean")}
+          disabled={busy}
+          className="btn btn-brand btn-xs"
+        >
+          <IconAward />
+          Make Dean
+        </button>
+      )}
+      {role === "dean" && (
+        <button
+          type="button"
+          onClick={() => onAct("teacher")}
+          disabled={busy}
+          className="btn btn-ghost btn-xs"
+        >
+          <IconUser />
+          Make Teacher
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => onAct("delete")}
+        disabled={busy}
+        className="btn btn-danger btn-xs"
+        title="Delete account"
+      >
+        <IconTrash />
+        Delete
+      </button>
+    </>
+  );
+}
 
 export default UserManagement;

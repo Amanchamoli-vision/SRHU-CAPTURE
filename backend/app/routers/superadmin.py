@@ -1,169 +1,84 @@
-from fastapi import APIRouter, HTTPException, Header
-from app.database import supabase
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
+from pymongo import DESCENDING
+from pymongo.errors import DuplicateKeyError
+
+from app.database import events, users
+from app.models.documents import USER_PRIVATE_FIELDS, new_user_document
+from app.schemas.superadmin import CreateDeanRequest
+from app.services import email_service
+from app.services.storage_service import delete_user_cascade
+from app.utils.auth import get_superadmin_user, public_user
+from app.utils.security import generate_temporary_password, hash_password
+from app.utils.serializers import serialize_many, to_object_id, utc_now
 
 
 router = APIRouter(
-    prefix="/admin",
-    tags=["Admin"]
+    prefix="/superadmin",
+    tags=["Superadmin"]
 )
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# ADMIN AUTHENTICATION
+# HELPERS
 # ============================================================
 
-def get_admin_user(authorization: str | None):
-    """
-    Verify the Supabase access token and make sure
-    the logged-in user has admin role.
-    """
+def find_user_or_404(user_id: str) -> dict:
+    object_id = to_object_id(user_id)
+    user = users.find_one({"_id": object_id}) if object_id else None
 
-    if not authorization:
+    if not user:
         raise HTTPException(
-            status_code=401,
-            detail="Authorization token required"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
         )
 
-    token = authorization.replace("Bearer ", "").strip()
+    return user
 
-    if not token:
+
+def set_role(user_id: str, role: str) -> dict:
+    updated = users.find_one_and_update(
+        {"_id": to_object_id(user_id)},
+        {"$set": {"role": role, "updated_at": utc_now()}},
+        return_document=True,
+    )
+
+    if not updated:
         raise HTTPException(
-            status_code=401,
-            detail="Invalid authorization token"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update user role"
         )
 
-    try:
-        # Verify Supabase Auth token
-        user_response = supabase.auth.get_user(token)
-
-        if not user_response or not user_response.user:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication token"
-            )
-
-        user_id = user_response.user.id
-
-        # Get profile from public.users
-        profile_response = (
-            supabase
-            .table("users")
-            .select("id, name, email, role")
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-
-        profile = profile_response.data
-
-        if not profile:
-            raise HTTPException(
-                status_code=404,
-                detail="User profile not found"
-            )
-
-        # Check admin role
-        if profile.get("role") != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Admin access required"
-            )
-
-        return profile
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print("Admin authentication error:", error)
-
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication failed"
-        )
+    return public_user(updated)
 
 
 # ============================================================
-# ADMIN DASHBOARD STATS
+# SUPERADMIN DASHBOARD STATS
 # ============================================================
 
 @router.get("/dashboard/stats")
 def get_dashboard_stats(
     authorization: str | None = Header(default=None)
 ):
+    get_superadmin_user(authorization)
 
-    try:
-        # Verify admin
-        get_admin_user(authorization)
-
-        # -----------------------------------------
-        # Users
-        # -----------------------------------------
-
-        users_response = (
-            supabase
-            .table("users")
-            .select("id, role")
-            .execute()
+    role_counts = {
+        row["_id"]: row["count"]
+        for row in users.aggregate(
+            [{"$group": {"_id": "$role", "count": {"$sum": 1}}}]
         )
+    }
 
-        users = users_response.data or []
-
-        total_users = len(users)
-
-        teachers = sum(
-            1
-            for user in users
-            if user.get("role") == "teacher"
-        )
-
-        deans = sum(
-            1
-            for user in users
-            if user.get("role") == "dean"
-        )
-
-        admins = sum(
-            1
-            for user in users
-            if user.get("role") == "admin"
-        )
-
-        # -----------------------------------------
-        # Pending Events
-        # -----------------------------------------
-
-        events_response = (
-            supabase
-            .table("events")
-            .select("id")
-            .eq("status", "pending")
-            .execute()
-        )
-
-        pending_events = len(
-            events_response.data or []
-        )
-
-        return {
-            "success": True,
-            "total_users": total_users,
-            "teachers": teachers,
-            "deans": deans,
-            "admins": admins,
-            "pending_events": pending_events
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print("Dashboard stats error:", error)
-
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to fetch dashboard statistics"
-        )
+    return {
+        "success": True,
+        "total_users": sum(role_counts.values()),
+        "teachers": role_counts.get("teacher", 0),
+        "deans": role_counts.get("dean", 0),
+        "superadmins": role_counts.get("superadmin", 0),
+        "pending_events": events.count_documents({"status": "pending"}),
+    }
 
 
 # ============================================================
@@ -174,53 +89,100 @@ def get_dashboard_stats(
 def get_all_users(
     authorization: str | None = Header(default=None)
 ):
+    get_superadmin_user(authorization)
 
-    try:
-        # Verify admin
-        get_admin_user(authorization)
+    cursor = users.find(
+        {},
+        {field: 0 for field in USER_PRIVATE_FIELDS},
+    ).sort("created_at", DESCENDING)
 
-        response = (
-            supabase
-            .table("users")
-            .select(
-                """
-                id,
-                name,
-                email,
-                role,
-                created_at,
-                updated_at
-                """
-            )
-            .order(
-                "created_at",
-                desc=True
-            )
-            .execute()
-        )
+    user_list = serialize_many(cursor)
 
-        users = response.data or []
-
-        return {
-            "success": True,
-            "users": users,
-            "total": len(users)
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print("Get users error:", error)
-
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to fetch users"
-        )
+    return {
+        "success": True,
+        "users": user_list,
+        "total": len(user_list)
+    }
 
 
 # ============================================================
-# MAKE TEACHER → DEAN
+# CREATE DEAN
+# ============================================================
+
+@router.post("/create-dean", status_code=status.HTTP_201_CREATED)
+def create_dean(
+    payload: CreateDeanRequest,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+):
+    """Create a verified Dean account with a temporary password.
+
+    The password is returned to the superadmin and, when SMTP is configured, also
+    emailed to the new Dean.
+    """
+    get_superadmin_user(authorization)
+
+    email = str(payload.email).casefold()
+
+    if users.find_one({"email": email}, {"_id": 1}):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists."
+        )
+
+    temporary_password = generate_temporary_password()
+
+    document = new_user_document(
+        name=payload.name,
+        email=email,
+        password_hash=hash_password(temporary_password),
+        role="dean",
+        email_verified=True,
+    )
+
+    try:
+        result = users.insert_one(document)
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists."
+        )
+
+    document["_id"] = result.inserted_id
+
+    email_queued = False
+    if email_service.is_configured():
+        background_tasks.add_task(
+            _send_dean_credentials,
+            email,
+            payload.name,
+            temporary_password,
+        )
+        email_queued = True
+
+    logger.info("dean_created email_queued=%s", email_queued)
+
+    return {
+        "success": True,
+        "message": (
+            f"Dean account created for {payload.name}."
+            + (" Login details have been emailed." if email_queued else "")
+        ),
+        "temporary_password": temporary_password,
+        "email_sent": email_queued,
+        "user": public_user(document),
+    }
+
+
+def _send_dean_credentials(email: str, name: str, temporary_password: str) -> None:
+    try:
+        email_service.send_dean_credentials_email(email, name, temporary_password)
+    except email_service.EmailDeliveryError:
+        logger.warning("dean_credentials_email_failed")
+
+
+# ============================================================
+# MAKE TEACHER -> DEAN
 # ============================================================
 
 @router.patch("/users/{user_id}/make-dean")
@@ -228,85 +190,30 @@ def make_user_dean(
     user_id: str,
     authorization: str | None = Header(default=None)
 ):
+    get_superadmin_user(authorization)
 
-    try:
-        # Verify admin
-        get_admin_user(authorization)
+    user = find_user_or_404(user_id)
 
-        # Find user
-        user_response = (
-            supabase
-            .table("users")
-            .select(
-                """
-                id,
-                name,
-                email,
-                role
-                """
-            )
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-
-        user = user_response.data
-
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="User not found"
-            )
-
-        # Only Teacher can become Dean
-        if user.get("role") != "teacher":
-            raise HTTPException(
-                status_code=400,
-                detail="Only a teacher can be made Dean"
-            )
-
-        # Update role
-        update_response = (
-            supabase
-            .table("users")
-            .update({
-                "role": "dean"
-            })
-            .eq("id", user_id)
-            .execute()
-        )
-
-        if not update_response.data:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to update user role"
-            )
-
-        updated_user = update_response.data[0]
-
-        return {
-            "success": True,
-            "message": (
-                f"{updated_user.get('name')} "
-                f"has been made Dean successfully"
-            ),
-            "user": updated_user
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print("Make Dean error:", error)
-
+    if user.get("role") != "teacher":
         raise HTTPException(
-            status_code=500,
-            detail="Failed to make user Dean"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only a teacher can be made Dean"
         )
+
+    updated_user = set_role(user_id, "dean")
+
+    return {
+        "success": True,
+        "message": (
+            f"{updated_user.get('name')} "
+            f"has been made Dean successfully"
+        ),
+        "user": updated_user
+    }
 
 
 # ============================================================
-# MAKE DEAN → TEACHER
+# MAKE DEAN -> TEACHER
 # ============================================================
 
 @router.patch("/users/{user_id}/make-teacher")
@@ -314,81 +221,26 @@ def make_user_teacher(
     user_id: str,
     authorization: str | None = Header(default=None)
 ):
+    get_superadmin_user(authorization)
 
-    try:
-        # Verify admin
-        get_admin_user(authorization)
+    user = find_user_or_404(user_id)
 
-        # Find user
-        user_response = (
-            supabase
-            .table("users")
-            .select(
-                """
-                id,
-                name,
-                email,
-                role
-                """
-            )
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-
-        user = user_response.data
-
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="User not found"
-            )
-
-        # Only Dean can become Teacher
-        if user.get("role") != "dean":
-            raise HTTPException(
-                status_code=400,
-                detail="Only a Dean can be changed to Teacher"
-            )
-
-        # Update role
-        update_response = (
-            supabase
-            .table("users")
-            .update({
-                "role": "teacher"
-            })
-            .eq("id", user_id)
-            .execute()
-        )
-
-        if not update_response.data:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to update user role"
-            )
-
-        updated_user = update_response.data[0]
-
-        return {
-            "success": True,
-            "message": (
-                f"{updated_user.get('name')} "
-                f"has been changed to Teacher"
-            ),
-            "user": updated_user
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print("Make Teacher error:", error)
-
+    if user.get("role") != "dean":
         raise HTTPException(
-            status_code=500,
-            detail="Failed to make user Teacher"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only a Dean can be changed to Teacher"
         )
+
+    updated_user = set_role(user_id, "teacher")
+
+    return {
+        "success": True,
+        "message": (
+            f"{updated_user.get('name')} "
+            f"has been changed to Teacher"
+        ),
+        "user": updated_user
+    }
 
 
 # ============================================================
@@ -400,95 +252,30 @@ def delete_user(
     user_id: str,
     authorization: str | None = Header(default=None)
 ):
+    superadmin_profile = get_superadmin_user(authorization)
 
-    try:
-        # -----------------------------------------
-        # Verify Admin
-        # -----------------------------------------
-
-        admin_profile = get_admin_user(authorization)
-
-        # -----------------------------------------
-        # Prevent admin from deleting himself
-        # -----------------------------------------
-
-        if admin_profile.get("id") == user_id:
-            raise HTTPException(
-                status_code=400,
-                detail="You cannot delete your own admin account"
-            )
-
-        # -----------------------------------------
-        # Find user
-        # -----------------------------------------
-
-        user_response = (
-            supabase
-            .table("users")
-            .select(
-                """
-                id,
-                name,
-                email,
-                role
-                """
-            )
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-
-        user = user_response.data
-
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="User not found"
-            )
-
-        # -----------------------------------------
-        # Extra safety:
-        # Admin cannot delete another admin
-        # -----------------------------------------
-
-        if user.get("role") == "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Admin users cannot be deleted"
-            )
-
-        # -----------------------------------------
-        # Delete from Supabase Auth
-        # -----------------------------------------
-
-        supabase.auth.admin.delete_user(user_id)
-
-        # Because public.users.id references
-        # auth.users(id) with ON DELETE CASCADE,
-        # public.users will also be deleted.
-        #
-        # Related events will also be deleted because:
-        #
-        # events.teacher_id
-        # REFERENCES users(id)
-        # ON DELETE CASCADE
-
-        return {
-            "success": True,
-            "message": (
-                f"{user.get('name') or user.get('email')} "
-                f"has been deleted successfully"
-            ),
-            "user": user
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print("Delete user error:", error)
-
+    if superadmin_profile.get("id") == user_id:
         raise HTTPException(
-            status_code=500,
-            detail="Failed to delete user"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own superadmin account"
         )
+
+    user = find_user_or_404(user_id)
+
+    if user.get("role") == "superadmin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Superadmin users cannot be deleted"
+        )
+
+    # Removes the user's events, media, documents, reports and notifications.
+    delete_user_cascade(user_id)
+
+    return {
+        "success": True,
+        "message": (
+            f"{user.get('name') or user.get('email')} "
+            f"has been deleted successfully"
+        ),
+        "user": public_user(user)
+    }

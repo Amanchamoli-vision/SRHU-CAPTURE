@@ -1,124 +1,37 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { supabase } from "../../services/supabase";
-import srhuLogo from "../../assets/logo.png";
+import { apiJson } from "../../services/api";
+import { fetchCurrentUser, signOut } from "../../services/auth";
+import { canTeacherEditEvent } from "../../utils/constants";
 import {
   getTeacherDrafts,
   deleteTeacherDraft,
   duplicateEventAsDraft,
   decodeEventMetadata,
 } from "../../utils/draftStorage";
-import NotificationBell from "../../components/NotificationBell";
+import TeacherShell from "../../components/teacher/TeacherShell";
+import PageHero from "../../components/teacher/PageHero";
+import Modal from "../../components/teacher/Modal";
+import Lifecycle from "../../components/teacher/Lifecycle";
+import StatusChip from "../../components/teacher/StatusChip";
+import { isApprovedStatus, isPendingStatus, trackOf } from "../../components/teacher/status";
+import {
+  IconActivity,
+  IconAlertTriangle,
+  IconArrowRight,
+  IconCheckCircle,
+  IconClock,
+  IconCopy,
+  IconEdit,
+  IconEye,
+  IconInbox,
+  IconLayers,
+  IconPlus,
+  IconTrash,
+  IconXCircle,
+} from "../../components/teacher/icons";
 
-/* ============ Inline icons (no external icon library needed) ============ */
-const IconLogout = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3" />
-    <path d="M10 17l5-5-5-5" />
-    <path d="M15 12H3" />
-  </svg>
-);
-const IconGrid = ({ className = "h-[18px] w-[18px]" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-    <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
-    <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
-  </svg>
-);
-const IconPlus = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 5v14M5 12h14" />
-  </svg>
-);
-const IconList = ({ className = "h-[18px] w-[18px]" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="5" y="4" width="14" height="17" rx="2" />
-    <path d="M9 3.5h6a1 1 0 0 1 1 1V6H8V4.5a1 1 0 0 1 1-1Z" />
-    <path d="M9 12h6M9 16h6M9 8.5h2" />
-  </svg>
-);
-const IconLayers = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 3 3 8l9 5 9-5-9-5Z" />
-    <path d="M3 13l9 5 9-5" />
-  </svg>
-);
-const IconClock = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M12 7.5V12l3 2" />
-  </svg>
-);
-const IconCheckCircle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M8.5 12.2l2.4 2.4 4.6-5" />
-  </svg>
-);
-const IconXCircle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M9.5 9.5l5 5M14.5 9.5l-5 5" />
-  </svg>
-);
-const IconArrowRight = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M5 12h14M13 6l6 6-6 6" />
-  </svg>
-);
-const IconInbox = ({ className = "h-6 w-6" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M4 12h4l2 3h4l2-3h4" />
-    <path d="M5.5 5h13l2 7v6a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3.5 18v-6l2-7Z" />
-  </svg>
-);
-const IconEye = ({ className = "h-3.5 w-3.5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
-const IconEdit = ({ className = "h-3.5 w-3.5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-  </svg>
-);
-const IconCopy = ({ className = "h-3.5 w-3.5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-  </svg>
-);
-const IconTrash = ({ className = "h-3.5 w-3.5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <polyline points="3 6 5 6 21 6" />
-    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-  </svg>
-);
-const IconActivity = ({ className = "h-3.5 w-3.5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-  </svg>
-);
-const IconAlertTriangle = ({ className = "h-5 w-5" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M12 3.5 21.5 20h-19L12 3.5Z" />
-    <path d="M12 9.5v4.5M12 17h.01" />
-  </svg>
-);
-const IconCheck = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <polyline points="20 6 9 17 4 12" />
-  </svg>
-);
-const IconX = ({ className = "h-4 w-4" }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <line x1="18" y1="6" x2="6" y2="18" />
-    <line x1="6" y1="6" x2="18" y2="18" />
-  </svg>
-);
+const TABLE_COLUMNS = ["Event", "Date", "Venue", "Status", "Action"];
 
 function TeacherDashboard() {
   const navigate = useNavigate();
@@ -138,23 +51,12 @@ function TeacherDashboard() {
     try {
       setLoading(true);
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      const userProfile = await fetchCurrentUser();
 
-      if (userError || !user) {
+      if (!userProfile) {
         navigate("/");
         return;
       }
-
-      const { data: userProfile, error: profileError } = await supabase
-        .from("users")
-        .select("id, name, email, role")
-        .eq("id", user.id)
-        .single();
-
-      if (profileError) throw profileError;
 
       if (userProfile.role !== "teacher") {
         navigate("/");
@@ -163,17 +65,11 @@ function TeacherDashboard() {
 
       setProfile(userProfile);
 
-      // Fetch teacher's Supabase events
-      const { data: teacherEvents, error: eventsError } = await supabase
-        .from("events")
-        .select("*")
-        .eq("teacher_id", user.id)
-        .order("created_at", { ascending: false });
-
-      if (eventsError) throw eventsError;
+      // Fetch teacher's events from the API (MongoDB)
+      const { events: teacherEvents } = await apiJson("/teacher/events");
 
       // Fetch teacher's local drafts
-      const teacherDrafts = getTeacherDrafts(user.id);
+      const teacherDrafts = getTeacherDrafts(userProfile.id);
 
       setEvents(teacherEvents || []);
       setDrafts(teacherDrafts || []);
@@ -189,7 +85,7 @@ function TeacherDashboard() {
   }, []);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await signOut();
     navigate("/");
   };
 
@@ -215,12 +111,7 @@ function TeacherDashboard() {
       if (deletingEvent.isDraft) {
         deleteTeacherDraft(profile.id, deletingEvent.id);
       } else {
-        const { error: delErr } = await supabase
-          .from("events")
-          .delete()
-          .eq("id", deletingEvent.id)
-          .eq("teacher_id", profile.id);
-        if (delErr) throw delErr;
+        await apiJson(`/teacher/events/${deletingEvent.id}`, { method: "DELETE" });
       }
 
       setActionNotice("Event deleted successfully.");
@@ -237,21 +128,9 @@ function TeacherDashboard() {
 
   // Summary counts
   const totalEvents = events.length + drafts.length;
-
-  const pendingEvents = events.filter(
-    (event) =>
-      event.status === "pending" ||
-      event.status === "submitted" ||
-      event.status === "under_review"
-  ).length;
-
-  const approvedEvents = events.filter(
-    (event) => event.status === "approved" || event.status === "published"
-  ).length;
-
-  const rejectedEvents = events.filter(
-    (event) => event.status === "rejected"
-  ).length;
+  const pendingEvents = events.filter((event) => isPendingStatus(event.status)).length;
+  const approvedEvents = events.filter((event) => isApprovedStatus(event.status)).length;
+  const rejectedEvents = events.filter((event) => event.status === "rejected").length;
 
   // Combine and sort recent events
   const recentCombinedList = [
@@ -263,476 +142,234 @@ function TeacherDashboard() {
     return timeB - timeA;
   });
 
-  const getStatusClass = (status) => {
-    switch (status) {
-      case "draft":
-        return "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-300";
-      case "approved":
-        return "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20";
-      case "published":
-        return "bg-purple-50 text-purple-700 ring-1 ring-inset ring-purple-600/20";
-      case "rejected":
-        return "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20";
-      case "under_review":
-        return "bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-600/20";
-      default:
-        return "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/20";
-    }
-  };
-
-  const getStatusDot = (status) => {
-    switch (status) {
-      case "draft":
-        return "bg-slate-400";
-      case "approved":
-        return "bg-emerald-500";
-      case "published":
-        return "bg-purple-500";
-      case "rejected":
-        return "bg-rose-500";
-      case "under_review":
-        return "bg-sky-500";
-      default:
-        return "bg-amber-500";
-    }
-  };
-
-  const getStatusLabel = (status) => {
-    switch (status) {
-      case "draft":
-        return "Draft";
-      case "approved":
-        return "Approved";
-      case "published":
-        return "Published";
-      case "rejected":
-        return "Rejected";
-      case "under_review":
-        return "Under Review";
-      default:
-        return "Pending";
-    }
-  };
+  const summaryCards = [
+    {
+      key: "all",
+      label: "Total Events",
+      value: totalEvents,
+      hint: "View all",
+      track: "#0EA5E9",
+      Icon: IconLayers,
+    },
+    {
+      key: "pending",
+      label: "Pending",
+      value: pendingEvents,
+      hint: "View pending",
+      track: trackOf("pending"),
+      Icon: IconClock,
+    },
+    {
+      key: "approved",
+      label: "Approved",
+      value: approvedEvents,
+      hint: "View approved",
+      track: trackOf("approved"),
+      Icon: IconCheckCircle,
+    },
+    {
+      key: "rejected",
+      label: "Rejected",
+      value: rejectedEvents,
+      hint: "View rejected",
+      track: trackOf("rejected"),
+      Icon: IconXCircle,
+    },
+  ];
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F3F5F9]">
+      <div className="hv-root flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="relative mx-auto mb-4 h-11 w-11">
-            <div className="absolute inset-0 rounded-full border-4 border-slate-200"></div>
-            <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[#101A33]"></div>
-          </div>
-          <p className="text-sm text-slate-500">Loading dashboard...</p>
+          <span className="spin mx-auto mb-4 block h-10 w-10 text-accent" />
+          <p className="prose-muted text-sm">Loading dashboard…</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#F3F5F9]">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&display=swap');
-        .font-display { font-family: 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif; }
-        @keyframes ccFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-      `}</style>
+    <TeacherShell
+      active="dashboard"
+      profile={profile}
+      onLogout={handleLogout}
+      railBadge={totalEvents}
+      railNote="Review event status, duplicate previous proposals, or submit new ones."
+    >
+      <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
 
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-        <div className="flex h-[76px] items-center justify-between px-6">
-          <div className="flex items-center gap-3.5">
-            <img
-              src={srhuLogo}
-              alt="Swami Rama Himalayan University"
-              className="h-12 sm:h-14 w-auto object-contain shrink-0"
-            />
+        {actionNotice && (
+          <div className="toast toast-ok mb-6" role="status">
+            <span className="dot mt-1" style={{ "--track": trackOf("approved") }} />
+            <p className="text-sm font-medium text-ink">{actionNotice}</p>
+          </div>
+        )}
+
+        <PageHero
+          eyebrow="Overview"
+          title="Teacher"
+          accent="Portal"
+          subtitle={`Welcome back, ${profile?.name || "Teacher"}. Manage your campus events and proposals from one place.`}
+          actions={
+            <Link to="/teacher/create-event" className="btn btn-primary">
+              <IconPlus />
+              Create New Event
+            </Link>
+          }
+        />
+
+        {/* ------------------------------------------------ summary cards
+            Compact on this page: label and icon on one line, the count and
+            its link on the next. `stat-card` is shared with the Dean and
+            Super Admin dashboards, so the tightening is local utilities. */}
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          {summaryCards.map((card, i) => (
+            <Link
+              key={card.key}
+              to={`/teacher/my-events?filter=${card.key}`}
+              style={{ "--track": card.track, "--i": i + 1 }}
+              className="stat-card reveal group rounded-2xl p-3.5 sm:p-4"
+            >
+              <div className="relative flex items-center justify-between gap-2">
+                <p className="truncate text-xs font-medium text-muted sm:text-sm">{card.label}</p>
+                <span className="icon-tile icon-tile-track h-8 w-8 rounded-lg [&>svg]:h-4 [&>svg]:w-4">
+                  <card.Icon />
+                </span>
+              </div>
+
+              <div className="relative mt-1.5 flex items-end justify-between gap-2">
+                <p
+                  className="stat-num text-[1.75rem] sm:text-[2rem]"
+                  style={{ color: card.track }}
+                >
+                  {card.value}
+                </p>
+                <span className="mb-1 hidden items-center gap-1 text-xs font-semibold text-muted transition group-hover:text-ink sm:inline-flex">
+                  {card.hint}
+                  <IconArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                </span>
+              </div>
+            </Link>
+          ))}
+        </div>
+
+        {/* ------------------------------------------------- recent events
+            Same 1.5rem gap as hero -> cards, so the three blocks sit on one
+            even rhythm. */}
+        <section className="glass mt-6 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b hairline px-5 py-5 sm:px-6">
             <div>
-              <h1 className="font-display text-lg font-semibold leading-tight text-[#101A33]">
-                Campus Capture
-              </h1>
-              <p className="text-xs font-medium text-slate-400">
-                Swami Rama Himalayan University
+              <p className="eyebrow">Activity</p>
+              <h2 className="h3 mt-1 text-ink">Recent Events</h2>
+              <p className="prose-muted mt-0.5 text-sm">
+                Your recently created, modified, or submitted events
               </p>
             </div>
+
+            <Link to="/teacher/my-events" className="btn btn-ghost btn-sm">
+              View All Events
+              <IconArrowRight />
+            </Link>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#101A33] text-sm font-semibold text-white">
-                {(profile?.name || "T").charAt(0).toUpperCase()}
-              </div>
-              <div className="hidden sm:block">
-                <p className="text-sm font-semibold leading-tight text-slate-800">
-                  {profile?.name || "Teacher"}
-                </p>
-                <p className="text-xs leading-tight text-slate-400">Teacher</p>
-              </div>
-            </div>
-
-            <div className="relative">
-              <NotificationBell currentUser={profile} />
-            </div>
-
-            <div className="hidden h-8 w-px bg-slate-200 sm:block"></div>
-
-            <button
-              onClick={handleLogout}
-              className="inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
-            >
-              <IconLogout />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div className="flex">
-        {/* Sidebar */}
-        <aside className="sticky top-[76px] hidden h-[calc(100vh-76px)] w-64 shrink-0 flex-col bg-gradient-to-b from-[#101A33] to-[#1B2748] px-4 py-6 md:flex">
-          <nav className="space-y-1.5">
-            <Link
-              to="/teacher/dashboard"
-              className="flex items-center gap-3 rounded-lg border-l-[3px] border-[#D4AF6A] bg-white/10 px-4 py-3 text-sm font-semibold text-white"
-            >
-              <IconGrid />
-              Dashboard
-            </Link>
-
-            <Link
-              to="/teacher/create-event"
-              className="flex items-center gap-3 rounded-lg border-l-[3px] border-transparent px-4 py-3 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white"
-            >
-              <IconPlus className="h-[18px] w-[18px]" />
-              Create Event
-            </Link>
-
-            <Link
-              to="/teacher/my-events"
-              className="flex items-center gap-3 rounded-lg border-l-[3px] border-transparent px-4 py-3 text-sm font-medium text-slate-300 transition hover:bg-white/5 hover:text-white"
-            >
-              <IconList />
-              My Events
-            </Link>
-          </nav>
-
-          <div className="mt-auto rounded-xl border border-white/10 bg-white/5 p-4">
-            <p className="text-xs leading-relaxed text-slate-300">
-              Review event status, duplicate previous proposals, or submit new ones.
-            </p>
-          </div>
-        </aside>
-
-        {/* Main Content */}
-        <main className="flex-1 px-5 py-8 lg:px-10">
-          {/* Action notification toast */}
-          {actionNotice && (
-            <div className="mb-6 flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-              <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-              <p className="text-sm font-medium text-emerald-800">{actionNotice}</p>
-            </div>
-          )}
-
-          {/* Hero Header */}
-          <div
-            style={{ animation: "ccFadeUp 0.5s ease-out both" }}
-            className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#101A33] via-[#182449] to-[#1B2748] p-7 sm:p-9"
-          >
-            <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full border border-white/10"></div>
-            <div className="pointer-events-none absolute -right-6 -top-6 h-40 w-40 rounded-full border border-[#D4AF6A]/20"></div>
-
-            <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#D4AF6A]">
-                  Overview
-                </p>
-                <h2 className="font-display mt-2 text-3xl font-semibold text-white sm:text-4xl">
-                  Teacher Portal
-                </h2>
-                <p className="mt-2 text-sm text-slate-300">
-                  Welcome back, {profile?.name || "Teacher"}. Manage your campus events and proposals.
-                </p>
-              </div>
-
-              <Link
-                to="/teacher/create-event"
-                className="inline-flex w-fit items-center gap-2 rounded-xl bg-[#D4AF6A] px-5 py-3 text-sm font-semibold text-[#101A33] shadow-lg shadow-black/20 transition hover:bg-[#c79a54]"
-              >
+          {recentCombinedList.length === 0 ? (
+            <div className="flex flex-col items-center px-6 py-16 text-center">
+              <span className="icon-tile mb-4 h-14 w-14 rounded-2xl">
+                <IconInbox className="h-6 w-6" />
+              </span>
+              <p className="h3 text-ink">Nothing here yet</p>
+              <p className="prose-muted mt-1 text-sm">
+                No events submitted or saved yet.
+              </p>
+              <Link to="/teacher/create-event" className="btn btn-primary mt-6">
                 <IconPlus />
-                Create New Event
+                Create Your First Event
               </Link>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Phone: a table cannot carry this much context at 390px, so
+                  each event becomes a card. */}
+              <ul className="divide-y divide-line/8 md:hidden">
+                {recentCombinedList.slice(0, 6).map((item) => (
+                  <li key={item.id} className="px-5 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 truncate font-display text-sm font-semibold text-ink">
+                        {item.event_name || item.eventName || "Untitled Draft"}
+                      </p>
+                      <StatusChip status={item.status} />
+                    </div>
+                    <p className="prose-muted mt-1 text-xs">
+                      {[item.event_date || item.eventDate, item.location]
+                        .filter(Boolean)
+                        .join(" · ") || "Nothing set yet"}
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                      <RowActions
+                        item={item}
+                        onDuplicate={handleDuplicate}
+                        onDelete={setDeletingEvent}
+                        onTrack={setTrackingEvent}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
 
-          {/* Statistics - Clickable Summary Cards */}
-          <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {/* Total Events */}
-            <Link
-              to="/teacher/my-events?filter=all"
-              className="group relative block overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md transition-all hover:-translate-y-0.5 hover:border-slate-400 hover:shadow-lg"
-            >
-              <div className="absolute inset-y-0 left-0 w-1 bg-[#101A33] transition-all group-hover:w-1.5"></div>
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-500 group-hover:text-slate-700">Total Events</p>
-                  <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-slate-900">
-                    {totalEvents}
-                  </h3>
-                  <p className="mt-2 text-xs font-semibold text-slate-400 group-hover:text-[#101A33]">
-                    View all events →
-                  </p>
-                </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#101A33]/5 text-[#101A33] transition group-hover:bg-[#101A33] group-hover:text-white">
-                  <IconLayers />
-                </div>
-              </div>
-            </Link>
-
-            {/* Pending */}
-            <Link
-              to="/teacher/my-events?filter=pending"
-              className="group relative block overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md transition-all hover:-translate-y-0.5 hover:border-amber-400 hover:shadow-lg"
-            >
-              <div className="absolute inset-y-0 left-0 w-1 bg-amber-500 transition-all group-hover:w-1.5"></div>
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-500 group-hover:text-amber-700">Pending</p>
-                  <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-amber-600">
-                    {pendingEvents}
-                  </h3>
-                  <p className="mt-2 text-xs font-semibold text-amber-500 group-hover:text-amber-700">
-                    View pending events →
-                  </p>
-                </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 transition group-hover:bg-amber-500 group-hover:text-white">
-                  <IconClock />
-                </div>
-              </div>
-            </Link>
-
-            {/* Approved */}
-            <Link
-              to="/teacher/my-events?filter=approved"
-              className="group relative block overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md transition-all hover:-translate-y-0.5 hover:border-emerald-400 hover:shadow-lg"
-            >
-              <div className="absolute inset-y-0 left-0 w-1 bg-emerald-500 transition-all group-hover:w-1.5"></div>
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-500 group-hover:text-emerald-700">Approved</p>
-                  <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-emerald-600">
-                    {approvedEvents}
-                  </h3>
-                  <p className="mt-2 text-xs font-semibold text-emerald-500 group-hover:text-emerald-700">
-                    View approved events →
-                  </p>
-                </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 transition group-hover:bg-emerald-500 group-hover:text-white">
-                  <IconCheckCircle />
-                </div>
-              </div>
-            </Link>
-
-            {/* Rejected */}
-            <Link
-              to="/teacher/my-events?filter=rejected"
-              className="group relative block overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-md transition-all hover:-translate-y-0.5 hover:border-rose-400 hover:shadow-lg"
-            >
-              <div className="absolute inset-y-0 left-0 w-1 bg-rose-500 transition-all group-hover:w-1.5"></div>
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-500 group-hover:text-rose-700">Rejected</p>
-                  <h3 className="font-display mt-1.5 text-[32px] font-semibold leading-none text-rose-600">
-                    {rejectedEvents}
-                  </h3>
-                  <p className="mt-2 text-xs font-semibold text-rose-500 group-hover:text-rose-700">
-                    View rejected events →
-                  </p>
-                </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-600 transition group-hover:bg-rose-500 group-hover:text-white">
-                  <IconXCircle />
-                </div>
-              </div>
-            </Link>
-          </div>
-
-          {/* Section 6: Dynamic Recent Events Table */}
-          <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-md">
-            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
-              <div>
-                <h3 className="font-display text-lg font-semibold text-slate-900">
-                  Recent Events
-                </h3>
-                <p className="mt-0.5 text-sm text-slate-500">
-                  Your recently created, modified, or submitted events
-                </p>
-              </div>
-
-              <Link
-                to="/teacher/my-events"
-                className="inline-flex items-center gap-1 text-sm font-semibold text-[#101A33] transition hover:text-[#c79a54]"
-              >
-                View All Events
-                <IconArrowRight />
-              </Link>
-            </div>
-
-            {recentCombinedList.length === 0 ? (
-              <div className="flex flex-col items-center px-6 py-16 text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-                  <IconInbox />
-                </div>
-                <p className="text-sm font-medium text-slate-500">No events submitted or saved yet.</p>
-                <Link
-                  to="/teacher/create-event"
-                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#101A33] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1B2748]"
-                >
-                  <IconPlus />
-                  Create Your First Event
-                </Link>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
+              <div className="hidden overflow-x-auto md:block">
                 <table className="w-full text-left">
                   <thead>
-                    <tr className="border-b border-slate-100 bg-slate-50/50">
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                        Event
-                      </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                        Date
-                      </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                        Venue
-                      </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                        Status
-                      </th>
-                      <th className="px-6 py-4 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">
-                        Action
-                      </th>
+                    <tr className="border-b hairline bg-raised/45">
+                      {TABLE_COLUMNS.map((column) => (
+                        <th
+                          key={column}
+                          className={`whitespace-nowrap px-5 py-3.5 text-[11px] font-semibold uppercase tracking-[.12em] text-muted ${
+                            column === "Action" ? "text-right" : ""
+                          }`}
+                        >
+                          {column}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
 
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-line/8">
                     {recentCombinedList.slice(0, 6).map((item) => {
                       const { description: cleanDesc } = decodeEventMetadata(item.description || "");
-                      const canEdit = item.status === "draft" || item.status === "rejected";
-                      const canDelete = item.status === "draft" || item.status === "pending" || item.status === "submitted" || item.status === "rejected";
 
                       return (
-                        <tr key={item.id} className="transition hover:bg-slate-50/80">
-                          {/* 1. Event Column */}
-                          <td className="px-6 py-4">
-                            <p className="font-semibold text-slate-900">
+                        <tr key={item.id} className="transition hover:bg-raised/35">
+                          <td className="max-w-72 px-5 py-3.5">
+                            <p className="truncate font-display text-sm font-semibold text-ink">
                               {item.event_name || item.eventName || "Untitled Draft"}
                             </p>
-                            <p className="mt-0.5 max-w-xs truncate text-xs text-slate-400">
+                            <p className="truncate text-xs text-muted">
                               {cleanDesc || item.event_type || "No description"}
                             </p>
                           </td>
 
-                          {/* 2. Date Column */}
-                          <td className="px-6 py-4 text-sm text-slate-600">
-                            {item.event_date || item.eventDate || <span className="italic text-slate-400">Not set</span>}
+                          <td className="whitespace-nowrap px-5 py-3.5 text-sm text-muted">
+                            {item.event_date || item.eventDate || <NotSet />}
                           </td>
 
-                          {/* 3. Venue Column */}
-                          <td className="px-6 py-4 text-sm text-slate-600">
-                            {item.location || <span className="italic text-slate-400">Not set</span>}
-                          </td>
-
-                          {/* 4. Status Column */}
-                          <td className="px-6 py-4">
-                            <span
-                              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${getStatusClass(
-                                item.status
-                              )}`}
-                            >
-                              <span className={`h-1.5 w-1.5 rounded-full ${getStatusDot(item.status)}`}></span>
-                              {getStatusLabel(item.status)}
+                          <td className="max-w-48 px-5 py-3.5 text-sm text-muted">
+                            <span className="block truncate">
+                              {item.location || <NotSet />}
                             </span>
                           </td>
 
-                          {/* 5. Action Column (View, Edit, Duplicate, Delete, Track Status) */}
-                          <td className="px-6 py-4 text-right">
+                          <td className="whitespace-nowrap px-5 py-3.5">
+                            <StatusChip status={item.status} />
+                          </td>
+
+                          <td className="whitespace-nowrap px-5 py-3.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {/* View Action */}
-                              {!item.isDraft ? (
-                                <Link
-                                  to={`/teacher/events/${item.id}`}
-                                  title="View Event Details"
-                                  className="rounded-lg border border-slate-200 p-1.5 text-slate-600 transition hover:border-[#101A33] hover:bg-[#101A33] hover:text-white"
-                                >
-                                  <IconEye />
-                                </Link>
-                              ) : (
-                                <Link
-                                  to={`/teacher/create-event?draftId=${item.id}`}
-                                  title="View & Edit Draft"
-                                  className="rounded-lg border border-slate-200 p-1.5 text-slate-600 transition hover:border-[#101A33] hover:bg-[#101A33] hover:text-white"
-                                >
-                                  <IconEye />
-                                </Link>
-                              )}
-
-                              {/* Edit Action (permitted only for draft and rejected) */}
-                              {canEdit ? (
-                                <Link
-                                  to={
-                                    item.isDraft
-                                      ? `/teacher/create-event?draftId=${item.id}`
-                                      : `/teacher/create-event?editEventId=${item.id}`
-                                  }
-                                  title="Edit Event"
-                                  className="rounded-lg border border-slate-200 p-1.5 text-slate-600 transition hover:border-amber-500 hover:bg-amber-50 hover:text-amber-700"
-                                >
-                                  <IconEdit />
-                                </Link>
-                              ) : (
-                                <span
-                                  title="Editing is not permitted in this approval status"
-                                  className="cursor-not-allowed rounded-lg border border-slate-100 p-1.5 text-slate-300"
-                                >
-                                  <IconEdit />
-                                </span>
-                              )}
-
-                              {/* Duplicate Action */}
-                              <button
-                                type="button"
-                                onClick={() => handleDuplicate(item)}
-                                title="Duplicate as new Draft"
-                                className="rounded-lg border border-slate-200 p-1.5 text-slate-600 transition hover:border-[#D4AF6A] hover:bg-[#D4AF6A]/10 hover:text-[#101A33]"
-                              >
-                                <IconCopy />
-                              </button>
-
-                              {/* Delete Action (if permitted) */}
-                              {canDelete ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setDeletingEvent(item)}
-                                  title="Delete Event"
-                                  className="rounded-lg border border-slate-200 p-1.5 text-slate-600 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600"
-                                >
-                                  <IconTrash />
-                                </button>
-                              ) : (
-                                <span
-                                  title="Approved/Published events cannot be deleted"
-                                  className="cursor-not-allowed rounded-lg border border-slate-100 p-1.5 text-slate-300"
-                                >
-                                  <IconTrash />
-                                </span>
-                              )}
-
-                              {/* Track Status Action */}
-                              <button
-                                type="button"
-                                onClick={() => setTrackingEvent(item)}
-                                title="Track Approval Status"
-                                className="rounded-lg border border-slate-200 p-1.5 text-slate-600 transition hover:border-sky-500 hover:bg-sky-50 hover:text-sky-700"
-                              >
-                                <IconActivity />
-                              </button>
+                              <RowActions
+                                item={item}
+                                onDuplicate={handleDuplicate}
+                                onDelete={setDeletingEvent}
+                                onTrack={setTrackingEvent}
+                              />
                             </div>
                           </td>
                         </tr>
@@ -741,212 +378,220 @@ function TeacherDashboard() {
                   </tbody>
                 </table>
               </div>
-            )}
-          </div>
-        </main>
+            </>
+          )}
+        </section>
       </div>
 
-      {/* Delete Confirmation Modal */}
-      {deletingEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-rose-50 text-rose-600">
-                <IconAlertTriangle />
-              </div>
-              <div>
-                <h4 className="font-display text-lg font-semibold text-slate-900">
-                  Delete Event
-                </h4>
-                <p className="text-xs text-slate-500">
-                  {deletingEvent.isDraft ? "Draft Event Deletion" : "Submitted Event Deletion"}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-3.5">
-              <p className="text-sm font-semibold text-slate-800">
-                {deletingEvent.event_name || deletingEvent.eventName || "Untitled Event"}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Venue: {deletingEvent.location || "Not set"} • Date: {deletingEvent.event_date || deletingEvent.eventDate || "Not set"}
-              </p>
-            </div>
-
-            <p className="mt-3 text-sm text-slate-600">
-              Are you sure you want to delete this event? This action will permanently remove it from your records.
+      {/* ------------------------------------------------------ delete modal */}
+      <Modal
+        open={Boolean(deletingEvent)}
+        onClose={() => !deletingLoading && setDeletingEvent(null)}
+        eyebrow="Confirm"
+        title="Delete Event"
+        subtitle={
+          deletingEvent?.isDraft ? "Draft event deletion" : "Submitted event deletion"
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setDeletingEvent(null)}
+              disabled={deletingLoading}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDelete}
+              disabled={deletingLoading}
+              className="btn btn-danger btn-sm"
+            >
+              {deletingLoading && <span className="spin h-3.5 w-3.5" />}
+              {deletingLoading ? "Deleting…" : "Delete Event"}
+            </button>
+          </>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <span
+            className="icon-tile icon-tile-track"
+            style={{ "--track": trackOf("rejected") }}
+          >
+            <IconAlertTriangle />
+          </span>
+          <div className="min-w-0">
+            <p className="font-display text-sm font-semibold text-ink">
+              {deletingEvent?.event_name || deletingEvent?.eventName || "Untitled Event"}
             </p>
-
-            <div className="mt-6 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setDeletingEvent(null)}
-                disabled={deletingLoading}
-                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDelete}
-                disabled={deletingLoading}
-                className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-5 py-2 text-sm font-semibold text-white shadow transition hover:bg-rose-700"
-              >
-                {deletingLoading ? "Deleting..." : "Delete Event"}
-              </button>
-            </div>
+            <p className="prose-muted mt-1 text-xs">
+              Venue: {deletingEvent?.location || "Not set"} · Date:{" "}
+              {deletingEvent?.event_date || deletingEvent?.eventDate || "Not set"}
+            </p>
           </div>
         </div>
-      )}
 
-      {/* Track Status Modal */}
-      {trackingEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-7 shadow-2xl">
-            <div className="flex items-start justify-between">
-              <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-[#D4AF6A]">
-                  Status Tracking
-                </span>
-                <h4 className="font-display mt-1 text-xl font-semibold text-slate-900">
-                  {trackingEvent.event_name || trackingEvent.eventName || "Untitled Event"}
-                </h4>
-                <p className="text-xs text-slate-500">
-                  Date: {trackingEvent.event_date || trackingEvent.eventDate || "Not set"} • Location: {trackingEvent.location || "Not set"}
-                </p>
-              </div>
+        <p className="prose-muted mt-4 text-sm">
+          Are you sure you want to delete this event? This will permanently remove it
+          from your records.
+        </p>
+      </Modal>
 
-              <button
-                type="button"
-                onClick={() => setTrackingEvent(null)}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+      {/* ------------------------------------------------------- track modal */}
+      <Modal
+        open={Boolean(trackingEvent)}
+        onClose={() => setTrackingEvent(null)}
+        wide
+        eyebrow="Status Tracking"
+        title={trackingEvent?.event_name || trackingEvent?.eventName || "Untitled Event"}
+        subtitle={`Date: ${trackingEvent?.event_date || trackingEvent?.eventDate || "Not set"} · Location: ${trackingEvent?.location || "Not set"}`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setTrackingEvent(null)}
+              className="btn btn-ghost btn-sm mr-auto"
+            >
+              Close
+            </button>
+
+            {trackingEvent?.status === "rejected" && (
+              <Link
+                to={`/teacher/create-event?editEventId=${trackingEvent.id}`}
+                className="btn btn-danger btn-sm"
               >
-                <IconX className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Rejection notice if rejected */}
-            {trackingEvent.status === "rejected" && (
-              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3.5">
-                <div className="flex items-start gap-2.5">
-                  <IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
-                  <div>
-                    <p className="text-xs font-semibold text-rose-900">Rejection Reason:</p>
-                    <p className="mt-0.5 text-xs text-rose-700">
-                      {trackingEvent.rejection_reason || "No explicit rejection reason provided."}
-                    </p>
-                  </div>
-                </div>
-              </div>
+                <IconEdit />
+                Edit &amp; Resubmit
+              </Link>
             )}
 
-            {/* Visual Lifecycle Stages */}
-            <div className="mt-7">
-              {(() => {
-                const status = trackingEvent.status || "pending";
-                const isRejected = status === "rejected";
-                const steps = [
-                  { id: "draft", label: "Draft" },
-                  { id: "submitted", label: "Submitted" },
-                  { id: "under_review", label: "Under Review" },
-                  { id: isRejected ? "rejected" : "approved", label: isRejected ? "Rejected" : "Approved" },
-                  { id: "published", label: "Published" },
-                ];
-
-                let currentIdx = 0;
-                if (status === "submitted" || status === "pending") currentIdx = 1;
-                if (status === "under_review") currentIdx = 2;
-                if (status === "approved" || isRejected) currentIdx = 3;
-                if (status === "published") currentIdx = 4;
-
-                return (
-                  <div className="relative flex items-center justify-between">
-                    <div className="absolute left-0 top-1/2 h-0.5 w-full -translate-y-1/2 bg-slate-200"></div>
-
-                    {steps.map((step, idx) => {
-                      const isPast = idx < currentIdx;
-                      const isCurrent = idx === currentIdx;
-
-                      let stepBg = "bg-slate-100 border-slate-300 text-slate-400";
-                      let icon = <span className="text-xs font-bold">{idx + 1}</span>;
-
-                      if (isPast) {
-                        stepBg = "bg-emerald-600 border-emerald-600 text-white";
-                        icon = <IconCheck className="h-4 w-4" />;
-                      } else if (isCurrent) {
-                        if (step.id === "rejected") {
-                          stepBg = "bg-rose-600 border-rose-600 text-white ring-4 ring-rose-100";
-                          icon = <IconX className="h-4 w-4" />;
-                        } else if (step.id === "approved" || step.id === "published") {
-                          stepBg = "bg-emerald-600 border-emerald-600 text-white ring-4 ring-emerald-100";
-                          icon = <IconCheck className="h-4 w-4" />;
-                        } else {
-                          stepBg = "bg-[#101A33] border-[#101A33] text-white ring-4 ring-slate-200";
-                        }
-                      }
-
-                      return (
-                        <div key={step.id} className="relative z-10 flex flex-col items-center">
-                          <div className={`flex h-8 w-8 items-center justify-center rounded-full border-2 ${stepBg}`}>
-                            {icon}
-                          </div>
-                          <span
-                            className={`mt-2 text-[11px] font-semibold ${
-                              isCurrent
-                                ? step.id === "rejected"
-                                  ? "text-rose-600"
-                                  : "text-[#101A33]"
-                                : isPast
-                                ? "text-slate-800"
-                                : "text-slate-400"
-                            }`}
-                          >
-                            {step.label}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Actions inside Modal */}
-            <div className="mt-8 flex items-center justify-between border-t border-slate-100 pt-5">
-              <button
-                type="button"
-                onClick={() => setTrackingEvent(null)}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-              >
-                Close
-              </button>
-
-              <div className="flex items-center gap-2">
-                {trackingEvent.status === "rejected" && (
-                  <Link
-                    to={`/teacher/create-event?editEventId=${trackingEvent.id}`}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-rose-700"
-                  >
-                    <IconEdit className="h-3.5 w-3.5" />
-                    Edit & Resubmit
-                  </Link>
-                )}
-
-                {!trackingEvent.isDraft && (
-                  <Link
-                    to={`/teacher/events/${trackingEvent.id}`}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#101A33] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#1B2748]"
-                  >
-                    View Full Details
-                    <IconArrowRight className="h-3.5 w-3.5" />
-                  </Link>
-                )}
-              </div>
+            {trackingEvent && !trackingEvent.isDraft && (
+              <Link to={`/teacher/events/${trackingEvent.id}`} className="btn btn-brand btn-sm">
+                View Full Details
+                <IconArrowRight />
+              </Link>
+            )}
+          </>
+        }
+      >
+        {trackingEvent?.status === "rejected" && (
+          <div
+            className="mb-6 flex items-start gap-3 rounded-xl border p-3.5"
+            style={{
+              "--track": trackOf("rejected"),
+              borderColor: "color-mix(in srgb, var(--track) 30%, transparent)",
+              background: "color-mix(in srgb, var(--track) 9%, transparent)",
+            }}
+          >
+            <IconAlertTriangle
+              className="mt-0.5 h-4 w-4 shrink-0"
+              style={{ color: trackOf("rejected") }}
+            />
+            <div>
+              <p className="text-xs font-semibold text-ink">Rejection reason</p>
+              <p className="prose-muted mt-0.5 text-xs">
+                {trackingEvent.rejection_reason || "No explicit rejection reason provided."}
+              </p>
             </div>
           </div>
-        </div>
+        )}
+
+        <Lifecycle status={trackingEvent?.status || "pending"} />
+      </Modal>
+    </TeacherShell>
+  );
+}
+
+const NotSet = () => <span className="italic text-muted/70">Not set</span>;
+
+/**
+ * The five things a teacher can do to a row. Shared by the phone card list and
+ * the desktop table so the two can never offer different actions.
+ */
+function RowActions({ item, onDuplicate, onDelete, onTrack }) {
+  // Editable until the Dean approves it; mirrors the RLS policy.
+  const canEdit = item.isDraft || canTeacherEditEvent(item);
+  const canDelete = item.isDraft || canTeacherEditEvent(item);
+
+  const viewTo = item.isDraft
+    ? `/teacher/create-event?draftId=${item.id}`
+    : `/teacher/events/${item.id}`;
+
+  const editTo = item.isDraft
+    ? `/teacher/create-event?draftId=${item.id}`
+    : `/teacher/create-event?editEventId=${item.id}`;
+
+  return (
+    <>
+      <Link
+        to={viewTo}
+        title={item.isDraft ? "View & edit draft" : "View event details"}
+        aria-label={item.isDraft ? "View and edit draft" : "View event details"}
+        className="icon-btn icon-btn-sm"
+      >
+        <IconEye />
+      </Link>
+
+      {canEdit ? (
+        <Link
+          to={editTo}
+          title="Edit event"
+          aria-label="Edit event"
+          className="icon-btn icon-btn-sm hover:border-emberink/50 hover:text-emberink"
+        >
+          <IconEdit />
+        </Link>
+      ) : (
+        <span
+          title="Editing is not permitted in this approval status"
+          className="icon-btn icon-btn-sm cursor-not-allowed opacity-40"
+          aria-hidden="true"
+        >
+          <IconEdit />
+        </span>
       )}
-    </div>
+
+      <button
+        type="button"
+        onClick={() => onDuplicate(item)}
+        title="Duplicate as new draft"
+        aria-label="Duplicate as new draft"
+        className="icon-btn icon-btn-sm hover:border-ember/60 hover:text-emberink"
+      >
+        <IconCopy />
+      </button>
+
+      {canDelete ? (
+        <button
+          type="button"
+          onClick={() => onDelete(item)}
+          title="Delete event"
+          aria-label="Delete event"
+          className="icon-btn icon-btn-sm hover:border-err/50 hover:text-err"
+        >
+          <IconTrash />
+        </button>
+      ) : (
+        <span
+          title="Approved events cannot be deleted"
+          className="icon-btn icon-btn-sm cursor-not-allowed opacity-40"
+          aria-hidden="true"
+        >
+          <IconTrash />
+        </span>
+      )}
+
+      <button
+        type="button"
+        onClick={() => onTrack(item)}
+        title="Track approval status"
+        aria-label="Track approval status"
+        className="icon-btn icon-btn-sm hover:border-accent/60 hover:text-accent"
+      >
+        <IconActivity />
+      </button>
+    </>
   );
 }
 

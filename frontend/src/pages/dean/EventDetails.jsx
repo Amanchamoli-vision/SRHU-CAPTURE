@@ -1,8 +1,47 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { supabase } from "../../services/supabase";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { fetchCurrentUser, getSession as getStoredSession, signOut } from "../../services/auth";
 import { API_BASE_URL } from "../../services/api";
-import Navbar from "../../components/Navbar";
+import DeanShell from "../../components/dean/DeanShell";
+import Modal from "../../components/teacher/Modal";
+import PageHero from "../../components/teacher/PageHero";
+import ProgressTimeline from "../../components/teacher/ProgressTimeline";
+import StatusChip from "../../components/teacher/StatusChip";
+import { trackOf } from "../../components/teacher/status";
+import {
+  IconAlertTriangle,
+  IconArrowLeft,
+  IconArrowRight,
+  IconBuilding,
+  IconCalendar,
+  IconCheck,
+  IconCheckCircle,
+  IconClock,
+  IconDownload,
+  IconExternalLink,
+  IconFileText,
+  IconImagePlus,
+  IconMapPin,
+  IconPhone,
+  IconRefresh,
+  IconShield,
+  IconTag,
+  IconUser,
+  IconUsers,
+  IconX,
+  RidgeDivider,
+} from "../../components/teacher/icons";
+import {
+  canApproveEvent,
+  canRejectEvent,
+  getApproveLabel,
+  getNextStage,
+  getPreviousStage,
+  getRejectLabel,
+  getStatusBucket,
+  isRejected,
+} from "../../utils/constants";
+import { decodeEventMetadata } from "../../utils/draftStorage";
 
 function EventDetails() {
   const { eventId } = useParams();
@@ -11,6 +50,9 @@ function EventDetails() {
   const [event, setEvent] = useState(null);
   const [media, setMedia] = useState([]);
   const [documents, setDocuments] = useState([]);
+
+  // Signed-in Dean, used for the shell's account blocks.
+  const [deanProfile, setDeanProfile] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -25,14 +67,24 @@ function EventDetails() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // Media / documents share one panel so they cost one card, not two.
+  const [activeTab, setActiveTab] = useState("media");
+
+  // Advancing through the post-approval delivery stages.
+  const [stageSaving, setStageSaving] = useState(false);
+
+  // The decision being confirmed: "approve" | "reject". A themed dialog rather
+  // than window.confirm / window.prompt, matching the All Events screen.
+  const [decisionKind, setDecisionKind] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [reasonError, setReasonError] = useState("");
+
   // ============================================================
   // GET SESSION
   // ============================================================
 
   const getSession = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const session = getStoredSession();
 
     if (!session?.access_token) {
       navigate("/login");
@@ -55,28 +107,21 @@ function EventDetails() {
 
       if (!session) return;
 
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      const response = await fetch(`${API_BASE_URL}/dean/events`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail || "Failed to load event"
-        );
+        throw new Error(data.detail || "Failed to load event");
       }
 
-      const foundEvent = (data.events || []).find(
-        (item) => item.id === eventId
-      );
+      const foundEvent = (data.events || []).find((item) => item.id === eventId);
 
       if (!foundEvent) {
         throw new Error("Event not found");
@@ -84,30 +129,17 @@ function EventDetails() {
 
       setEvent(foundEvent);
 
-      setSocialNetworkUrl(
-        foundEvent.social_network_url || ""
-      );
+      setSocialNetworkUrl(foundEvent.social_network_url || "");
 
-      await loadMedia(
-        eventId,
-        session.access_token
-      );
+      await loadMedia(eventId, session.access_token);
 
-      await loadDocuments(
-        eventId,
-        session.access_token
-      );
+      await loadDocuments(eventId, session.access_token);
 
-      await loadReportStatus(
-        eventId,
-        session.access_token
-      );
+      await loadReportStatus(eventId, session.access_token);
     } catch (err) {
       console.error("Load event error:", err);
 
-      setError(
-        err.message || "Failed to load event details"
-      );
+      setError(err.message || "Failed to load event details");
     } finally {
       setLoading(false);
     }
@@ -119,16 +151,13 @@ function EventDetails() {
 
   const loadMedia = async (id, accessToken) => {
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${id}/media`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      const response = await fetch(`${API_BASE_URL}/dean/events/${id}/media`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      });
 
       if (!response.ok) {
         setMedia([]);
@@ -150,16 +179,13 @@ function EventDetails() {
 
   const loadDocuments = async (id, accessToken) => {
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${id}/documents`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      const response = await fetch(`${API_BASE_URL}/dean/events/${id}/documents`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      });
 
       if (!response.ok) {
         setDocuments([]);
@@ -179,10 +205,7 @@ function EventDetails() {
   // LOAD REPORT STATUS
   // ============================================================
 
-  const loadReportStatus = async (
-    id,
-    accessToken
-  ) => {
+  const loadReportStatus = async (id, accessToken) => {
     try {
       const response = await fetch(
         `${API_BASE_URL}/dean/events/${id}/report-status`,
@@ -201,24 +224,15 @@ function EventDetails() {
 
       const data = await response.json();
 
-      setReportGenerated(
-        Boolean(data.report_generated)
-      );
+      setReportGenerated(Boolean(data.report_generated));
 
-      setGeneratedAt(
-        data.generated_at || null
-      );
+      setGeneratedAt(data.generated_at || null);
 
       if (data.social_network_url) {
-        setSocialNetworkUrl(
-          data.social_network_url
-        );
+        setSocialNetworkUrl(data.social_network_url);
       }
     } catch (err) {
-      console.error(
-        "Load report status error:",
-        err
-      );
+      console.error("Load report status error:", err);
     }
   };
 
@@ -230,18 +244,49 @@ function EventDetails() {
     loadEvent();
   }, [eventId]);
 
+  useEffect(() => {
+    let mounted = true;
+
+    fetchCurrentUser()
+      .then((data) => {
+        // Non-blocking: the shell falls back to a neutral initial.
+        if (mounted && data) setDeanProfile(data);
+      })
+      .catch((err) => console.error("Load dean profile error:", err));
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate("/login");
+  };
+
+  // ============================================================
+  // OPEN / CLOSE A DECISION
+  // ============================================================
+
+  const openDecision = (kind) => {
+    setDecisionKind(kind);
+    setRejectReason("");
+    setReasonError("");
+  };
+
+  const closeDecision = () => {
+    if (processing) return; // never abandon a request mid-flight
+    setDecisionKind(null);
+    setRejectReason("");
+    setReasonError("");
+  };
+
   // ============================================================
   // APPROVE EVENT
   // ============================================================
 
-  const handleApprove = async () => {
+  const confirmApprove = async () => {
     if (!event) return;
-
-    const confirmed = window.confirm(
-      `Are you sure you want to approve "${event.event_name}"?`
-    );
-
-    if (!confirmed) return;
 
     try {
       setProcessing(true);
@@ -266,33 +311,21 @@ function EventDetails() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail || "Failed to approve event"
-        );
+        throw new Error(data.detail || "Failed to approve event");
       }
 
       setEvent(data.event);
 
-      setSuccess(
-        data.message ||
-          "Event approved successfully."
-      );
+      setSuccess(data.message || "Event approved successfully.");
+      setDecisionKind(null);
 
       // Refresh report status after approval
-      await loadReportStatus(
-        event.id,
-        session.access_token
-      );
+      await loadReportStatus(event.id, session.access_token);
     } catch (err) {
-      console.error(
-        "Approve event error:",
-        err
-      );
+      console.error("Approve event error:", err);
 
-      setError(
-        err.message ||
-          "Failed to approve event"
-      );
+      setError(err.message || "Failed to approve event");
+      setDecisionKind(null);
     } finally {
       setProcessing(false);
     }
@@ -302,14 +335,13 @@ function EventDetails() {
   // REJECT EVENT
   // ============================================================
 
-  const handleReject = async () => {
+  const confirmReject = async () => {
     if (!event) return;
 
-    const reason = window.prompt(
-      "Please enter the reason for rejecting this event:"
-    );
+    const reason = rejectReason.trim();
 
-    if (!reason || !reason.trim()) {
+    if (!reason) {
+      setReasonError("A reason is required — the teacher sees it verbatim.");
       return;
     }
 
@@ -317,6 +349,7 @@ function EventDetails() {
       setProcessing(true);
       setError("");
       setSuccess("");
+      setReasonError("");
 
       const session = await getSession();
 
@@ -324,7 +357,7 @@ function EventDetails() {
 
       const response = await fetch(
         `${API_BASE_URL}/dean/events/${event.id}/reject?rejection_reason=${encodeURIComponent(
-          reason.trim()
+          reason
         )}`,
         {
           method: "PATCH",
@@ -338,30 +371,71 @@ function EventDetails() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail ||
-            "Failed to reject event"
-        );
+        throw new Error(data.detail || "Failed to reject event");
       }
 
       setEvent(data.event);
 
-      setSuccess(
-        data.message ||
-          "Event rejected successfully."
-      );
-    } catch (err) {
-      console.error(
-        "Reject event error:",
-        err
-      );
+      setSuccess(data.message || "Event rejected successfully.");
+      setDecisionKind(null);
 
-      setError(
-        err.message ||
-          "Failed to reject event"
-      );
+      // Mirrors confirmApprove: keep report state in sync when the decision
+      // is revised without a page reload. report-status has no status gate.
+      await loadReportStatus(event.id, session.access_token);
+    } catch (err) {
+      console.error("Reject event error:", err);
+
+      setError(err.message || "Failed to reject event");
+      setDecisionKind(null);
     } finally {
       setProcessing(false);
+    }
+  };
+
+  // ============================================================
+  // CHANGE STAGE
+  // ============================================================
+
+  const handleChangeStage = async (stageKey) => {
+    if (!event) return;
+
+    try {
+      setStageSaving(true);
+      setError("");
+      setSuccess("");
+
+      const session = await getSession();
+
+      if (!session) return;
+
+      const response = await fetch(
+        `${API_BASE_URL}/dean/events/${event.id}/stage?stage=${encodeURIComponent(
+          stageKey
+        )}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to update the event stage");
+      }
+
+      setEvent(data.event);
+
+      setSuccess(data.message || "Event stage updated successfully.");
+    } catch (err) {
+      console.error("Change stage error:", err);
+
+      setError(err.message || "Failed to update the event stage");
+    } finally {
+      setStageSaving(false);
     }
   };
 
@@ -373,9 +447,7 @@ function EventDetails() {
     if (!event) return;
 
     if (!socialNetworkUrl.trim()) {
-      setError(
-        "Please enter a Social Network Link."
-      );
+      setError("Please enter a Social Network Link.");
       return;
     }
 
@@ -397,8 +469,7 @@ function EventDetails() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            social_network_url:
-              socialNetworkUrl.trim(),
+            social_network_url: socialNetworkUrl.trim(),
           }),
         }
       );
@@ -406,20 +477,14 @@ function EventDetails() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail ||
-            "Failed to save Social Network Link"
-        );
+        throw new Error(data.detail || "Failed to save Social Network Link");
       }
 
-      setSocialNetworkUrl(
-        data.social_network_url
-      );
+      setSocialNetworkUrl(data.social_network_url);
 
       setEvent((previous) => ({
         ...previous,
-        social_network_url:
-          data.social_network_url,
+        social_network_url: data.social_network_url,
       }));
 
       // Existing report becomes invalid
@@ -427,19 +492,11 @@ function EventDetails() {
       setReportGenerated(false);
       setGeneratedAt(null);
 
-      setSuccess(
-        "Social Network Link saved successfully."
-      );
+      setSuccess("Social Network Link saved successfully.");
     } catch (err) {
-      console.error(
-        "Save social link error:",
-        err
-      );
+      console.error("Save social link error:", err);
 
-      setError(
-        err.message ||
-          "Failed to save Social Network Link"
-      );
+      setError(err.message || "Failed to save Social Network Link");
     } finally {
       setSavingSocialLink(false);
     }
@@ -453,16 +510,12 @@ function EventDetails() {
     if (!event) return;
 
     if (event.status !== "approved") {
-      setError(
-        "Report can only be generated for an approved event."
-      );
+      setError("Report can only be generated for an approved event.");
       return;
     }
 
     if (!socialNetworkUrl.trim()) {
-      setError(
-        "Social Network Link is required before generating the report."
-      );
+      setError("Social Network Link is required before generating the report.");
       return;
     }
 
@@ -489,32 +542,18 @@ function EventDetails() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail ||
-            "Failed to generate report"
-        );
+        throw new Error(data.detail || "Failed to generate report");
       }
 
       setReportGenerated(true);
 
-      setGeneratedAt(
-        data.generated_at || null
-      );
+      setGeneratedAt(data.generated_at || null);
 
-      setSuccess(
-        data.message ||
-          "Report generated successfully."
-      );
+      setSuccess(data.message || "Report generated successfully.");
     } catch (err) {
-      console.error(
-        "Generate report error:",
-        err
-      );
+      console.error("Generate report error:", err);
 
-      setError(
-        err.message ||
-          "Failed to generate report"
-      );
+      setError(err.message || "Failed to generate report");
     } finally {
       setReportLoading(false);
     }
@@ -547,15 +586,12 @@ function EventDetails() {
       );
 
       if (!response.ok) {
-        let message =
-          "Failed to download report";
+        let message = "Failed to download report";
 
         try {
-          const data =
-            await response.json();
+          const data = await response.json();
 
-          message =
-            data.detail || message;
+          message = data.detail || message;
         } catch {
           // Ignore JSON parsing error
         }
@@ -563,21 +599,17 @@ function EventDetails() {
         throw new Error(message);
       }
 
-      const blob =
-        await response.blob();
+      const blob = await response.blob();
 
-      const downloadUrl =
-        window.URL.createObjectURL(blob);
+      const downloadUrl = window.URL.createObjectURL(blob);
 
-      const link =
-        document.createElement("a");
+      const link = document.createElement("a");
 
       link.href = downloadUrl;
 
-      link.download =
-        `${event.event_name
-          .replace(/[^a-z0-9]/gi, "_")
-          .replace(/_+/g, "_")}_Report.pdf`;
+      link.download = `${event.event_name
+        .replace(/[^a-z0-9]/gi, "_")
+        .replace(/_+/g, "_")}_Report.pdf`;
 
       document.body.appendChild(link);
 
@@ -585,54 +617,16 @@ function EventDetails() {
 
       link.remove();
 
-      window.URL.revokeObjectURL(
-        downloadUrl
-      );
+      window.URL.revokeObjectURL(downloadUrl);
 
-      setSuccess(
-        "Report downloaded successfully."
-      );
+      setSuccess("Report downloaded successfully.");
     } catch (err) {
-      console.error(
-        "Download report error:",
-        err
-      );
+      console.error("Download report error:", err);
 
-      setError(
-        err.message ||
-          "Failed to download report"
-      );
+      setError(err.message || "Failed to download report");
     } finally {
       setReportLoading(false);
     }
-  };
-
-  // ============================================================
-  // STATUS BADGE
-  // ============================================================
-
-  const getStatusBadge = (status) => {
-    if (status === "approved") {
-      return (
-        <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-          Approved
-        </span>
-      );
-    }
-
-    if (status === "rejected") {
-      return (
-        <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
-          Rejected
-        </span>
-      );
-    }
-
-    return (
-      <span className="rounded-full bg-yellow-100 px-3 py-1 text-xs font-semibold text-yellow-700">
-        Pending
-      </span>
-    );
   };
 
   // ============================================================
@@ -641,13 +635,10 @@ function EventDetails() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="hv-root flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-slate-700" />
-
-          <p className="text-sm text-slate-500">
-            Loading event details...
-          </p>
+          <span className="spin mx-auto mb-4 block h-10 w-10 text-accent" />
+          <p className="prose-muted text-sm">Loading event details…</p>
         </div>
       </div>
     );
@@ -659,33 +650,37 @@ function EventDetails() {
 
   if (error && !event) {
     return (
-      <div className="min-h-screen bg-slate-50">
-        <Navbar
-          title="Dean Panel"
-          actions={
-            <button
-              onClick={() =>
-                navigate("/dean/events")
-              }
-              className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+      <DeanShell active="events" profile={deanProfile} onLogout={handleLogout}>
+        <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
+          <div
+            className="flex flex-col items-center rounded-2xl border px-6 py-14 text-center"
+            data-tint=""
+            style={{ "--track": trackOf("rejected") }}
+            role="alert"
+          >
+            <span
+              className="icon-tile icon-tile-track mb-4 h-14 w-14 rounded-2xl"
+              style={{ "--track": trackOf("rejected") }}
             >
-              Back to Events
-            </button>
-          }
-        />
+              <IconAlertTriangle className="h-6 w-6" />
+            </span>
 
-        <main className="mx-auto max-w-4xl px-6 py-10">
-          <div className="rounded-xl border border-red-200 bg-red-50 p-8 text-center">
-            <h2 className="text-lg font-semibold text-red-800">
-              Unable to load event
-            </h2>
+            <h1 className="h3 text-ink">Unable to load this event</h1>
+            <p className="prose-muted mt-1.5 max-w-md text-sm">{error}</p>
 
-            <p className="mt-2 text-sm text-red-600">
-              {error}
-            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-2.5">
+              <button type="button" onClick={loadEvent} className="btn btn-ghost btn-sm">
+                <IconRefresh />
+                Try again
+              </button>
+              <Link to="/dean/events" className="btn btn-brand btn-sm">
+                <IconArrowLeft />
+                Back to all events
+              </Link>
+            </div>
           </div>
-        </main>
-      </div>
+        </div>
+      </DeanShell>
     );
   }
 
@@ -693,619 +688,685 @@ function EventDetails() {
   // MAIN UI
   // ============================================================
 
+  // ----------------------------------------------------------
+  // Derived view data
+  // ----------------------------------------------------------
+
+  // Teacher extras are encoded into description as an HTML comment; decode so
+  // the Dean sees a clean description plus the fields that were hidden in it.
+  const { description: cleanDescription, meta } = decodeEventMetadata(
+    event.description || ""
+  );
+
+  const rejected = isRejected(event.status);
+  const nextStage = getNextStage(event.status);
+  const previousStage = getPreviousStage(event.status);
+  const isApproved = getStatusBucket(event.status) === "approved";
+
+  const isRevoking = decisionKind === "reject" && isApproved;
+  const isReapproving = decisionKind === "approve" && rejected;
+
+  const formatStamp = (value) => {
+    if (!value) return "date not recorded";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "date not recorded";
+    return parsed.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const formatDay = (value) => {
+    if (!value) return "Not set";
+    const parsed = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  const timeRange =
+    meta.startTime || meta.endTime
+      ? `${meta.startTime || "?"}${meta.endTime ? ` – ${meta.endTime}` : ""}`
+      : "Not set";
+
+  // The hero's four facts: what the Dean checks first, in the order they ask.
+  const facts = [
+    { label: "Date", value: formatDay(event.event_date), Icon: IconCalendar },
+    { label: "Venue", value: event.location || "Not set", Icon: IconMapPin },
+    { label: "Time", value: timeRange, Icon: IconClock },
+    {
+      label: "Organizer",
+      value: meta.organizer || "Not provided",
+      Icon: IconUser,
+    },
+  ];
+
+  const details = [
+    {
+      label: "Department",
+      value: meta.department || "Not provided",
+      Icon: IconBuilding,
+    },
+    {
+      label: "Expected participants",
+      value: meta.expectedParticipants || "Not provided",
+      Icon: IconUsers,
+    },
+    { label: "Contact", value: meta.contactInfo || "Not provided", Icon: IconPhone },
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-50">
-
-      {/* ======================================================
-          NAVBAR
-      ====================================================== */}
-
-      <Navbar
-        title="Dean Panel"
-        actions={
-          <button
-            onClick={() =>
-              navigate("/dean/events")
-            }
-            className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
-            Back to Events
-          </button>
-        }
-      />
-
-      {/* ======================================================
-          MAIN
-      ====================================================== */}
-
-      <main className="mx-auto max-w-5xl px-6 py-8">
-
-        {/* Back */}
-
-        <button
-          onClick={() =>
-            navigate("/dean/events")
-          }
-          className="mb-5 text-sm font-medium text-blue-600 hover:text-blue-700"
-        >
-          ← Back to All Events
-        </button>
-
-        {/* Error */}
-
+    <DeanShell active="events" profile={deanProfile} onLogout={handleLogout}>
+      {/* Toasts sit bottom-right so feedback never shifts the layout. */}
+      <div className="pointer-events-none fixed bottom-5 right-5 z-50 flex w-85 max-w-[calc(100vw-2.5rem)] flex-col gap-3">
         {error && (
-          <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+          <div className="toast toast-err pointer-events-auto" role="alert">
+            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+            <p className="min-w-0 flex-1 text-sm font-medium text-ink">{error}</p>
+            <button
+              type="button"
+              onClick={() => setError("")}
+              aria-label="Dismiss error"
+              className="shrink-0 text-muted transition hover:text-ink"
+            >
+              <IconX className="h-4 w-4" />
+            </button>
           </div>
         )}
-
-        {/* Success */}
 
         {success && (
-          <div className="mb-5 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            {success}
+          <div className="toast toast-ok pointer-events-auto" role="status">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ok/15 text-ok">
+              <IconCheck className="h-3 w-3" />
+            </span>
+            <p className="min-w-0 flex-1 text-sm font-medium text-ink">{success}</p>
+            <button
+              type="button"
+              onClick={() => setSuccess("")}
+              aria-label="Dismiss message"
+              className="shrink-0 text-muted transition hover:text-ink"
+            >
+              <IconX className="h-4 w-4" />
+            </button>
           </div>
         )}
+      </div>
+
+      <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
+
+        <Link to="/dean/events" className="btn btn-ghost btn-xs mb-5">
+          <IconArrowLeft />
+          Back to all events
+        </Link>
+
+        {/* -------------------------------------------------------- the hero */}
+        <PageHero
+          eyebrow={event.event_type || "Program"}
+          title={event.event_name}
+          subtitle={`Submitted ${formatStamp(event.created_at)}`}
+          actions={<StatusChip status={event.status} size="md" />}
+        >
+          <dl className="grid gap-4 border-t hairline pt-5 sm:grid-cols-2 lg:grid-cols-4">
+            {facts.map((fact) => (
+              <div key={fact.label} className="flex items-center gap-3">
+                <span className="icon-tile h-9 w-9 rounded-xl">
+                  <fact.Icon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <dt className="text-[11px] font-semibold uppercase tracking-[.12em] text-muted">
+                    {fact.label}
+                  </dt>
+                  <dd className="truncate text-sm font-medium text-ink" title={fact.value}>
+                    {fact.value}
+                  </dd>
+                </div>
+              </div>
+            ))}
+          </dl>
+        </PageHero>
 
         {/* ====================================================
-            EVENT HEADER
+            TWO-COLUMN BODY
+            Left: the evidence.  Right: the decision, always in view.
         ==================================================== */}
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
 
-        <div className="mb-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          {/* ================= LEFT ================= */}
+          <div className="space-y-6 lg:col-span-8">
 
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-
-            <div>
-              <p className="mb-2 text-sm font-medium text-blue-600">
-                Event Details
-              </p>
-
-              <h2 className="text-3xl font-bold text-slate-800">
-                {event.event_name}
+            {/* ---------------------------------------- coordination info */}
+            <section className="glass p-6">
+              <p className="eyebrow">Coordination</p>
+              <h2 className="h3 mt-1 border-b hairline pb-4 text-ink">
+                Event information
               </h2>
 
-              <p className="mt-2 text-sm text-slate-500">
-                Submitted event information
-              </p>
-            </div>
-
-            <div>
-              {getStatusBadge(
-                event.status
-              )}
-            </div>
-
-          </div>
-        </div>
-
-        {/* ====================================================
-            EVENT INFORMATION
-        ==================================================== */}
-
-        <div className="mb-6 rounded-xl border border-slate-200 bg-white shadow-sm">
-
-          <div className="border-b border-slate-200 px-6 py-4">
-            <h3 className="font-semibold text-slate-800">
-              Event Information
-            </h3>
-          </div>
-
-          <div className="grid gap-6 p-6 md:grid-cols-2">
-
-            <div>
-              <p className="text-xs font-semibold uppercase text-slate-400">
-                Event Name
-              </p>
-
-              <p className="mt-1 text-sm font-medium text-slate-800">
-                {event.event_name}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold uppercase text-slate-400">
-                Event Date
-              </p>
-
-              <p className="mt-1 text-sm text-slate-700">
-                {event.event_date}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold uppercase text-slate-400">
-                Event Type
-              </p>
-
-              <p className="mt-1 text-sm text-slate-700">
-                {event.event_type}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold uppercase text-slate-400">
-                Location
-              </p>
-
-              <p className="mt-1 text-sm text-slate-700">
-                {event.location}
-              </p>
-            </div>
-
-            <div className="md:col-span-2">
-
-              <p className="text-xs font-semibold uppercase text-slate-400">
-                Description
-              </p>
-
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {event.description ||
-                  "No description provided."}
-              </p>
-
-            </div>
-
-            <div className="md:col-span-2">
-
-              <p className="text-xs font-semibold uppercase text-slate-400">
-                Teacher ID
-              </p>
-
-              <p className="mt-1 break-all text-sm text-slate-700">
-                {event.teacher_id}
-              </p>
-
-            </div>
-
-            {/* Social Network Link */}
-
-            <div className="md:col-span-2">
-
-              <p className="text-xs font-semibold uppercase text-slate-400">
-                Social Network Link
-              </p>
-
-              {event.social_network_url ? (
-                <a
-                  href={
-                    event.social_network_url
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-block break-all text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
-                >
-                  {event.social_network_url}
-                </a>
-              ) : (
-                <p className="mt-1 text-sm text-slate-500">
-                  Not provided
-                </p>
-              )}
-
-            </div>
-
-          </div>
-        </div>
-
-        {/* ====================================================
-            REJECTION REASON
-        ==================================================== */}
-
-        {event.status === "rejected" &&
-          event.rejection_reason && (
-            <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-6">
-
-              <h3 className="font-semibold text-red-800">
-                Rejection Reason
-              </h3>
-
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-red-700">
-                {event.rejection_reason}
-              </p>
-
-            </div>
-          )}
-
-        {/* ====================================================
-            MEDIA
-        ==================================================== */}
-
-        <div className="mb-6 rounded-xl border border-slate-200 bg-white shadow-sm">
-
-          <div className="border-b border-slate-200 px-6 py-4">
-
-            <h3 className="font-semibold text-slate-800">
-              Event Media
-            </h3>
-
-          </div>
-
-          <div className="p-6">
-
-            {media.length === 0 ? (
-
-              <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center">
-
-                <p className="text-sm text-slate-500">
-                  No media uploaded for this event.
-                </p>
-
-              </div>
-
-            ) : (
-
-              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-
-                {media.map((item) => (
-
-                  <div
-                    key={item.id}
-                    className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
-                  >
-
-                    {item.media_type ===
-                    "image" ? (
-
-                      <img
-                        src={item.media_url}
-                        alt={event.event_name}
-                        className="h-52 w-full object-cover"
-                      />
-
-                    ) : (
-
-                      <video
-                        src={item.media_url}
-                        controls
-                        className="h-52 w-full object-cover"
-                      />
-
-                    )}
-
+              <dl className="mt-5 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {details.map((item) => (
+                  <div key={item.label} className="flex items-start gap-3">
+                    <span className="icon-tile h-9 w-9 rounded-xl">
+                      <item.Icon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <dt className="text-xs font-medium text-muted">{item.label}</dt>
+                      <dd className="mt-0.5 wrap-break-word text-sm font-semibold text-ink">
+                        {item.value}
+                      </dd>
+                    </div>
                   </div>
-
                 ))}
 
-              </div>
-
-            )}
-
-          </div>
-        </div>
-
-        {/* ====================================================
-            DOCUMENTS
-        ==================================================== */}
-
-        <div className="mb-6 rounded-xl border border-slate-200 bg-white shadow-sm">
-
-          <div className="border-b border-slate-200 px-6 py-4">
-
-            <h3 className="font-semibold text-slate-800">
-              Supporting Documents
-            </h3>
-
-          </div>
-
-          <div className="p-6">
-
-            {documents.length === 0 ? (
-
-              <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center">
-
-                <p className="text-sm text-slate-500">
-                  No supporting documents uploaded.
-                </p>
-
-              </div>
-
-            ) : (
-
-              <div className="space-y-3">
-
-                {documents.map((document) => (
-
-                  <div
-                    key={document.id}
-                    className="flex flex-col gap-3 rounded-lg border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between"
-                  >
-
-                    <div>
-
-                      <p className="text-sm font-medium text-slate-800">
-                        {document.file_name}
-                      </p>
-
-                      {document.file_type && (
-                        <p className="mt-1 text-xs text-slate-500">
-                          {document.file_type}
-                        </p>
+                <div className="flex items-start gap-3 sm:col-span-2 lg:col-span-3">
+                  <span className="icon-tile h-9 w-9 rounded-xl">
+                    <IconTag className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <dt className="text-xs font-medium text-muted">
+                      Social network link
+                    </dt>
+                    <dd className="mt-0.5">
+                      {event.social_network_url ? (
+                        <a
+                          href={event.social_network_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="link block truncate text-sm font-semibold"
+                        >
+                          {event.social_network_url}
+                        </a>
+                      ) : (
+                        <span className="text-sm text-muted italic">Not provided</span>
                       )}
+                    </dd>
+                  </div>
+                </div>
+              </dl>
+            </section>
 
+            {/* ------------------------------------------------ description */}
+            <section className="glass overflow-hidden">
+              <div className="border-b hairline px-6 py-5">
+                <p className="eyebrow">Proposal</p>
+                <h2 className="h3 mt-1 text-ink">Event description</h2>
+              </div>
+              <p className="prose-muted whitespace-pre-line px-6 py-5 text-sm">
+                {cleanDescription || "No description provided."}
+              </p>
+            </section>
+
+            {/* ------------------------------------- media and documents */}
+            <section className="glass overflow-hidden">
+              <div className="flex flex-wrap items-center gap-1.5 border-b hairline px-4 py-3 sm:px-5">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "media"}
+                  onClick={() => setActiveTab("media")}
+                  className="tab"
+                >
+                  <IconImagePlus className="h-4 w-4" />
+                  Photos &amp; videos
+                  <span className="tab-count">{media.length}</span>
+                </button>
+
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "documents"}
+                  onClick={() => setActiveTab("documents")}
+                  className="tab"
+                >
+                  <IconFileText className="h-4 w-4" />
+                  Documents
+                  <span className="tab-count">{documents.length}</span>
+                </button>
+              </div>
+
+              <div className="p-5">
+                {activeTab === "media" ? (
+                  media.length === 0 ? (
+                    <p className="prose-muted rounded-xl border border-dashed border-line/20 p-6 text-center text-sm">
+                      No media uploaded for this event.
+                    </p>
+                  ) : (
+                    <div className="grid max-h-85 gap-3 overflow-y-auto sm:grid-cols-3">
+                      {media.map((item) => (
+                        <a
+                          key={item.id}
+                          href={item.media_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group overflow-hidden rounded-xl border hairline bg-raised/60"
+                        >
+                          {item.media_type === "image" ? (
+                            <img
+                              src={item.media_url}
+                              alt={event.event_name}
+                              className="h-28 w-full object-cover transition group-hover:opacity-90"
+                            />
+                          ) : (
+                            <video
+                              src={item.media_url}
+                              controls
+                              className="h-28 w-full object-cover"
+                            />
+                          )}
+                        </a>
+                      ))}
+                    </div>
+                  )
+                ) : documents.length === 0 ? (
+                  <p className="prose-muted rounded-xl border border-dashed border-line/20 p-6 text-center text-sm">
+                    No supporting documents uploaded.
+                  </p>
+                ) : (
+                  <ul className="max-h-85 space-y-2.5 overflow-y-auto">
+                    {documents.map((document) => (
+                      <li
+                        key={document.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border hairline bg-raised/40 p-3"
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="icon-tile h-9 w-9 rounded-lg">
+                            <IconFileText className="h-4 w-4" />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-semibold text-ink">
+                              {document.file_name}
+                            </p>
+                            <p className="text-[10px] text-muted">
+                              {document.file_type || "File"}
+                              {document.file_size
+                                ? ` · ${(document.file_size / 1024).toFixed(0)} KB`
+                                : ""}
+                            </p>
+                          </div>
+                        </div>
+
+                        <a
+                          href={document.file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn btn-ghost btn-xs shrink-0"
+                        >
+                          <IconExternalLink />
+                          Open
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+
+            {/* ---- Report (post-approval only) ---- */}
+            {isApproved && (
+              <>
+                <RidgeDivider className="divider" />
+
+                <section className="glass overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b hairline px-6 py-5">
+                    <div className="flex items-center gap-3">
+                      <span className="icon-tile">
+                        <IconFileText />
+                      </span>
+                      <div>
+                        <p className="eyebrow">Output</p>
+                        <h2 className="h3 text-ink">Event report</h2>
+                      </div>
                     </div>
 
-                    <a
-                      href={document.file_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="rounded-lg border border-slate-300 px-4 py-2 text-center text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      View / Download
-                    </a>
-
+                    {reportGenerated && (
+                      <span
+                        className="chip chip-track"
+                        style={{ "--track": trackOf("approved") }}
+                      >
+                        <span className="dot dot-sm" />
+                        Generated
+                      </span>
+                    )}
                   </div>
 
-                ))}
-
-              </div>
-
-            )}
-
-          </div>
-        </div>
-
-        {/* ====================================================
-            DEAN DECISION
-        ==================================================== */}
-
-        <div className="mb-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-
-            <div>
-
-              <h3 className="font-semibold text-slate-800">
-                Dean Decision
-              </h3>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Review this event and update its approval status.
-              </p>
-
-            </div>
-
-            {event.status === "pending" && (
-
-              <div className="flex gap-3">
-
-                <button
-                  onClick={handleReject}
-                  disabled={processing}
-                  className="rounded-lg bg-red-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {processing
-                    ? "Processing..."
-                    : "Reject"}
-                </button>
-
-                <button
-                  onClick={handleApprove}
-                  disabled={processing}
-                  className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {processing
-                    ? "Processing..."
-                    : "Approve"}
-                </button>
-
-              </div>
-
-            )}
-
-            {event.status === "approved" && (
-
-              <span className="rounded-lg bg-green-100 px-4 py-2 text-sm font-semibold text-green-700">
-                Event Approved
-              </span>
-
-            )}
-
-            {event.status === "rejected" && (
-
-              <span className="rounded-lg bg-red-100 px-4 py-2 text-sm font-semibold text-red-700">
-                Event Rejected
-              </span>
-
-            )}
-
-          </div>
-        </div>
-
-        {/* ====================================================
-            REPORT SECTION
-        ==================================================== */}
-
-        {event.status === "approved" && (
-
-          <div className="mb-8 rounded-xl border border-blue-200 bg-white shadow-sm">
-
-            {/* Report Header */}
-
-            <div className="border-b border-blue-100 bg-blue-50 px-6 py-5">
-
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-
-                <div>
-
-                  <h3 className="text-lg font-bold text-slate-800">
-                    Event Report
-                  </h3>
-
-                  <p className="mt-1 text-sm text-slate-600">
-                    Generate and download the official event report.
-                  </p>
-
-                </div>
-
-                {reportGenerated && (
-
-                  <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                    Report Generated
-                  </span>
-
-                )}
-
-              </div>
-
-            </div>
-
-            <div className="space-y-6 p-6">
-
-              {/* =================================================
-                  SOCIAL LINK STATUS
-              ================================================= */}
-
-              <div>
-
-                <label
-                  htmlFor="reportSocialLink"
-                  className="block text-sm font-semibold text-slate-800"
-                >
-                  Social Network Link
-                </label>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  This link will be included automatically in the report.
-                </p>
-
-                <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-
-                  <input
-                    id="reportSocialLink"
-                    type="url"
-                    value={socialNetworkUrl}
-                    onChange={(e) =>
-                      setSocialNetworkUrl(
-                        e.target.value
-                      )
-                    }
-                    placeholder="https://instagram.com/your-event"
-                    disabled={savingSocialLink}
-                    className="flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
-                  />
-
-                  <button
-                    onClick={
-                      handleSaveSocialLink
-                    }
-                    disabled={
-                      savingSocialLink ||
-                      !socialNetworkUrl.trim()
-                    }
-                    className="rounded-lg bg-slate-800 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {savingSocialLink
-                      ? "Saving..."
-                      : "Save Link"}
-                  </button>
-
-                </div>
-
-                {!socialNetworkUrl.trim() && (
-
-                  <div className="mt-3 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3">
-
-                    <p className="text-sm font-medium text-yellow-800">
-                      Social Network Link is required before generating the report.
-                    </p>
-
-                  </div>
-
-                )}
-
-                {socialNetworkUrl.trim() && (
-
-                  <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
-
-                    <p className="text-sm font-medium text-green-800">
-                      Social Network Link is available.
-                    </p>
-
-                  </div>
-
-                )}
-
-              </div>
-
-              {/* =================================================
-                  REPORT ACTIONS
-              ================================================= */}
-
-              <div className="border-t border-slate-200 pt-6">
-
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-
-                  <div>
-
-                    <h4 className="font-semibold text-slate-800">
-                      Report Actions
-                    </h4>
-
-                    <p className="mt-1 text-sm text-slate-500">
-                      The report is generated automatically from the approved event information.
-                    </p>
+                  <div className="space-y-5 px-6 py-5">
+                    <div className="field">
+                      <label htmlFor="reportSocialLink">
+                        Social network link
+                        <span className="req">*</span>
+                      </label>
+
+                      <div className="flex flex-wrap gap-2.5">
+                        <input
+                          id="reportSocialLink"
+                          type="url"
+                          value={socialNetworkUrl}
+                          onChange={(e) => setSocialNetworkUrl(e.target.value)}
+                          placeholder="https://instagram.com/your-event"
+                          disabled={savingSocialLink}
+                          className="input min-w-0 flex-1"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSaveSocialLink}
+                          disabled={savingSocialLink || !socialNetworkUrl.trim()}
+                          className="btn btn-ghost btn-sm shrink-0"
+                        >
+                          {savingSocialLink && <span className="spin h-3.5 w-3.5" />}
+                          {savingSocialLink ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+
+                      {!socialNetworkUrl.trim() && (
+                        <p className="text-xs font-medium text-emberink">
+                          Required before the report can be generated.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2.5 border-t hairline pt-5">
+                      <button
+                        type="button"
+                        onClick={handleGenerateReport}
+                        disabled={reportLoading || !socialNetworkUrl.trim()}
+                        className="btn btn-brand btn-sm flex-1"
+                      >
+                        {reportLoading ? (
+                          <span className="spin h-3.5 w-3.5" />
+                        ) : (
+                          <IconRefresh />
+                        )}
+                        {reportLoading
+                          ? "Processing…"
+                          : reportGenerated
+                          ? "Regenerate"
+                          : "Generate report"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDownloadReport}
+                        disabled={reportLoading || !reportGenerated}
+                        className="btn btn-ghost btn-sm flex-1"
+                      >
+                        <IconDownload />
+                        Download
+                      </button>
+                    </div>
 
                     {generatedAt && (
-
-                      <p className="mt-2 text-xs text-slate-400">
-                        Last generated:{" "}
-                        {new Date(
-                          generatedAt
-                        ).toLocaleString()}
+                      <p className="num text-[11px] text-muted">
+                        Last generated {formatStamp(generatedAt)}
                       </p>
-
                     )}
-
                   </div>
+                </section>
+              </>
+            )}
+          </div>
 
-                  <div className="flex flex-col gap-3 sm:flex-row">
+          {/* ================= RIGHT: sticky decision rail ================= */}
+          <aside className="space-y-6 lg:col-span-4 lg:sticky lg:top-[calc(var(--header-h)+1.5rem)] lg:self-start">
 
-                    {/* Generate */}
-
-                    <button
-                      onClick={
-                        handleGenerateReport
-                      }
-                      disabled={
-                        reportLoading ||
-                        !socialNetworkUrl.trim()
-                      }
-                      className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {reportLoading
-                        ? "Processing..."
-                        : reportGenerated
-                        ? "Regenerate Report"
-                        : "Generate Report"}
-                    </button>
-
-                    {/* Download */}
-
-                    <button
-                      onClick={
-                        handleDownloadReport
-                      }
-                      disabled={
-                        reportLoading ||
-                        !reportGenerated
-                      }
-                      className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Download Report
-                    </button>
-
-                  </div>
-
-                </div>
-
+            {/* ---- Progress / workflow ---- */}
+            <section className="glass overflow-hidden">
+              <div className="border-b hairline px-6 py-5">
+                <p className="eyebrow">Tracking</p>
+                <h2 className="h3 mt-1 text-ink">Event progress</h2>
+                <p className="prose-muted mt-0.5 text-xs">
+                  Every submission, decision and remark, oldest first.
+                </p>
               </div>
 
-            </div>
+              <div className="px-6 py-5">
+                <ProgressTimeline
+                  event={event}
+                  viewerId={deanProfile?.id}
+                  perspective="dean"
+                />
+
+                {/* Advance or step back through the delivery stages */}
+                {(nextStage || previousStage) && (
+                  <div className="mt-5 flex flex-wrap gap-2.5 border-t hairline pt-5">
+                    {nextStage && (
+                      <button
+                        type="button"
+                        onClick={() => handleChangeStage(nextStage.key)}
+                        disabled={stageSaving}
+                        className="btn btn-brand btn-xs"
+                      >
+                        {stageSaving ? (
+                          <span className="spin h-3.5 w-3.5" />
+                        ) : (
+                          <IconArrowRight />
+                        )}
+                        {stageSaving ? "Saving…" : nextStage.label}
+                      </button>
+                    )}
+
+                    {previousStage && (
+                      <button
+                        type="button"
+                        onClick={() => handleChangeStage(previousStage.key)}
+                        disabled={stageSaving}
+                        className="btn btn-ghost btn-xs"
+                      >
+                        <IconArrowLeft />
+                        {previousStage.label}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* ---- Rejection reason ---- */}
+            {rejected && event.rejection_reason && (
+              <section
+                className="overflow-hidden rounded-2xl border"
+                data-tint=""
+                style={{ "--track": trackOf("rejected") }}
+              >
+                <div
+                  className="flex items-center gap-2.5 border-b px-6 py-4"
+                  style={{
+                    borderColor: "color-mix(in srgb, var(--track) 22%, transparent)",
+                  }}
+                >
+                  <IconAlertTriangle
+                    className="h-5 w-5 shrink-0"
+                    style={{ color: trackOf("rejected") }}
+                  />
+                  <h2 className="h3 text-base text-ink">Rejection reason</h2>
+                </div>
+
+                <p className="whitespace-pre-wrap px-6 py-5 text-sm leading-6 text-ink">
+                  {event.rejection_reason}
+                </p>
+              </section>
+            )}
+
+            {/* ---- Decision ---- */}
+            <section className="glass p-6">
+              <div className="flex items-center gap-3">
+                <span className="icon-tile">
+                  <IconShield />
+                </span>
+                <div>
+                  <p className="eyebrow">Decision</p>
+                  <h2 className="h3 text-ink">Dean decision</h2>
+                </div>
+              </div>
+
+              <p className="prose-muted mt-3 flex items-center gap-1.5 text-xs">
+                Currently
+                <StatusChip status={event.status} />
+              </p>
+              <p className="prose-muted mt-1.5 text-xs">
+                You can revise a decision at any time; the teacher sees each one in their history.
+              </p>
+
+              <div className="mt-5 flex flex-wrap gap-2.5">
+                {canApproveEvent(event) && (
+                  <button
+                    type="button"
+                    onClick={() => openDecision("approve")}
+                    disabled={processing}
+                    className="btn btn-ok btn-sm flex-1"
+                  >
+                    <IconCheck />
+                    {getApproveLabel(event)}
+                  </button>
+                )}
+
+                {canRejectEvent(event) && (
+                  <button
+                    type="button"
+                    onClick={() => openDecision("reject")}
+                    disabled={processing}
+                    className="btn btn-danger btn-sm flex-1"
+                  >
+                    <IconX />
+                    {getRejectLabel(event)}
+                  </button>
+                )}
+              </div>
+            </section>
+          </aside>
+        </div>
+      </div>
+
+      {/* ==================================================================
+          THE DECISION
+          One dialog for both halves of the decision, the same one the All
+          Events table opens, so the two screens cannot drift apart.
+      ================================================================== */}
+      <Modal
+        open={Boolean(decisionKind)}
+        onClose={closeDecision}
+        eyebrow="Confirm"
+        title={
+          decisionKind === "approve"
+            ? isReapproving
+              ? "Re-approve event"
+              : "Approve event"
+            : isRevoking
+            ? "Revoke approval & reject"
+            : "Reject event"
+        }
+        subtitle={
+          decisionKind === "approve"
+            ? "The teacher is notified of the decision."
+            : "The teacher sees the reason you give."
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeDecision}
+              disabled={processing}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+
+            {decisionKind === "approve" ? (
+              <button
+                type="button"
+                onClick={confirmApprove}
+                disabled={processing}
+                className="btn btn-ok btn-sm"
+              >
+                {processing ? <span className="spin h-3.5 w-3.5" /> : <IconCheck />}
+                {processing ? "Approving…" : isReapproving ? "Re-approve" : "Approve"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={confirmReject}
+                disabled={processing}
+                className="btn btn-danger btn-sm"
+              >
+                {processing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
+                {processing ? "Rejecting…" : isRevoking ? "Revoke & reject" : "Reject"}
+              </button>
+            )}
+          </>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <span
+            className="icon-tile icon-tile-track"
+            style={{
+              "--track":
+                decisionKind === "approve" ? trackOf("approved") : trackOf("rejected"),
+            }}
+          >
+            {decisionKind === "approve" ? <IconCheckCircle /> : <IconAlertTriangle />}
+          </span>
+
+          <div className="min-w-0">
+            <p className="font-display text-sm font-semibold text-ink">
+              {event.event_name || "Untitled Event"}
+            </p>
+            <p className="prose-muted mt-1 text-xs">
+              {[event.event_type, formatDay(event.event_date), event.location]
+                .filter(Boolean)
+                .join(" · ") || "No details recorded"}
+            </p>
+          </div>
+        </div>
+
+        {/* What the decision actually changes, when it is not the plain case */}
+        {(isRevoking || isReapproving) && (
+          <div
+            className="mt-4 rounded-xl border px-4 py-3"
+            data-tint=""
+            style={{ "--track": trackOf(isRevoking ? "rejected" : "approved") }}
+          >
+            <p className="text-sm text-ink">
+              {isRevoking
+                ? "This event is approved. Rejecting it revokes the approval, hides its generated report, and notifies the teacher."
+                : "This event is rejected. Re-approving it clears the existing rejection reason and notifies the teacher."}
+            </p>
           </div>
         )}
 
-      </main>
-    </div>
+        {decisionKind === "reject" && (
+          <div className="field mt-5">
+            <label htmlFor="deanRejectReason">
+              Reason for rejection
+              <span className="req">*</span>
+            </label>
+
+            <textarea
+              id="deanRejectReason"
+              value={rejectReason}
+              onChange={(e) => {
+                setRejectReason(e.target.value);
+                if (reasonError) setReasonError("");
+              }}
+              rows={4}
+              autoFocus
+              placeholder="What needs to change before this can be approved?"
+              aria-invalid={reasonError ? "true" : undefined}
+              aria-describedby={reasonError ? "deanRejectReasonError" : undefined}
+              className="input"
+            />
+
+            {reasonError && (
+              <p id="deanRejectReasonError" className="field-error">
+                {reasonError}
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
+    </DeanShell>
   );
 }
 

@@ -4,7 +4,20 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#F5F7FB" />
     <title>Campus Capture · SRHU</title>
+    <!-- Applies the remembered theme before first paint, so a dark-mode user
+         never sees a light flash on load. -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem('campus-capture-theme') === 'dark') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

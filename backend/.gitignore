@@ -1,5 +1,8 @@
-# Secrets
+# Secrets — the live .env and every copy of it (.env.bak-*, .env.local, ...),
+# which carry the same JWT key and SMTP password. The template is the exception.
 .env
+.env.*
+!.env.example
 
 # Python bytecode
 __pycache__/

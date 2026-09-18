@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/common/ProtectedRoute";
 
@@ -6,6 +6,9 @@ import ProtectedRoute from "./components/common/ProtectedRoute";
 import Landing from "./pages/Landing";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
+import VerifyEmail from "./pages/auth/VerifyEmail";
+import ForgotPassword from "./pages/auth/ForgotPassword";
+import ResetPassword from "./pages/auth/ResetPassword";
 
 // Teacher
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
@@ -17,11 +20,12 @@ import TeacherEventDetails from "./pages/teacher/EventDetails";
 import DeanDashboard from "./pages/dean/DeanDashboard";
 import DeanAllEvents from "./pages/dean/AllEvents";
 import DeanEventDetails from "./pages/dean/EventDetails";
+import DeanProfile from "./pages/dean/Profile";
 
-// Admin
-import AdminDashboard from "./pages/admin/AdminDashboard";
-import UserManagement from "./pages/admin/UserManagement";
-import CreateDean from "./pages/admin/CreateDean";
+// Super Admin
+import SuperAdminDashboard from "./pages/superadmin/SuperAdminDashboard";
+import UserManagement from "./pages/superadmin/UserManagement";
+import CreateDean from "./pages/superadmin/CreateDean";
 
 function App() {
   return (
@@ -33,6 +37,9 @@ function App() {
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
 
           {/* ================= TEACHER ================= */}
           <Route
@@ -99,33 +106,45 @@ function App() {
             }
           />
 
-          {/* ================= ADMIN ================= */}
           <Route
-            path="/admin/dashboard"
+            path="/dean/profile"
             element={
-              <ProtectedRoute allowedRoles={["admin"]}>
-                <AdminDashboard />
+              <ProtectedRoute allowedRoles={["dean"]}>
+                <DeanProfile />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* ================= SUPER ADMIN ================= */}
+          <Route
+            path="/superadmin/dashboard"
+            element={
+              <ProtectedRoute allowedRoles={["superadmin"]}>
+                <SuperAdminDashboard />
               </ProtectedRoute>
             }
           />
 
           <Route
-            path="/admin/users"
+            path="/superadmin/users"
             element={
-              <ProtectedRoute allowedRoles={["admin"]}>
+              <ProtectedRoute allowedRoles={["superadmin"]}>
                 <UserManagement />
               </ProtectedRoute>
             }
           />
 
           <Route
-            path="/admin/create-dean"
+            path="/superadmin/create-dean"
             element={
-              <ProtectedRoute allowedRoles={["admin"]}>
+              <ProtectedRoute allowedRoles={["superadmin"]}>
                 <CreateDean />
               </ProtectedRoute>
             }
           />
+
+          {/* Old /admin bookmarks from before the superadmin rename */}
+          <Route path="/admin/*" element={<Navigate to="/superadmin/dashboard" replace />} />
 
         </Routes>
       </AuthProvider>

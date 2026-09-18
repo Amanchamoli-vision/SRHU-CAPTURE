@@ -1,7 +1,15 @@
-import { createContext, useContext, useEffect, useState, useMemo } from "react";
-import { supabase } from "../services/supabase";
+import { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
+import {
+  fetchCurrentUser,
+  getSession,
+  onAuthStateChange,
+  signOut as apiSignOut,
+} from "../services/auth";
 
 const AuthContext = createContext(null);
+
+const normalizeRole = (role) =>
+  typeof role === "string" && role.trim() ? role.toLowerCase().trim() : null;
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -9,124 +17,103 @@ export function AuthProvider({ children }) {
   const [role, setRole] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Fetch profile and verify role from public.users table
-  const fetchUserProfile = async (authUser) => {
-    if (!authUser) {
-      setUser(null);
-      setProfile(null);
-      setRole(null);
-      return null;
-    }
+  const clearState = useCallback(() => {
+    setUser(null);
+    setProfile(null);
+    setRole(null);
+  }, []);
 
-    try {
-      const { data: profileData, error: profileError } = await supabase
-        .from("users")
-        .select("id, name, email, role")
-        .eq("id", authUser.id)
-        .single();
-
-      if (profileError || !profileData || !profileData.role) {
-        console.error("Failed to load user profile or missing role:", profileError);
+  // The API returns the profile (id, name, email, role, ...) with the session,
+  // so "user" and "profile" are the same MongoDB document.
+  const applyUser = useCallback(
+    (nextUser) => {
+      const normalizedRole = normalizeRole(nextUser?.role);
+      if (!nextUser || !normalizedRole) {
         // Default-deny: do not set an unverified role
-        setUser(null);
-        setProfile(null);
-        setRole(null);
+        clearState();
         return null;
       }
-
-      const normalizedRole = profileData.role.toLowerCase().trim();
-      setUser(authUser);
-      setProfile(profileData);
+      const verified = { ...nextUser, role: normalizedRole };
+      setUser(verified);
+      setProfile(verified);
       setRole(normalizedRole);
-      return { ...profileData, role: normalizedRole };
+      return verified;
+    },
+    [clearState]
+  );
+
+  // Re-fetch the profile from the API and verify the role
+  const fetchUserProfile = useCallback(async () => {
+    try {
+      const latest = await fetchCurrentUser();
+      if (!latest) {
+        clearState();
+        return null;
+      }
+      return applyUser(latest);
     } catch (err) {
-      console.error("Unexpected error fetching profile:", err);
-      setUser(null);
-      setProfile(null);
-      setRole(null);
-      return null;
+      console.error("Failed to load user profile:", err);
+      // A network error should not sign the user out; keep the cached profile.
+      const cached = getSession()?.user;
+      return cached ? applyUser(cached) : (clearState(), null);
     }
-  };
+  }, [applyUser, clearState]);
 
   useEffect(() => {
     let isMounted = true;
 
     const initializeAuth = async () => {
       try {
-        const {
-          data: { session },
-          error: sessionError,
-        } = await supabase.auth.getSession();
+        const session = getSession();
 
-        if (sessionError || !session?.user) {
+        if (!session?.access_token) {
           if (isMounted) {
-            setUser(null);
-            setProfile(null);
-            setRole(null);
+            clearState();
             setLoading(false);
           }
           return;
         }
 
-        if (isMounted) {
-          await fetchUserProfile(session.user);
-          setLoading(false);
-        }
+        // Show the cached profile immediately, then confirm it with the API.
+        if (isMounted) applyUser(session.user);
+        await fetchUserProfile();
       } catch (err) {
         console.error("Auth initialization error:", err);
-        if (isMounted) {
-          setUser(null);
-          setProfile(null);
-          setRole(null);
-          setLoading(false);
-        }
+        if (isMounted) clearState();
+      } finally {
+        if (isMounted) setLoading(false);
       }
     };
 
     initializeAuth();
 
-    // Listen for Supabase auth state changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_OUT" || !session?.user) {
-        if (isMounted) {
-          setUser(null);
-          setProfile(null);
-          setRole(null);
-          setLoading(false);
-        }
-      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-        if (isMounted) {
-          await fetchUserProfile(session.user);
-          setLoading(false);
-        }
+    // Listen for session changes (login, refresh, logout, other tabs)
+    const unsubscribe = onAuthStateChange((event, session) => {
+      if (!isMounted) return;
+      if (event === "SIGNED_OUT" || !session?.access_token) {
+        clearState();
+        setLoading(false);
+      } else {
+        applyUser(session.user);
+        setLoading(false);
       }
     });
 
     return () => {
       isMounted = false;
-      subscription?.unsubscribe();
+      unsubscribe();
     };
-  }, []);
+  }, [applyUser, clearState, fetchUserProfile]);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     try {
-      await supabase.auth.signOut();
+      await apiSignOut();
     } catch (err) {
-      console.error("Supabase signOut error:", err);
+      console.error("signOut error:", err);
     } finally {
-      // Clear localStorage tokens as safeguard against network failure during signOut
-      for (const key of Object.keys(localStorage)) {
-        if (key.startsWith("sb-") && key.endsWith("-auth-token")) {
-          localStorage.removeItem(key);
-        }
-      }
-      setUser(null);
-      setProfile(null);
-      setRole(null);
+      clearState();
     }
-  };
+  }, [clearState]);
 
   const value = useMemo(
     () => ({
@@ -137,7 +124,7 @@ export function AuthProvider({ children }) {
       fetchUserProfile,
       signOut,
     }),
-    [user, profile, role, loading]
+    [user, profile, role, loading, fetchUserProfile, signOut]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
