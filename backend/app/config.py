@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 25
 
     # ------------------------------------------------------------------
+    # Cloudflare R2 (S3-compatible object storage for uploads)
+    # ------------------------------------------------------------------
+    # When configured, new photos, videos and documents go to R2 instead of
+    # GridFS. Files already in GridFS keep being served from /files/{id}.
+    r2_account_id: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_bucket_name: str | None = None
+    # Public base URL (r2.dev or custom domain) for a public bucket. Empty
+    # means the bucket is private and pre-signed URLs are issued instead.
+    r2_public_url: str | None = None
+    r2_signed_url_expiry: int = 6 * 60 * 60
+
+    # ------------------------------------------------------------------
     # Frontend / CORS
     # ------------------------------------------------------------------
     # The public frontend origin used for all server-generated email links.
@@ -112,6 +126,19 @@ class Settings(BaseSettings):
     @property
     def smtp_configured(self) -> bool:
         return bool(self.smtp_host and self.smtp_from_email)
+
+    @property
+    def r2_configured(self) -> bool:
+        return bool(
+            self.r2_account_id
+            and self.r2_access_key_id
+            and self.r2_secret_access_key
+            and self.r2_bucket_name
+        )
+
+    @property
+    def r2_endpoint_url(self) -> str:
+        return f"https://{self.r2_account_id}.r2.cloudflarestorage.com"
 
     @property
     def max_upload_size_bytes(self) -> int:

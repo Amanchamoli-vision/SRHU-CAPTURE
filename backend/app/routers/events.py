@@ -40,12 +40,11 @@ from app.services import email_service
 from app.services.storage_service import (
     absolutize,
     delete_event_cascade,
-    delete_file,
-    file_route,
+    delete_stored,
     media_type_for,
     read_upload,
     safe_file_name,
-    store_file,
+    save_upload,
     validate_document,
 )
 from app.utils.auth import check_dean, get_current_user, require_role
@@ -1072,7 +1071,7 @@ def teacher_resubmit_event(
 
 
 # ============================================================
-# TEACHER MEDIA (photos / videos stored in GridFS)
+# TEACHER MEDIA (photos / videos, stored in R2 or GridFS)
 # ============================================================
 
 @router.get(
@@ -1121,9 +1120,9 @@ def upload_teacher_event_media(
     data = read_upload(file)
     file_name = safe_file_name(file.filename)
 
-    file_id = store_file(
+    stored = save_upload(
         data,
-        filename=file_name,
+        file_name=file_name,
         content_type=file.content_type,
         kind="media",
         event_id=str(event["_id"]),
@@ -1132,9 +1131,11 @@ def upload_teacher_event_media(
 
     document = new_media_document(
         event_id=str(event["_id"]),
-        file_id=str(file_id),
+        storage=stored["storage"],
+        object_key=stored["object_key"],
+        file_id=stored["file_id"],
         file_name=file_name,
-        media_url=file_route(file_id),
+        media_url=stored["url"],
         media_type=media_type,
         content_type=file.content_type,
         file_size=len(data),
@@ -1176,7 +1177,7 @@ def delete_teacher_event_media(
             detail="Media not found"
         )
 
-    delete_file(media.get("file_id"))
+    delete_stored(media)
 
     return {
         "success": True,
@@ -1185,7 +1186,7 @@ def delete_teacher_event_media(
 
 
 # ============================================================
-# TEACHER DOCUMENTS (stored in GridFS)
+# TEACHER DOCUMENTS (stored in R2 or GridFS)
 # ============================================================
 
 @router.get(
@@ -1234,20 +1235,22 @@ def upload_teacher_event_document(
     data = read_upload(file)
     original_name = (file.filename or "document").strip() or "document"
 
-    file_id = store_file(
+    stored = save_upload(
         data,
-        filename=original_name,
+        file_name=original_name,
         content_type=file.content_type,
-        kind="document",
+        kind="documents",
         event_id=str(event["_id"]),
         teacher_id=user["id"],
     )
 
     document = new_document_document(
         event_id=str(event["_id"]),
-        file_id=str(file_id),
+        storage=stored["storage"],
+        object_key=stored["object_key"],
+        file_id=stored["file_id"],
         file_name=original_name,
-        file_url=file_route(file_id),
+        file_url=stored["url"],
         file_type=file.content_type,
         file_size=len(data),
     )
@@ -1288,7 +1291,7 @@ def delete_teacher_event_document(
             detail="Document not found"
         )
 
-    delete_file(document.get("file_id"))
+    delete_stored(document)
 
     return {
         "success": True,

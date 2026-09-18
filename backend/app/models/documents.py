@@ -176,15 +176,19 @@ def new_event_document(
 def new_media_document(
     *,
     event_id: str,
-    file_id: str,
+    file_id: str | None,
     file_name: str,
-    media_url: str,
+    media_url: str | None,
     media_type: str,
     content_type: str | None,
     file_size: int,
+    storage: str = "gridfs",
+    object_key: str | None = None,
 ) -> dict[str, Any]:
     return {
         "event_id": event_id,
+        "storage": storage,
+        "object_key": object_key,
         "file_id": file_id,
         "file_name": file_name,
         "media_url": media_url,
@@ -198,14 +202,18 @@ def new_media_document(
 def new_document_document(
     *,
     event_id: str,
-    file_id: str,
+    file_id: str | None,
     file_name: str,
-    file_url: str,
+    file_url: str | None,
     file_type: str | None,
     file_size: int,
+    storage: str = "gridfs",
+    object_key: str | None = None,
 ) -> dict[str, Any]:
     return {
         "event_id": event_id,
+        "storage": storage,
+        "object_key": object_key,
         "file_id": file_id,
         "file_name": file_name,
         "file_url": file_url,
