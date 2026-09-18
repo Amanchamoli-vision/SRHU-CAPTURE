@@ -18,6 +18,7 @@ export const STATUS_TRACK = {
   completed: "#14B8A6",    // teal   Dean advances an event through
   published: "#8B5CF6",    // violet
   rejected: "#EF4444",     // red
+  revoked: "#E11D48",      // rose — a refusal like rejected, but its own
 };
 
 export const STATUS_LABEL = {
@@ -30,12 +31,26 @@ export const STATUS_LABEL = {
   completed: "Completed",
   published: "Published",
   rejected: "Rejected",
+  revoked: "Revoked",
 };
 
 const normalize = (status) => String(status ?? "").trim().toLowerCase();
 
-export const trackOf = (status) => STATUS_TRACK[normalize(status)] || STATUS_TRACK.pending;
-export const labelOf = (status) => STATUS_LABEL[normalize(status)] || "Pending";
+export const trackOf = (status) => STATUS_TRACK[normalize(status)] || STATUS_TRACK.draft;
+
+/**
+ * The status, in words. An unrecognised one is reported as itself rather than
+ * as "Pending": a status this module has not been taught about is not
+ * necessarily awaiting review, and claiming it is misleads the Dean.
+ */
+export const labelOf = (status) => {
+  const key = normalize(status);
+  if (!key) return "Unknown";
+  return (
+    STATUS_LABEL[key] ||
+    key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+};
 
 /** Statuses that still count as awaiting a decision from the Dean. */
 export const isPendingStatus = (status) =>

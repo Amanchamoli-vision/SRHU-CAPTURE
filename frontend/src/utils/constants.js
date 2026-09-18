@@ -108,6 +108,11 @@ const STATUS_META = {
     badgeClass: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20",
     dotClass: "bg-rose-500",
   },
+  revoked: {
+    label: "Revoked",
+    badgeClass: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20",
+    dotClass: "bg-rose-600",
+  },
 };
 
 const UNKNOWN_STATUS_META = {
