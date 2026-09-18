@@ -25,10 +25,19 @@ EVENT_STATUSES = (
     "completed",
     "rejected",
     "published",
+    # Approval withdrawn after the fact. Distinct from "rejected", which means
+    # never approved: they start from different states, read differently in
+    # the history and notifications, and were previously one ambiguous button
+    # that in practice could not be pressed at all (PRD 18).
+    "revoked",
 )
 
 # Statuses in which the owning teacher may still edit or withdraw an event.
-TEACHER_EDITABLE_STATUSES = ("draft", "submitted", "pending", "under_review", "rejected")
+# "revoked" is included so a withdrawn event can be fixed and resubmitted --
+# otherwise revoking would be a dead end for the teacher.
+TEACHER_EDITABLE_STATUSES = (
+    "draft", "submitted", "pending", "under_review", "rejected", "revoked",
+)
 
 # Post-approval delivery stages the Dean moves an event through.
 DEAN_PROGRESS_STAGES = ("approved", "in_progress", "completed")
@@ -47,10 +56,16 @@ ALLOWED_EVENT_TYPES = (
     "Other",
 )
 
+# Kept as the seed set for the `event_types` collection, and as the fallback
+# the API falls back to if that collection is somehow empty. It is no longer a
+# closed whitelist: teachers may add their own categories (PRD 4 / 14).
+DEFAULT_EVENT_TYPES = ALLOWED_EVENT_TYPES
+
 NOTIFICATION_TYPES = (
     # To the teacher, about their own event
     "approved",
     "rejected",
+    "revoked",
     "needs_changes",
     "progress",      # the Dean moved it to In Progress / Completed / back
     "published",
@@ -76,8 +91,11 @@ HISTORY_ACTIONS = (
     "resubmitted",
     "approved",
     "rejected",
+    "revoked",
     "changes_requested",
     "stage_changed",
+    "archived",
+    "restored",
 )
 
 # Fields that must never leave the server.
@@ -104,6 +122,7 @@ def new_user_document(
     role: str = "teacher",
     email_verified: bool = False,
     must_change_password: bool = False,
+    phone: str | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
     return {
@@ -111,6 +130,9 @@ def new_user_document(
         "email": email,
         "password_hash": password_hash,
         "role": role,
+        # A 10-digit mobile, or None. Opting in is what puts a member of staff
+        # into the faculty-coordinator directory teachers pick from (PRD 5).
+        "phone": phone,
         "email_verified": email_verified,
         "email_verified_at": now if email_verified else None,
         "must_change_password": must_change_password,
@@ -156,30 +178,65 @@ def new_event_document(
     teacher_id: str,
     event_name: str,
     event_date: str,
+    end_date: str | None = None,
     event_type: str,
     location: str,
     description: str | None,
     social_network_url: str | None,
     status: str = "pending",
     history: list[dict] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    organizer: str | None = None,
+    coordinator_contact: str | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
     return {
         "teacher_id": teacher_id,
         "event_name": event_name,
         "event_date": event_date,
+        # The last day of a multi-day event. None means it starts and ends on
+        # event_date, which is what every event created before this holds.
+        "end_date": end_date,
         "event_type": event_type,
         "location": location,
         "description": description,
         "social_network_url": social_network_url,
+        # Promoted out of the <!--CC_METADATA:--> blob the frontend used to
+        # hide these in. Real fields so they can be validated, queried and
+        # rendered without parsing a comment out of the description. Events
+        # created before the promotion carry None here and are filled on read
+        # by app/services/event_fields.with_legacy_metadata().
+        "start_time": start_time,
+        "end_time": end_time,
+        "organizer": organizer,
+        "coordinator_contact": coordinator_contact,
         "status": status,
         "rejection_reason": None,
+        # Revocation is tracked separately from rejection: merging the two
+        # reasons is how the actions became indistinguishable in the first place.
+        "revocation_reason": None,
+        "revoked_at": None,
+        # The archive shelf, orthogonal to the review lifecycle in `status`.
+        # None (or absent) means live; MongoDB matches both with {"field": None}.
+        "archived_at": None,
+        "archived_by": None,
+        "archive_reason": None,
         "submitted_at": now if status != "draft" else None,
         "reviewed_at": None,
         "history": history or [],
         "created_at": now,
         "updated_at": now,
     }
+
+
+def upload_name_key(original_name: str | None, fallback: str) -> str:
+    """The key duplicate-name checks compare on (PRD 10).
+
+    Case-folded, because "Poster.JPG" and "poster.jpg" are the same file to a
+    teacher even though storage keys them apart with a uuid prefix.
+    """
+    return " ".join((original_name or fallback or "").split()).casefold()
 
 
 def new_media_document(
@@ -193,6 +250,7 @@ def new_media_document(
     file_size: int,
     storage: str = "gridfs",
     object_key: str | None = None,
+    original_name: str | None = None,
 ) -> dict[str, Any]:
     return {
         "event_id": event_id,
@@ -200,6 +258,10 @@ def new_media_document(
         "object_key": object_key,
         "file_id": file_id,
         "file_name": file_name,
+        # The name as the teacher's device reported it, before sanitising, so
+        # a duplicate-name prompt can quote what they actually picked.
+        "original_name": (original_name or file_name),
+        "name_key": upload_name_key(original_name, file_name),
         "media_url": media_url,
         "media_type": media_type,
         "content_type": content_type,
@@ -218,6 +280,7 @@ def new_document_document(
     file_size: int,
     storage: str = "gridfs",
     object_key: str | None = None,
+    original_name: str | None = None,
 ) -> dict[str, Any]:
     return {
         "event_id": event_id,
@@ -225,6 +288,8 @@ def new_document_document(
         "object_key": object_key,
         "file_id": file_id,
         "file_name": file_name,
+        "original_name": (original_name or file_name),
+        "name_key": upload_name_key(original_name, file_name),
         "file_url": file_url,
         "file_type": file_type,
         "file_size": file_size,
@@ -265,4 +330,51 @@ def new_report_document(
         "report_title": report_title,
         "report_content": report_content,
         "generated_at": utc_now(),
+    }
+
+
+def new_event_type_document(
+    *,
+    name: str,
+    is_default: bool = False,
+    created_by: str | None = None,
+) -> dict[str, Any]:
+    """A selectable event category.
+
+    `key` is the case-folded name and carries a unique index, so "Hackathon"
+    and "hackathon" cannot both exist -- whoever types it second reuses the
+    first one's canonical spelling rather than creating a near-duplicate.
+    """
+    return {
+        "name": name,
+        "key": name.casefold(),
+        "is_default": is_default,
+        "created_by": created_by,
+        "created_at": utc_now(),
+    }
+
+
+def new_faculty_coordinator_document(
+    *,
+    name: str,
+    phone: str,
+    created_by: str | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """A coordinator contact card.
+
+    Deliberately not a user account: an account needs a unique email and a
+    password hash, would appear in the superadmin user list, and would skew the
+    role counts on its dashboard. A coordinator is a name and a number that a
+    teacher can attach to an event, nothing more.
+    """
+    display_name = " ".join(name.split())
+    return {
+        "name": display_name,
+        "name_key": display_name.casefold(),
+        "phone": phone,
+        "user_id": user_id,
+        "created_by": created_by,
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
     }

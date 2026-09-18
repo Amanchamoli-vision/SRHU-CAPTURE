@@ -54,9 +54,28 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: int = 20
 
     # ------------------------------------------------------------------
-    # Uploads (stored in MongoDB GridFS)
+    # Reports
     # ------------------------------------------------------------------
-    max_upload_size_mb: int = 25
+    # Printed under the university name on the generated report letterhead.
+    report_school: str = "School of Science and Technology"
+
+    # ------------------------------------------------------------------
+    # Uploads (Cloudflare R2, or MongoDB GridFS when R2 is not configured)
+    # ------------------------------------------------------------------
+    # Backstop for any single file, whatever its kind.
+    max_upload_size_mb: int = 200
+
+    # Per-event limits (PRD 7 / 8 / 9 / 11). Photos are capped per file and by
+    # count; videos and documents by their combined size, because "10 videos of
+    # 20 MB" and "2 videos of 100 MB" cost the same storage and the teacher
+    # should be free to choose.
+    max_photos_per_event: int = 10
+    max_photo_size_mb: int = 20
+    max_video_total_mb: int = 200
+    max_documents_total_mb: int = 15
+    # No per-document size cap; this only stops an unbounded number of tiny
+    # files from being attached.
+    max_documents_per_event: int = 50
 
     # ------------------------------------------------------------------
     # Cloudflare R2 (S3-compatible object storage for uploads)
@@ -192,6 +211,18 @@ class Settings(BaseSettings):
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024
+
+    @property
+    def max_photo_size_bytes(self) -> int:
+        return self.max_photo_size_mb * 1024 * 1024
+
+    @property
+    def max_video_total_bytes(self) -> int:
+        return self.max_video_total_mb * 1024 * 1024
+
+    @property
+    def max_documents_total_bytes(self) -> int:
+        return self.max_documents_total_mb * 1024 * 1024
 
     def frontend_route(self, path: str) -> str:
         """Build a frontend route without introducing duplicate slashes."""

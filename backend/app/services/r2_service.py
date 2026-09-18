@@ -62,6 +62,35 @@ def upload_bytes(
     _client().put_object(**params)
 
 
+def upload_stream(
+    stream,
+    *,
+    object_key: str,
+    content_type: str | None,
+    metadata: dict[str, str] | None = None,
+    content_disposition: str | None = None,
+) -> None:
+    """Upload from a file-like object without reading it into memory.
+
+    `upload_fileobj` streams in parts, so a 200 MB video costs a part-sized
+    buffer rather than 200 MB of process memory -- which on a small container
+    is the difference between working and being OOM-killed.
+    """
+    extra: dict[str, object] = {
+        "ContentType": content_type or "application/octet-stream",
+        "Metadata": {k: str(v) for k, v in (metadata or {}).items()},
+    }
+    if content_disposition:
+        extra["ContentDisposition"] = content_disposition
+
+    _client().upload_fileobj(
+        stream,
+        settings.r2_bucket_name,
+        object_key,
+        ExtraArgs=extra,
+    )
+
+
 def delete_object(object_key: str) -> bool:
     """Delete an object; returns False (and logs) when R2 refused."""
     try:

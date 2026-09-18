@@ -1,10 +1,23 @@
 import json
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.models.documents import ALLOWED_EVENT_TYPES, NOTIFICATION_TYPES
+from app.models.documents import NOTIFICATION_TYPES
+from app.schemas.common import normalize_hhmm, normalize_phone
+
+# Event dates and times are local campus wall-clock values, never UTC. The
+# server runs in UTC, where between 18:30 and midnight IST "today" is already
+# yesterday locally -- so comparing a teacher's date against a UTC today would
+# reject an event they are creating for this evening.
+CAMPUS_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def campus_now() -> datetime:
+    """Now, in the campus's own timezone. Read per call, never cached."""
+    return datetime.now(CAMPUS_TZ)
 
 
 def _validate_event_date(value: str) -> str:
@@ -16,16 +29,20 @@ def _validate_event_date(value: str) -> str:
 
 
 def _validate_event_type(value: str) -> str:
-    normalized = value.strip()
-    match = next(
-        (item for item in ALLOWED_EVENT_TYPES if item.lower() == normalized.lower()),
-        None,
-    )
-    if not match:
-        raise ValueError(
-            "Invalid event type. Allowed values: " + ", ".join(ALLOWED_EVENT_TYPES)
-        )
-    return match
+    """Shape only -- the category list is data now, not an enum (PRD 4 / 14).
+
+    Membership is resolved against the `event_types` collection in the router,
+    which is also what adds a teacher's new category. Doing it here would mean
+    a schema reaching into MongoDB, which the test fakes cannot stand in for.
+    """
+    normalized = " ".join((value or "").split())
+    if not normalized:
+        raise ValueError("Event type must not be empty")
+    if len(normalized) > 60:
+        raise ValueError("Event type must be at most 60 characters")
+    if any(ord(char) < 32 for char in normalized):
+        raise ValueError("Event type contains invalid characters")
+    return normalized
 
 
 def _clean_optional(value: str | None) -> str | None:
@@ -69,10 +86,21 @@ def normalize_social_url(url: str) -> str:
 class EventCreateRequest(BaseModel):
     event_name: str = Field(min_length=1, max_length=200)
     event_date: str
+    # The last day, for an event that runs over more than one. None (or the
+    # same value as event_date) means it begins and ends on the same day.
+    end_date: str | None = Field(default=None, max_length=10)
     event_type: str
     location: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=20000)
     social_network_url: str | None = Field(default=None, max_length=2048)
+
+    # Promoted out of the description's <!--CC_METADATA:--> blob. Times are
+    # canonical zero-padded "HH:MM"; the contact is a bare 10-digit mobile and
+    # is optional (PRD 5) -- an event may have no published contact number.
+    start_time: str | None = Field(default=None, max_length=8)
+    end_time: str | None = Field(default=None, max_length=8)
+    organizer: str | None = Field(default=None, max_length=120)
+    coordinator_contact: str | None = Field(default=None, max_length=24)
 
     # A draft is parked on the server so its photos, videos and documents can be
     # uploaded before the teacher is ready to submit. Drafts are excluded from
@@ -92,6 +120,12 @@ class EventCreateRequest(BaseModel):
     def check_date(cls, value: str) -> str:
         return _validate_event_date(value)
 
+    @field_validator("end_date")
+    @classmethod
+    def check_end_date(cls, value: str | None) -> str | None:
+        cleaned = _clean_optional(value)
+        return None if cleaned is None else _validate_event_date(cleaned)
+
     @field_validator("event_type")
     @classmethod
     def check_type(cls, value: str) -> str:
@@ -108,9 +142,85 @@ class EventCreateRequest(BaseModel):
         cleaned = _clean_optional(value)
         return None if cleaned is None else normalize_social_url(cleaned)
 
+    @field_validator("start_time")
+    @classmethod
+    def check_start_time(cls, value: str | None) -> str | None:
+        return normalize_hhmm(value, field="Start time")
+
+    @field_validator("end_time")
+    @classmethod
+    def check_end_time(cls, value: str | None) -> str | None:
+        return normalize_hhmm(value, field="End time")
+
+    @field_validator("organizer")
+    @classmethod
+    def clean_organizer(cls, value: str | None) -> str | None:
+        return _clean_optional(value)
+
+    @field_validator("coordinator_contact")
+    @classmethod
+    def check_coordinator_contact(cls, value: str | None) -> str | None:
+        return normalize_phone(value)
+
+    # Whether the past-date rule applies. Creation always enforces it; an edit
+    # turns it off unless the date actually moved (see EventUpdateRequest).
+    _enforce_not_past = True
+
+    @model_validator(mode="after")
+    def check_schedule(self):
+        """PRD 3: no past date or time, and the end must follow the start.
+
+        Every value is a canonical zero-padded string ("YYYY-MM-DD", "HH:MM"),
+        so plain comparison is correct and no Date/timezone maths is needed.
+        """
+        # Same day and "ends on event_date" are the same thing; storing None
+        # for both keeps one representation in the database.
+        if self.end_date and self.end_date == self.event_date:
+            self.end_date = None
+
+        if self.end_date and self.end_date < self.event_date:
+            raise ValueError("End date cannot be before the start date")
+
+        # The time order only constrains a single-day event. An event running
+        # 18:00 on Friday to 02:00 on Saturday is perfectly ordinary, and
+        # rejecting it is what made overnight events impossible to express.
+        if (
+            self.end_date is None
+            and self.start_time
+            and self.end_time
+            and self.end_time <= self.start_time
+        ):
+            raise ValueError(
+                "End time must be after start time for an event on a single day"
+            )
+
+        # A draft is a scratchpad, not a commitment -- it may hold any date.
+        if self.save_as_draft or not self._enforce_not_past:
+            return self
+
+        now = campus_now()
+        today = now.strftime("%Y-%m-%d")
+
+        if self.event_date < today:
+            raise ValueError("Event date cannot be in the past")
+
+        if self.event_date == today and self.start_time:
+            if self.start_time <= now.strftime("%H:%M"):
+                raise ValueError("Start time cannot be in the past")
+
+        return self
+
 
 class EventUpdateRequest(EventCreateRequest):
-    """Same fields as creation; a teacher edit always resubmits the event."""
+    """Same fields as creation; a teacher edit always resubmits the event.
+
+    The past-date rule is switched off here and re-applied by the router only
+    when the date actually changed. Otherwise a teacher could never resubmit a
+    rejected event whose date has since lapsed -- the one edit they most need
+    to make would be the one edit the schema forbids.
+    """
+
+    _enforce_not_past = False
 
 
 # The only notifications a client may create for itself: the event-day
@@ -153,8 +263,9 @@ class NotificationCreateRequest(BaseModel):
 
 
 class DeanDecisionBody(BaseModel):
-    """Optional JSON body for reject / request-changes; the query string
+    """Optional JSON body for reject / revoke / request-changes; the query string
     parameters are still accepted."""
 
     rejection_reason: str | None = Field(default=None, max_length=5000)
+    revocation_reason: str | None = Field(default=None, max_length=5000)
     remarks: str | None = Field(default=None, max_length=5000)

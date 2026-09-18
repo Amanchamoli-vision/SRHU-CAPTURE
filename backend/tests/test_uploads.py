@@ -17,6 +17,7 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.config import settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.storage_service import (  # noqa: E402
     content_disposition,
@@ -24,6 +25,30 @@ from app.services.storage_service import (  # noqa: E402
     serving_policy,
 )
 from tests.test_event_history import EVENT_PAYLOAD, FakeEvents, NoUsers  # noqa: E402
+
+
+# The event-types service binds its collection at import time, so a test that
+# creates an event would otherwise reach for a real MongoDB.
+_event_types_patcher = None
+
+
+def setUpModule() -> None:
+    global _event_types_patcher
+    from unittest.mock import patch as _patch
+
+    from tests.fake_event_types import FakeEventTypes
+
+    _event_types_patcher = _patch(
+        "app.services.event_types.event_types", FakeEventTypes()
+    )
+    _event_types_patcher.start()
+
+
+def tearDownModule() -> None:
+    if _event_types_patcher is not None:
+        _event_types_patcher.stop()
+
+
 
 
 TEACHER = {"id": str(ObjectId()), "name": "Meera", "email": "m@srhu.edu.in", "role": "teacher"}
@@ -49,10 +74,21 @@ class FakeFiles:
         self.fail_insert = False
 
     def _matches(self, doc, query):
-        return all(doc.get(k) == v for k, v in query.items())
+        for key, wanted in query.items():
+            if key == "$or":
+                if not any(self._matches(doc, clause) for clause in wanted):
+                    return False
+            elif doc.get(key) != wanted:
+                return False
+        return True
 
     def count_documents(self, query):
         return sum(1 for d in self.docs if self._matches(d, query))
+
+    def find_one(self, query, *_args, **_kwargs):
+        return next(
+            (copy.deepcopy(d) for d in self.docs if self._matches(d, query)), None
+        )
 
     def insert_one(self, document):
         if self.fail_insert:
@@ -87,8 +123,15 @@ class UploadTests(unittest.TestCase):
         self.saved: list[dict] = []
 
         def fake_save(data, *, file_name, content_type, kind, event_id, teacher_id):
+            # save_upload now takes a rewound stream so large uploads are never
+            # held in memory; bytes are still accepted for other callers.
+            payload = data if isinstance(data, bytes) else data.read()
             file_id = str(ObjectId())
-            self.saved.append({"content_type": content_type, "file_name": file_name, "size": len(data)})
+            self.saved.append({
+                "content_type": content_type,
+                "file_name": file_name,
+                "size": len(payload),
+            })
             return {"storage": "gridfs", "object_key": None, "file_id": file_id, "url": f"/files/{file_id}"}
 
         self.patches = [
@@ -160,16 +203,105 @@ class UploadTests(unittest.TestCase):
 
     # ---- B-14: per-event caps ------------------------------------------
 
-    def test_photo_and_video_caps(self) -> None:
-        for index in range(4):
-            self.assertEqual(self.upload(f"p{index}.png", PNG, "image/png").status_code, 201)
-        fifth = self.upload("p5.png", PNG, "image/png")
-        self.assertEqual(fifth.status_code, 400)
-        self.assertIn("4 photos", fifth.json()["detail"])
+    def test_photo_count_cap(self) -> None:
+        # PRD 7: ten photos per event.
+        for index in range(settings.max_photos_per_event):
+            self.assertEqual(
+                self.upload(f"p{index}.png", PNG, "image/png").status_code, 201
+            )
 
-        for index in range(2):
-            self.assertEqual(self.upload(f"v{index}.mp4", MP4, "video/mp4").status_code, 201)
-        self.assertEqual(self.upload("v3.mp4", MP4, "video/mp4").status_code, 400)
+        extra = self.upload("one-too-many.png", PNG, "image/png")
+
+        self.assertEqual(extra.status_code, 400)
+        self.assertIn(f"{settings.max_photos_per_event} photos", extra.json()["detail"])
+
+    def test_oversize_photo_is_rejected(self) -> None:
+        # PRD 7: 20 MB per photo.
+        big = PNG + b"\x00" * settings.max_photo_size_bytes
+
+        response = self.upload("huge.png", big, "image/png")
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(self.saved, [])
+
+    def test_videos_have_no_count_cap(self) -> None:
+        # PRD 11 caps videos by combined size, not by number of files.
+        for index in range(6):
+            self.assertEqual(
+                self.upload(f"v{index}.mp4", MP4, "video/mp4").status_code, 201
+            )
+
+    def test_video_total_size_cap(self) -> None:
+        # Fill the budget with a stubbed size, then prove the next one is
+        # refused with the exact wording PRD 11 specifies.
+        self.media.docs.append({
+            "_id": ObjectId(),
+            "event_id": self.event_id,
+            "media_type": "video",
+            "file_size": settings.max_video_total_bytes,
+        })
+
+        response = self.upload("last.mp4", MP4, "video/mp4")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "You have exceeded the limit. Maximum allowed video size is 200 MB.",
+        )
+
+    def test_photos_and_videos_have_separate_budgets(self) -> None:
+        # A full video budget must not block a photo.
+        self.media.docs.append({
+            "_id": ObjectId(),
+            "event_id": self.event_id,
+            "media_type": "video",
+            "file_size": settings.max_video_total_bytes,
+        })
+
+        self.assertEqual(self.upload("p.png", PNG, "image/png").status_code, 201)
+
+    def test_document_total_size_cap(self) -> None:
+        # PRD 9: no per-file cap, one combined 15 MB budget.
+        self.documents.docs.append({
+            "_id": ObjectId(),
+            "event_id": self.event_id,
+            "file_size": settings.max_documents_total_bytes,
+        })
+
+        response = self.upload("report.pdf", PDF, "application/pdf", kind="documents")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "You have exceeded the limit. Maximum allowed document size is 15 MB.",
+        )
+
+    def test_heic_is_no_longer_accepted(self) -> None:
+        # PRD 7 narrows photos to JPG/PNG/WEBP/GIF.
+        heic = b"\x00\x00\x00\x18ftypheic" + b"\x00" * 64
+
+        response = self.upload("photo.heic", heic, "image/heic")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.saved, [])
+
+    def test_already_stored_heic_is_still_servable(self) -> None:
+        # Narrowing the accept list must not turn existing photos into
+        # downloads, so the legacy types stay in the servable set.
+        from app.services.storage_service import serving_policy
+
+        servable, disposition = serving_policy("image/heic")
+
+        self.assertTrue(servable)
+        self.assertEqual(disposition, "inline")
+
+    def test_uploads_record_the_original_name(self) -> None:
+        # PRD 10 compares on this, so it must survive sanitising.
+        self.assertEqual(self.upload("My Poster .png", PNG, "image/png").status_code, 201)
+
+        record = self.media.docs[-1]
+        self.assertEqual(record["original_name"], "My Poster .png")
+        self.assertEqual(record["name_key"], "my poster .png")
 
     # ---- B-29: no orphans -----------------------------------------------
 
@@ -235,3 +367,147 @@ class ServingPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DuplicateNameTests(UploadTests):
+    """PRD 10: warn before uploading a name the event already has."""
+
+    def check(self, *names, kind="media"):
+        query = "&".join(f"file_name={name}" for name in names)
+        return self.client.get(
+            f"/teacher/events/{self.event_id}/uploads/check-name?{query}&kind={kind}",
+            headers=self.auth,
+        )
+
+    def test_unknown_name_is_not_a_duplicate(self) -> None:
+        body = self.check("poster.png").json()
+
+        self.assertEqual(body["duplicates"], {"poster.png": False})
+        self.assertFalse(body["any"])
+
+    def test_uploaded_name_is_reported_as_duplicate(self) -> None:
+        self.upload("poster.png", PNG, "image/png")
+
+        body = self.check("poster.png").json()
+
+        self.assertTrue(body["duplicates"]["poster.png"])
+        self.assertTrue(body["any"])
+
+    def test_match_ignores_case(self) -> None:
+        self.upload("Poster.PNG", PNG, "image/png")
+
+        self.assertTrue(self.check("poster.png").json()["duplicates"]["poster.png"])
+
+    def test_several_names_in_one_request(self) -> None:
+        self.upload("a.png", PNG, "image/png")
+
+        body = self.check("a.png", "b.png", "c.png").json()
+
+        self.assertEqual(
+            body["duplicates"], {"a.png": True, "b.png": False, "c.png": False}
+        )
+        self.assertTrue(body["any"])
+
+    def test_media_and_documents_are_checked_separately(self) -> None:
+        self.upload("brief.pdf", PDF, "application/pdf", kind="documents")
+
+        self.assertTrue(
+            self.check("brief.pdf", kind="documents").json()["duplicates"]["brief.pdf"]
+        )
+        # The same name on the media side is not a clash.
+        self.assertFalse(self.check("brief.pdf", kind="media").json()["duplicates"]["brief.pdf"])
+
+    def test_duplicates_are_still_allowed_to_upload(self) -> None:
+        # The check only warns; storage keys every object with a uuid prefix,
+        # so two files may legitimately share a name.
+        self.upload("poster.png", PNG, "image/png")
+
+        self.assertEqual(self.upload("poster.png", PNG, "image/png").status_code, 201)
+
+    def test_legacy_record_without_a_name_key_still_matches(self) -> None:
+        # Records stored before name_key existed fall back to file_name, so no
+        # backfill is needed.
+        self.media.docs.append({
+            "_id": ObjectId(),
+            "event_id": self.event_id,
+            "media_type": "image",
+            "file_name": "old-poster.png",
+            "file_size": 10,
+        })
+
+        self.assertTrue(self.check("old-poster.png").json()["duplicates"]["old-poster.png"])
+
+
+class StreamingTests(UploadTests):
+    """The upload path must not hold a whole file in memory (see PRD 11).
+
+    A 200 MB video read into a bytes object is roughly 200 MB of RSS per
+    concurrent upload, which OOM-kills a small container. stream_upload spools
+    past a threshold instead.
+    """
+
+    def test_large_uploads_spool_to_disk(self) -> None:
+        import io as _io
+        from unittest.mock import MagicMock
+
+        from app.services.storage_service import _SPOOL_THRESHOLD, stream_upload
+
+        upload = MagicMock()
+        upload.size = None
+        upload.file = _io.BytesIO(b"\x00" * (_SPOOL_THRESHOLD * 2))
+
+        buffer, size = stream_upload(upload, _SPOOL_THRESHOLD * 4)
+        try:
+            self.assertEqual(size, _SPOOL_THRESHOLD * 2)
+            self.assertNotIsInstance(
+                buffer._file, _io.BytesIO, "large upload stayed in memory"
+            )
+        finally:
+            buffer.close()
+
+    def test_small_uploads_stay_in_memory(self) -> None:
+        import io as _io
+        from unittest.mock import MagicMock
+
+        from app.services.storage_service import stream_upload
+
+        upload = MagicMock()
+        upload.size = None
+        upload.file = _io.BytesIO(b"\x00" * 1024)
+
+        buffer, size = stream_upload(upload, 1024 * 1024)
+        try:
+            self.assertEqual(size, 1024)
+            self.assertIsInstance(buffer._file, _io.BytesIO)
+        finally:
+            buffer.close()
+
+    def test_the_buffer_is_rewound_for_the_caller(self) -> None:
+        import io as _io
+        from unittest.mock import MagicMock
+
+        from app.services.storage_service import stream_upload
+
+        upload = MagicMock()
+        upload.size = None
+        upload.file = _io.BytesIO(b"abcdef")
+
+        buffer, _size = stream_upload(upload, 1024)
+        try:
+            self.assertEqual(buffer.read(), b"abcdef")
+        finally:
+            buffer.close()
+
+    def test_oversize_aborts_before_reading_everything(self) -> None:
+        import io as _io
+        from unittest.mock import MagicMock
+
+        from app.services.storage_service import stream_upload
+
+        upload = MagicMock()
+        upload.size = None
+        upload.file = _io.BytesIO(b"\x00" * (4 * 1024 * 1024))
+
+        with self.assertRaises(Exception) as caught:
+            stream_upload(upload, 1024)
+        self.assertEqual(getattr(caught.exception, "status_code", None), 413)

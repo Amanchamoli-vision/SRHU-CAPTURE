@@ -1,5 +1,6 @@
 import logging
-from datetime import date
+import re
+from datetime import date, timedelta
 
 from fastapi import (
     APIRouter,
@@ -15,6 +16,7 @@ from fastapi import (
 )
 from pymongo import ASCENDING, DESCENDING
 
+from app.config import settings
 from app.database import (
     event_documents,
     event_media,
@@ -24,13 +26,13 @@ from app.database import (
     users,
 )
 from app.models.documents import (
-    ALLOWED_EVENT_TYPES,
     APPROVED_STAGES,
     DEAN_PROGRESS_STAGES,
     TEACHER_EDITABLE_STATUSES,
     new_document_document,
     new_event_document,
     new_history_entry,
+    upload_name_key,
     new_media_document,
     new_notification_document,
 )
@@ -39,21 +41,28 @@ from app.schemas.events import (
     EventCreateRequest,
     EventUpdateRequest,
     NotificationCreateRequest,
+    campus_now,
 )
 from app.services import email_service
+from app.services.event_types import resolve_event_type
+from app.services.event_fields import (
+    many_with_legacy_metadata,
+    with_legacy_metadata,
+)
 from app.services.storage_service import (
     MAX_EVENT_DOCUMENTS,
     MAX_EVENT_PHOTOS,
-    MAX_EVENT_VIDEOS,
     absolutize,
     check_file_signature,
     delete_event_cascade,
     delete_stored,
     inspect_document,
     inspect_media,
+    peek_head,
     read_upload,
     safe_file_name,
     save_upload,
+    stream_upload,
 )
 from app.utils.auth import check_dean, check_event_viewer, get_current_user, require_role
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
@@ -124,10 +133,20 @@ def ensure_teacher_can_edit(event: dict) -> None:
 # from. "pending" is what every submission is stored as; "submitted" and
 # "under_review" are reserved lifecycle values that mean the same thing to a
 # Dean (the dashboard counts all three as pending).
+# The Dean's status tabs, as status sets. Mirrors getStatusBucket() in
+# frontend/src/utils/constants.js -- the two must agree or a tab's count will
+# not match the rows it shows.
+STATUS_BUCKETS = {
+    "pending": ("pending", "submitted", "under_review"),
+    "approved": ("approved", "published", "in_progress", "completed"),
+    "rejected": ("rejected", "revoked"),
+}
+
 DEAN_REVIEWABLE_STATUSES = ("pending", "submitted", "under_review")
 
 # Statuses from which /resubmit puts an event (back) in the review queue.
-RESUBMITTABLE_STATUSES = ("rejected", "draft")
+# A revoked event must be resubmittable, or revoking strands it permanently.
+RESUBMITTABLE_STATUSES = ("rejected", "draft", "revoked")
 
 CHANGED_WHILE_EDITING = (
     "This event was changed by someone else while you were working on it. "
@@ -183,15 +202,59 @@ def page(cursor, skip: int | None, limit: int | None):
     return cursor
 
 
-def find_dean_visible_event_or_404(event_id: str) -> dict:
-    """An event as a Dean may see it: drafts are reported as missing."""
+def paginate(
+    collection,
+    query: dict,
+    sort_field: str,
+    direction: int,
+    skip: int | None,
+    limit: int | None,
+) -> tuple[list[dict], int]:
+    """One page of `query`, plus how many documents match it in total.
+
+    `total` is the size of the whole result set, not of the page -- a paging
+    UI needs the former to render "1-25 of 312" and to know whether a next
+    page exists. Counting with the same filter object keeps the two in step.
+    """
+    total = collection.count_documents(query)
+    cursor = page(
+        collection.find(query).sort(sort_field, direction), skip, limit
+    )
+    return serialize_many(cursor), total
+
+
+def find_dean_visible_event_or_404(event_id: str, *, allow_archived: bool = False) -> dict:
+    """An event as a Dean may see it: drafts are reported as missing.
+
+    Archived events are hidden the same way, so nothing can be approved,
+    rejected or reported on from the shelf. The archive routes opt back in.
+    """
     event = find_event_or_404(event_id)
+    if not allow_archived and event.get("archived_at") is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found"
+        )
     if event.get("status") == "draft":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Event not found"
         )
     return event
+
+
+# What each Dean action may act on, and what to say when it cannot. Revoke is
+# the odd one out: it starts from an approved event, not a pending one, which
+# is exactly why folding it into "reject" left it unreachable (PRD 18).
+DEAN_VERBS = {
+    "approve": (DEAN_REVIEWABLE_STATUSES, "Only pending events can be approved."),
+    "reject": (DEAN_REVIEWABLE_STATUSES, "Only pending events can be rejected."),
+    "request changes": (
+        DEAN_REVIEWABLE_STATUSES,
+        "Changes can only be requested on pending events.",
+    ),
+    "revoke": (APPROVED_STAGES, "Only an approved event can have its approval revoked."),
+}
 
 
 def dean_transition(
@@ -204,25 +267,25 @@ def dean_transition(
     user: dict,
     note: str | None = None,
 ) -> dict:
-    """Move a pending event to `new_status`, atomically.
+    """Move an event to `new_status`, atomically.
 
-    Only an event awaiting review may be decided; anything else is a 409
+    Each verb declares the statuses it may act from; anything else is a 409
     (a double-click, a second Dean, or a stale page). The write is filtered
     on the status that was checked, so two racing decisions cannot both win.
     """
     existing = find_dean_visible_event_or_404(event_id)
     current = existing.get("status")
 
-    if current not in DEAN_REVIEWABLE_STATUSES:
+    allowed_from, message = DEAN_VERBS[verb]
+
+    if current not in allowed_from:
         if verb == "approve" and current in APPROVED_STAGES:
             raise conflict("This event is already approved.")
         if verb == "reject" and current == "rejected":
             raise conflict("This event has already been rejected.")
-        raise conflict({
-            "approve": "Only pending events can be approved.",
-            "reject": "Only pending events can be rejected.",
-            "request changes": "Changes can only be requested on pending events.",
-        }[verb])
+        if verb == "revoke" and current == "revoked":
+            raise conflict("This event's approval has already been revoked.")
+        raise conflict(message)
 
     updated = update_event(
         event_id,
@@ -433,7 +496,7 @@ def dean_dashboard_stats(
         row["_id"]: row["count"]
         for row in events.aggregate(
             [
-                {"$match": {"status": {"$ne": "draft"}}},
+                {"$match": {"status": {"$ne": "draft"}, "archived_at": None}},
                 {"$group": {"_id": "$status", "count": {"$sum": 1}}},
             ]
         )
@@ -482,8 +545,14 @@ def get_all_events(
         default=None
     ),
 
-    # Optional paging. No default cap: the Dean pages filter the whole list
-    # client-side, and a silent cap would hide events from them.
+    # Free-text search over the event name, venue and organiser.
+    q: str | None = Query(default=None, max_length=200),
+
+    # One of the status buckets the Dean's tabs use, or "all".
+    status_bucket: str | None = Query(default=None, max_length=20),
+
+    # Optional paging. Still no default cap, so an un-paged caller keeps
+    # getting everything; the Dean page now asks for a page explicitly.
     skip: int | None = Query(default=None, ge=0),
     limit: int | None = Query(default=None, ge=1, le=1000),
 ):
@@ -513,36 +582,25 @@ def get_all_events(
     normalized_event_type = None
 
     if event_type:
-        normalized_event_type = event_type.strip()
-
-        matching_type = next(
-            (
-                item
-                for item in ALLOWED_EVENT_TYPES
-                if item.lower() == normalized_event_type.lower()
-            ),
-            None
-        )
-
-        if not matching_type:
+        # Resolve to the stored spelling so the filter is case-insensitive.
+        # An unknown value is passed through rather than rejected: filtering by
+        # a category that was since renamed should return nothing, not 400 --
+        # and `create=False` stops a search box from inventing categories.
+        try:
+            normalized_event_type = resolve_event_type(event_type, create=False)
+        except ValueError as error:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Invalid event type. "
-                    "Allowed values: "
-                    + ", ".join(ALLOWED_EVENT_TYPES)
-                    + "."
-                )
-            )
-
-        normalized_event_type = matching_type
+                detail=str(error),
+            ) from error
 
     # --------------------------------------------------------
     # BUILD QUERY
     # --------------------------------------------------------
 
-    # Deans only review submitted events, never drafts
-    query: dict = {"status": {"$ne": "draft"}}
+    # Deans only review submitted events, never drafts -- and never anything
+    # moved to the archive shelf (PRD 1).
+    query: dict = {"status": {"$ne": "draft"}, "archived_at": None}
 
     if event_date:
         query["event_date"] = event_date
@@ -550,13 +608,58 @@ def get_all_events(
     if normalized_event_type:
         query["event_type"] = normalized_event_type
 
-    cursor = page(events.find(query).sort("created_at", DESCENDING), skip, limit)
-    event_list = serialize_many(cursor)
+    # The same buckets the Dean's status tabs show. Kept server-side so the
+    # counts and the page agree -- deriving them from a page would report
+    # "3 results" on page 1 of 13.
+    bucket = (status_bucket or "all").strip().lower()
+    if bucket and bucket != "all":
+        statuses = STATUS_BUCKETS.get(bucket)
+        if statuses is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unknown status filter.",
+            )
+        query["status"] = {"$in": list(statuses)}
+
+    search = (q or "").strip()
+    if search:
+        # Escaped: a teacher searching for "C++ Workshop" must not have the
+        # "+" read as a quantifier, and an unescaped "(" would 500.
+        pattern = re.escape(search)
+        query["$or"] = [
+            {"event_name": {"$regex": pattern, "$options": "i"}},
+            {"location": {"$regex": pattern, "$options": "i"}},
+            {"organizer": {"$regex": pattern, "$options": "i"}},
+        ]
+
+    # Counts for the status tabs, under the same non-status filters, so the
+    # numbers on the tabs match what selecting one would show.
+    #
+    # "all" has to restate the draft exclusion: dropping the `status` key to
+    # ignore the selected tab would otherwise drop the {"$ne": "draft"} the
+    # base query put there, and the All tab would count drafts the Dean can
+    # never see.
+    count_query = {key: value for key, value in query.items() if key != "status"}
+    counts = {
+        name: events.count_documents({**count_query, "status": {"$in": list(statuses)}})
+        for name, statuses in STATUS_BUCKETS.items()
+    }
+    counts["all"] = events.count_documents(
+        {**count_query, "status": {"$ne": "draft"}}
+    )
+
+    event_list, total = paginate(
+        events, query, "created_at", DESCENDING, skip, limit
+    )
+    many_with_legacy_metadata(event_list)
 
     return {
         "success": True,
         "events": event_list,
-        "total": len(event_list),
+        "total": total,
+        "count": len(event_list),
+        "counts": counts,
+        "has_more": (skip or 0) + len(event_list) < total,
         "skip": skip or 0,
         "limit": limit,
 
@@ -583,11 +686,14 @@ def get_dean_event(
     user = get_current_user(authorization)
     check_event_viewer(user)
 
-    event = find_dean_visible_event_or_404(event_id)
+    # Archived events stay readable: the Dean has to be able to open one to
+    # decide whether to restore or delete it. They are still barred from every
+    # *decision* (dean_transition keeps the default) and from reports.
+    event = find_dean_visible_event_or_404(event_id, allow_archived=True)
 
     return {
         "success": True,
-        "event": serialize(event),
+        "event": with_legacy_metadata(serialize(event)),
     }
 
 
@@ -608,7 +714,9 @@ def get_event_media(
     user = get_current_user(authorization)
     check_event_viewer(user)
 
-    event = find_dean_visible_event_or_404(event_id)
+    # Same reasoning as the single-event read: an archived event's media has
+    # to be viewable, or "review before deleting" is not possible.
+    event = find_dean_visible_event_or_404(event_id, allow_archived=True)
 
     media = list_media(request, str(event["_id"]))
 
@@ -741,6 +849,255 @@ def reject_event(
         "success": True,
         "message": "Event rejected successfully",
         "event": rejected_event,
+    }
+
+
+# ============================================================
+# REVOKE APPROVAL (distinct from REJECT -- PRD 18)
+# ============================================================
+
+@router.patch(
+    "/dean/events/{event_id}/revoke"
+)
+def revoke_event(
+    event_id: str,
+    background_tasks: BackgroundTasks,
+    revocation_reason: str | None = Query(default=None),
+    body: DeanDecisionBody | None = Body(default=None),
+    authorization: str | None = Header(
+        default=None
+    )
+):
+    """Withdraw approval from an already-approved event.
+
+    Reject and revoke were previously one control that always called /reject.
+    Because rejection only accepts a *pending* event, pressing it on an
+    approved one answered 409 -- so revoking was impossible, not merely
+    unclear. They are now separate actions over separate status sets.
+
+    The teacher keeps the event and may fix and resubmit it, so any generated
+    report is invalidated: it asserted an approval that no longer stands.
+    """
+    user = get_current_user(authorization)
+    check_dean(user)
+
+    revocation_reason = _decision_text(revocation_reason, body, "revocation_reason")
+
+    if not revocation_reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A reason is required to revoke approval"
+        )
+
+    revoked = dean_transition(
+        event_id,
+        verb="revoke",
+        changes={
+            "status": "revoked",
+            "revocation_reason": revocation_reason,
+            "revoked_at": utc_now(),
+            "reviewed_at": utc_now(),
+        },
+        history_action="revoked",
+        new_status="revoked",
+        user=user,
+        note=revocation_reason,
+    )
+    invalidate_report(revoked["id"])
+
+    notify_teacher(
+        background_tasks,
+        revoked,
+        notification_type="revoked",
+        title="Event Approval Revoked",
+        message=(
+            f'Approval for your "{revoked.get("event_name", "event")}"'
+            " event was revoked by the Dean."
+            f" Reason: {revocation_reason.strip()}"
+        ),
+        data={
+            "event_name": revoked.get("event_name", ""),
+            "revocation_reason": revocation_reason.strip(),
+        },
+        remarks=revocation_reason.strip(),
+    )
+
+    return {
+        "success": True,
+        "message": "Event approval revoked",
+        "event": revoked,
+    }
+
+
+# ============================================================
+# ARCHIVE / RESTORE / PERMANENT DELETE (PRD 1)
+# ============================================================
+#
+# Archiving is deliberately NOT a status. `status` carries the review
+# lifecycle, and every gate in this module reads it -- overwriting it with
+# "archived" would destroy the state that restore has to return the event to.
+# The shelf is a separate axis: `archived_at` set means shelved, None (or
+# absent) means live. MongoDB matches missing and null alike, so existing
+# documents need no backfill.
+
+@router.patch(
+    "/dean/events/{event_id}/archive"
+)
+def archive_event(
+    event_id: str,
+    archive_reason: str | None = Query(default=None),
+    body: DeanDecisionBody | None = Body(default=None),
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Move an event to the archive, keeping the record and its media."""
+    user = get_current_user(authorization)
+    check_dean(user)
+
+    event = find_dean_visible_event_or_404(event_id, allow_archived=True)
+
+    if event.get("archived_at") is not None:
+        raise conflict("This event is already archived.")
+
+    reason = _decision_text(archive_reason, body, "remarks")
+
+    updated = update_event(
+        event_id,
+        {
+            "archived_at": utc_now(),
+            "archived_by": user["id"],
+            "archive_reason": reason or None,
+        },
+        history=new_history_entry(
+            action="archived",
+            status=event.get("status"),
+            from_status=event.get("status"),
+            actor=user,
+            note=reason or None,
+        ),
+    )
+
+    if not updated:
+        raise conflict("This event was updated by someone else. Please reload it.")
+
+    return {
+        "success": True,
+        "message": "Event archived",
+        "event": serialize(updated),
+    }
+
+
+@router.patch(
+    "/dean/events/{event_id}/restore"
+)
+def restore_event(
+    event_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Take an event back off the shelf, into the status it held before."""
+    user = get_current_user(authorization)
+    check_dean(user)
+
+    event = find_dean_visible_event_or_404(event_id, allow_archived=True)
+
+    if event.get("archived_at") is None:
+        raise conflict("This event is not archived.")
+
+    updated = update_event(
+        event_id,
+        {
+            "archived_at": None,
+            "archived_by": None,
+            "archive_reason": None,
+        },
+        history=new_history_entry(
+            action="restored",
+            status=event.get("status"),
+            from_status=event.get("status"),
+            actor=user,
+        ),
+    )
+
+    if not updated:
+        raise conflict("This event was updated by someone else. Please reload it.")
+
+    return {
+        "success": True,
+        "message": "Event restored",
+        "event": serialize(updated),
+    }
+
+
+@router.get(
+    "/dean/archive/events"
+)
+def get_archived_events(
+    authorization: str | None = Header(
+        default=None
+    ),
+    skip: int | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
+):
+    """The archive shelf, most recently archived first."""
+    user = get_current_user(authorization)
+    check_event_viewer(user)
+
+    query = {"archived_at": {"$ne": None}}
+    event_list, total = paginate(
+        events, query, "archived_at", DESCENDING, skip, limit
+    )
+    many_with_legacy_metadata(event_list)
+
+    return {
+        "success": True,
+        "events": event_list,
+        "total": total,
+        "count": len(event_list),
+        "has_more": (skip or 0) + len(event_list) < total,
+        "skip": skip or 0,
+        "limit": limit,
+    }
+
+
+@router.delete(
+    "/dean/events/{event_id}"
+)
+def dean_delete_event(
+    event_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Delete an event permanently, with its media, documents and report.
+
+    Irreversible, and it drops the stored bytes from R2/GridFS as well, so it
+    is logged. The Dean UI puts this behind a typed confirmation; archiving is
+    the reversible option offered alongside it.
+    """
+    user = get_current_user(authorization)
+    check_dean(user)
+
+    event = find_dean_visible_event_or_404(event_id, allow_archived=True)
+
+    result = events.delete_one({"_id": event["_id"]})
+    if result.deleted_count == 0:
+        raise conflict("This event was already removed.")
+
+    delete_event_cascade(str(event["_id"]))
+
+    logger.warning(
+        "event_hard_deleted id=%s name=%s by=%s",
+        event_id,
+        event.get("event_name"),
+        user["id"],
+    )
+
+    return {
+        "success": True,
+        "message": "Event deleted permanently",
     }
 
 
@@ -926,15 +1283,24 @@ def get_teacher_events(
     user = get_current_user(authorization)
     require_role(user, "teacher")
 
-    cursor = page(
-        events.find({"teacher_id": user["id"]}).sort("created_at", DESCENDING), skip, limit
+    event_list, total = paginate(
+        events,
+        {"teacher_id": user["id"], "archived_at": None},
+        "created_at",
+        DESCENDING,
+        skip,
+        limit,
     )
-    event_list = serialize_many(cursor)
+    many_with_legacy_metadata(event_list)
 
     return {
         "success": True,
         "events": event_list,
-        "total": len(event_list),
+        "total": total,
+        "count": len(event_list),
+        "has_more": (skip or 0) + len(event_list) < total,
+        "skip": skip or 0,
+        "limit": limit,
     }
 
 
@@ -959,10 +1325,15 @@ def create_teacher_event(
         teacher_id=user["id"],
         event_name=payload.event_name,
         event_date=payload.event_date,
-        event_type=payload.event_type,
+        end_date=payload.end_date,
+        event_type=resolve_event_type(payload.event_type, created_by=user["id"]),
         location=payload.location,
         description=payload.description,
         social_network_url=payload.social_network_url,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        organizer=payload.organizer,
+        coordinator_contact=payload.coordinator_contact,
         status=new_status,
         history=[
             new_history_entry(
@@ -1008,7 +1379,7 @@ def get_teacher_event(
 
     return {
         "success": True,
-        "event": serialize(event),
+        "event": with_legacy_metadata(serialize(event)),
         "media": list_media(request, event_key),
         "documents": list_documents(request, event_key),
     }
@@ -1045,13 +1416,32 @@ def update_teacher_event(
             detail="This event has already been submitted and can no longer be saved as a draft.",
         )
 
+    # EventUpdateRequest exempts itself from the past-date rule so a rejected
+    # event whose date has lapsed can still be resubmitted untouched. The rule
+    # is re-applied here, but only to a date the teacher actually moved -- and
+    # never to a draft, which is still a scratchpad.
+    if (
+        not payload.save_as_draft
+        and payload.event_date != event.get("event_date")
+        and payload.event_date < campus_now().strftime("%Y-%m-%d")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event date cannot be in the past",
+        )
+
     changes = {
         "event_name": payload.event_name,
         "event_date": payload.event_date,
-        "event_type": payload.event_type,
+        "end_date": payload.end_date,
+        "event_type": resolve_event_type(payload.event_type, created_by=user["id"]),
         "location": payload.location,
         "description": payload.description,
         "social_network_url": payload.social_network_url,
+        "start_time": payload.start_time,
+        "end_time": payload.end_time,
+        "organizer": payload.organizer,
+        "coordinator_contact": payload.coordinator_contact,
         "rejection_reason": None,
     }
 
@@ -1175,13 +1565,17 @@ def teacher_resubmit_event(
     if previous_status not in RESUBMITTABLE_STATUSES:
         raise conflict("This event is already waiting for the Dean's review.")
 
-    action = "resubmitted" if previous_status == "rejected" else "submitted"
+    # A draft reaching the Dean for the first time is "submitted"; an event
+    # coming back after a refusal -- rejected or revoked -- is "resubmitted".
+    action = "submitted" if previous_status == "draft" else "resubmitted"
 
     updated = update_event(
         event_id,
         {
             "status": "pending",
             "rejection_reason": None,
+            "revocation_reason": None,
+            "revoked_at": None,
             "submitted_at": utc_now(),
         },
         history=new_history_entry(
@@ -1221,10 +1615,45 @@ def _cap_error(cap: int, kind: str) -> HTTPException:
     )
 
 
-def _ensure_under_cap(collection, cap_query: dict, cap: int, kind: str) -> None:
+def _ensure_under_cap(collection, cap_query: dict, cap: int | None, kind: str) -> None:
     """Refuse an upload up front when the event already has `cap` of them."""
-    if collection.count_documents(cap_query) >= cap:
+    if cap is not None and collection.count_documents(cap_query) >= cap:
         raise _cap_error(cap, kind)
+
+
+def _size_cap_error(cap_bytes: int, kind: str) -> HTTPException:
+    """The over-limit message, worded as PRD 11 specifies for videos."""
+    megabytes = cap_bytes // (1024 * 1024)
+    noun = {"video": "video", "document": "document"}.get(kind, "file")
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "You have exceeded the limit. "
+            f"Maximum allowed {noun} size is {megabytes} MB."
+        ),
+    )
+
+
+def _stored_bytes(collection, cap_query: dict) -> int:
+    """Total size already attached to the event under this filter.
+
+    A `find` and a sum rather than an aggregation: an event has tens of files
+    at most, and the test fakes stand in for `find` but not for `$group`.
+    """
+    return sum(
+        item.get("file_size") or 0
+        for item in collection.find(cap_query, {"file_size": 1})
+    )
+
+
+def _ensure_bytes_under_cap(
+    collection, cap_query: dict, incoming: int, cap_bytes: int | None, kind: str
+) -> None:
+    """Refuse an upload that would push the event past its combined budget."""
+    if cap_bytes is None:
+        return
+    if _stored_bytes(collection, cap_query) + incoming > cap_bytes:
+        raise _size_cap_error(cap_bytes, kind)
 
 
 def _event_still_editable(event: dict) -> bool:
@@ -1240,8 +1669,9 @@ def _record_upload(
     stored: dict,
     event: dict,
     cap_query: dict,
-    cap: int,
+    cap: int | None,
     kind: str,
+    cap_bytes: int | None = None,
 ) -> None:
     """Insert the metadata record for bytes that were just stored, keeping
     the two consistent.
@@ -1270,13 +1700,29 @@ def _record_upload(
             "so the file was not added."
         )
 
-    past_cap = [
-        item["_id"]
-        for item in collection.find(cap_query, {"_id": 1}).sort("_id", ASCENDING)
-    ][cap:]
-    if result.inserted_id in past_cap:
-        roll_back()
-        raise _cap_error(cap, kind)
+    if cap is not None:
+        past_cap = [
+            item["_id"]
+            for item in collection.find(cap_query, {"_id": 1}).sort("_id", ASCENDING)
+        ][cap:]
+        if result.inserted_id in past_cap:
+            roll_back()
+            raise _cap_error(cap, kind)
+
+    if cap_bytes is not None:
+        # The count version can just slice the list; bytes need a running
+        # total in insertion order, so that when two uploads race, whichever
+        # landed second is the one that loses.
+        running = 0
+        for item in collection.find(
+            cap_query, {"_id": 1, "file_size": 1}
+        ).sort("_id", ASCENDING):
+            running += item.get("file_size") or 0
+            if item["_id"] == result.inserted_id:
+                if running > cap_bytes:
+                    roll_back()
+                    raise _size_cap_error(cap_bytes, kind)
+                break
 
 
 def _delete_attachment(collection, record_id: str, event: dict, not_found: str) -> None:
@@ -1348,22 +1794,36 @@ def upload_teacher_event_media(
 
     info = inspect_media(file)
     media_type = info["kind"]
-    cap = MAX_EVENT_PHOTOS if media_type == "image" else MAX_EVENT_VIDEOS
+    is_image = media_type == "image"
+
+    # Photos: at most N, each under its own size cap. Videos: no count limit,
+    # but one combined budget for the event (PRD 7 / 11).
+    cap = MAX_EVENT_PHOTOS if is_image else None
+    cap_bytes = None if is_image else settings.max_video_total_bytes
+    per_file_limit = (
+        settings.max_photo_size_bytes if is_image else settings.max_video_total_bytes
+    )
     cap_query = {"event_id": event_key, "media_type": media_type}
     _ensure_under_cap(event_media, cap_query, cap, media_type)
 
-    data = read_upload(file)
-    check_file_signature(info["extension"], data)
-    file_name = safe_file_name(file.filename)
-
-    stored = save_upload(
-        data,
-        file_name=file_name,
-        content_type=info["content_type"],
-        kind="media",
-        event_id=event_key,
-        teacher_id=user["id"],
+    buffer, size = stream_upload(
+        file, per_file_limit, what="Photos" if is_image else "Videos"
     )
+    try:
+        check_file_signature(info["extension"], peek_head(buffer))
+        _ensure_bytes_under_cap(event_media, cap_query, size, cap_bytes, media_type)
+
+        file_name = safe_file_name(file.filename)
+        stored = save_upload(
+            buffer,
+            file_name=file_name,
+            content_type=info["content_type"],
+            kind="media",
+            event_id=event_key,
+            teacher_id=user["id"],
+        )
+    finally:
+        buffer.close()
 
     document = new_media_document(
         event_id=event_key,
@@ -1374,15 +1834,62 @@ def upload_teacher_event_media(
         media_url=stored["url"],
         media_type=media_type,
         content_type=info["content_type"],
-        file_size=len(data),
+        file_size=size,
+        original_name=file.filename,
     )
 
-    _record_upload(event_media, document, stored, event, cap_query, cap, media_type)
+    _record_upload(
+        event_media, document, stored, event, cap_query, cap, media_type, cap_bytes
+    )
 
     return {
         "success": True,
         "message": "Media uploaded successfully",
         "media": absolutize(request, serialize(document), "media_url"),
+    }
+
+
+@router.get(
+    "/teacher/events/{event_id}/uploads/check-name"
+)
+def check_upload_names(
+    event_id: str,
+    file_name: list[str] = Query(default=[]),
+    kind: str = Query(default="media", pattern="^(media|documents)$"),
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Which of these names are already attached to the event (PRD 10).
+
+    Storage keys every object with a uuid prefix, so a repeated name can never
+    collide -- this exists purely so the wizard can ask "are you sure you want
+    to upload a file with the same name?" before spending the bytes. Several
+    names may be checked at once so picking ten photos is one round trip.
+    """
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    event = find_teacher_event_or_404(event_id, user["id"])
+    collection = event_media if kind == "media" else event_documents
+
+    results: dict[str, bool] = {}
+    for raw in file_name:
+        key = upload_name_key(raw, raw)
+        if not key:
+            continue
+        # `file_name` is the fallback for records stored before `name_key`
+        # existed, so no backfill is needed for the check to work on them.
+        existing = collection.find_one({
+            "event_id": str(event["_id"]),
+            "$or": [{"name_key": key}, {"file_name": raw}],
+        })
+        results[raw] = existing is not None
+
+    return {
+        "success": True,
+        "duplicates": results,
+        "any": any(results.values()),
     }
 
 
@@ -1461,18 +1968,26 @@ def upload_teacher_event_document(
     cap_query = {"event_id": event_key}
     _ensure_under_cap(event_documents, cap_query, MAX_EVENT_DOCUMENTS, "document")
 
-    data = read_upload(file)
-    check_file_signature(info["extension"], data)
-    original_name = (file.filename or "document").strip()[:255] or "document"
+    # Documents have no per-file cap (PRD 9): any number is fine as long as
+    # they fit the combined budget, so the budget is also the per-file ceiling.
+    cap_bytes = settings.max_documents_total_bytes
 
-    stored = save_upload(
-        data,
-        file_name=original_name,
-        content_type=info["content_type"],
-        kind="documents",
-        event_id=event_key,
-        teacher_id=user["id"],
-    )
+    buffer, size = stream_upload(file, cap_bytes, what="Documents")
+    try:
+        check_file_signature(info["extension"], peek_head(buffer))
+        _ensure_bytes_under_cap(event_documents, cap_query, size, cap_bytes, "document")
+
+        original_name = (file.filename or "document").strip()[:255] or "document"
+        stored = save_upload(
+            buffer,
+            file_name=original_name,
+            content_type=info["content_type"],
+            kind="documents",
+            event_id=event_key,
+            teacher_id=user["id"],
+        )
+    finally:
+        buffer.close()
 
     document = new_document_document(
         event_id=event_key,
@@ -1482,11 +1997,13 @@ def upload_teacher_event_document(
         file_name=original_name,
         file_url=stored["url"],
         file_type=info["content_type"],
-        file_size=len(data),
+        file_size=size,
+        original_name=file.filename,
     )
 
     _record_upload(
-        event_documents, document, stored, event, cap_query, MAX_EVENT_DOCUMENTS, "document"
+        event_documents, document, stored, event, cap_query,
+        MAX_EVENT_DOCUMENTS, "document", cap_bytes,
     )
 
     return {
@@ -1538,22 +2055,24 @@ def get_teacher_notifications(
     authorization: str | None = Header(
         default=None
     ),
+    skip: int | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ):
     """The caller's notifications, newest first, at most `limit` of them."""
     user = get_current_user(authorization)
 
-    cursor = (
-        notifications.find({"user_id": user["id"]})
-        .sort("created_at", DESCENDING)
-        .limit(limit)
+    query = {"user_id": user["id"]}
+    notification_list, total = paginate(
+        notifications, query, "created_at", DESCENDING, skip, limit
     )
-    notification_list = serialize_many(cursor)
 
     return {
         "success": True,
         "notifications": notification_list,
-        "total": len(notification_list),
+        "total": total,
+        "count": len(notification_list),
+        "unread": notifications.count_documents({**query, "is_read": False}),
+        "has_more": (skip or 0) + len(notification_list) < total,
     }
 
 
@@ -1605,6 +2124,29 @@ def create_teacher_notification(
     }
 
 
+# How long a notification lingers after it has been seen (PRD 13). The bell is
+# a queue of things still to act on, not an archive, so a read item clears
+# itself. MongoDB's TTL monitor sweeps about once a minute, so the real
+# lifetime is this plus up to ~60s -- never assert an exact moment.
+READ_NOTIFICATION_TTL = timedelta(hours=1)
+
+
+def _read_marks() -> dict:
+    """The fields that mark a notification read and schedule its removal.
+
+    `expires_at` is a separate field rather than a TTL on `read_at` on purpose:
+    a TTL index on `read_at` would delete every already-read notification in
+    the database within a minute of being created. Rows read before this
+    shipped have no `expires_at` and are simply left alone.
+    """
+    now = utc_now()
+    return {
+        "is_read": True,
+        "read_at": now,
+        "expires_at": now + READ_NOTIFICATION_TTL,
+    }
+
+
 @router.patch("/notifications/read-all")
 @router.patch(
     "/teacher/notifications/read-all"
@@ -1618,7 +2160,7 @@ def mark_all_notifications_read(
 
     notifications.update_many(
         {"user_id": user["id"], "is_read": False},
-        {"$set": {"is_read": True, "read_at": utc_now()}},
+        {"$set": _read_marks()},
     )
 
     return {
@@ -1641,7 +2183,7 @@ def mark_notification_read(
 
     result = notifications.update_one(
         {"_id": to_object_id(notification_id), "user_id": user["id"]},
-        {"$set": {"is_read": True, "read_at": utc_now()}},
+        {"$set": _read_marks()},
     )
 
     if result.matched_count == 0:

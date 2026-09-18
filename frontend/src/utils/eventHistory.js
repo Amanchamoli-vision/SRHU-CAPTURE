@@ -27,7 +27,12 @@ const ACTION_META = {
   resubmitted: { label: "Resubmitted for review", tone: "pending" },
   approved: { label: "Approved", tone: "approved" },
   rejected: { label: "Rejected", tone: "rejected" },
+  // Withdrawing an approval is its own action, so it reads as its own line
+  // rather than the generic "Status updated" fallback (PRD 18).
+  revoked: { label: "Approval revoked", tone: "rejected" },
   changes_requested: { label: "Changes requested", tone: "rejected" },
+  archived: { label: "Archived", tone: "draft" },
+  restored: { label: "Restored from archive", tone: "pending" },
 };
 
 /** What an entry reads as, and which status hue it takes. */

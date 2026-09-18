@@ -32,12 +32,14 @@
   --hero-grad: linear-gradient(100deg, #0D3668 0%, #0369A1 50%, #D97706 100%);
   --header-h: 4.25rem;
 
-  /* App chrome, shared by the Teacher, Dean and Super Admin shells: a deep
-     SRHU-blue header, and a rail one step darker than the page so the three
-     layers read as header / navigation / content instead of one white sheet. */
+  /* App chrome, shared by the Teacher, Dean and Super Admin shells. Header and
+     rail are one continuous piece of SRHU-blue chrome: --rail-bg opens on the
+     exact colour --header-bg starts from (#0A2A52), so the two meet with no
+     seam, then deepens down the rail so a tall sidebar does not read as flat. */
   --header-bg: linear-gradient(100deg, #0A2A52 0%, #0D3668 55%, #0E4378 100%);
+  --rail-bg: linear-gradient(180deg, #0A2A52 0%, #0C3160 38%, #0B2C57 72%, #081F40 100%);
   --header-edge: rgb(255 255 255 / .08);
-  --c-rail: 233 239 248;    /* #E9EFF8 brand-tinted rail */
+  --c-rail: 233 239 248;    /* #E9EFF8 - legacy, kept for any light-rail surface */
   color-scheme: light;
 
   /* The page's own tokens, captured before the header overrides them, so a
@@ -83,6 +85,7 @@
   --hero-tint: rgb(13 54 104 / .35);
   --hero-grad: linear-gradient(100deg, #38BDF8 0%, #7dd3fc 45%, #F5A524 100%);
   --header-bg: linear-gradient(100deg, #071A36 0%, #0A2446 55%, #0C2D57 100%);
+  --rail-bg: linear-gradient(180deg, #071A36 0%, #0A2446 45%, #061428 100%);
   --header-edge: rgb(255 255 255 / .07);
   --c-rail: 10 17 31;
   color-scheme: dark;
@@ -982,7 +985,9 @@ input::-ms-clear {
      the hamburger, the account chip, eyebrows, chips) turns light-on-blue with
      no per-component overrides. */
   .hv-header,
-  .hv-band-dark {
+  .hv-band-dark,
+  .hv-rail,
+  .hv-menu {
     --c-ink: 244 247 252;
     --c-muted: 176 194 220;
     --c-line: 255 255 255;
@@ -1020,7 +1025,9 @@ input::-ms-clear {
   /* A panel opened from the header (the notification list), or a card set on
      a dark band, belongs to the page: restore the page's tokens inside it. */
   .hv-header .hv-popover,
-  .hv-band-dark .hv-popover {
+  .hv-band-dark .hv-popover,
+  .hv-rail .hv-popover,
+  .hv-menu .hv-popover {
     --c-base: var(--p-base);
     --c-surface: var(--p-surface);
     --c-raised: var(--p-raised);
@@ -1088,12 +1095,20 @@ input::-ms-clear {
     transform: scaleX(1);
   }
 
-  /* The navigation rail sits one tone below the page, so the layout reads as
-     header / navigation / content. The current item is lifted out of it as a
-     card, with the amber marker on its edge. */
+  /* The navigation rail is the header's blue continued downward, so the chrome
+     reads as one L-shaped piece and the content area is the only light surface.
+     The rule sits after the dark-island group above and at equal specificity,
+     so this background wins over the group's --header-bg. The current item is
+     lifted out of the blue as a translucent card, amber marker on its edge. */
   .hv-rail {
-    background: rgb(var(--c-rail));
-    border-right: 1px solid rgb(var(--c-line) / .07);
+    background: var(--rail-bg);
+    border-right: 1px solid var(--header-edge);
+  }
+
+  /* The rail's own tokens are now light-on-blue, so the ridge motif needs more
+     alpha than the 12% that reads correctly against a pale page. */
+  .hv-rail .divider {
+    color: rgb(255 255 255 / .16);
   }
 
   .rail-label {
@@ -1140,15 +1155,14 @@ input::-ms-clear {
     color: rgb(var(--c-ink));
   }
 
+  /* Not var(--card-bg): on the dark island that resolves to white/.07 with
+     --card-shadow: none, which is too faint to mark the current page against
+     the blue. The inset ring does the work the drop shadow used to. */
   .rail-link[aria-current="page"] {
-    background: var(--card-bg);
-    box-shadow: var(--card-shadow);
+    background: rgb(255 255 255 / .12);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14);
     color: rgb(var(--c-ink));
     font-weight: 600;
-  }
-
-  :root[data-theme="dark"] .rail-link[aria-current="page"] {
-    background: rgb(255 255 255 / .07);
   }
 
   .rail-link[aria-current="page"]::before {
@@ -1237,9 +1251,7 @@ input::-ms-clear {
     inset: 0;
     z-index: 40;
     padding-top: var(--header-h);
-    background: rgb(var(--c-base) / .96);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+    background: var(--rail-bg);
     opacity: 0;
     transform: translateY(-10px);
     transition: opacity .28s, transform .28s cubic-bezier(.2, .7, .2, 1);

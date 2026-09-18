@@ -3,9 +3,10 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiJson } from "../../services/api";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { canTeacherEditEvent } from "../../utils/constants";
+import { formatDateRange, formatTime12h } from "../../utils/dates";
+import { readEventFields } from "../../utils/eventFields";
 import { buildTimeline } from "../../utils/eventHistory";
 import {
-  decodeEventMetadata,
   duplicateEventAsDraft,
 } from "../../utils/draftStorage";
 import TeacherShell from "../../components/teacher/TeacherShell";
@@ -205,7 +206,9 @@ function EventDetails() {
     );
   }
 
-  const { description: cleanDescription, meta } = decodeEventMetadata(event.description);
+  // See the note in the Dean's copy: real columns first, blob as a fallback.
+  const meta = readEventFields(event);
+  const cleanDescription = meta.description;
   // The approval banner reads from the recorded trail, so it can name the
   // Dean who approved and say whether a rejection came first.
   const timeline = buildTimeline(event);
@@ -224,11 +227,18 @@ function EventDetails() {
     event.status === "rejected";
 
   const facts = [
-    { Icon: IconCalendar, label: "Date", value: event.event_date || "Not set" },
+    {
+      Icon: IconCalendar,
+      label: event.end_date ? "Dates" : "Date",
+      value: formatDateRange(event.event_date, event.end_date) || "Not set",
+    },
     {
       Icon: IconClock,
       label: "Timings",
-      value: meta.startTime && meta.endTime ? `${meta.startTime} – ${meta.endTime}` : "All day",
+      value:
+        meta.startTime && meta.endTime
+          ? `${formatTime12h(meta.startTime)} – ${formatTime12h(meta.endTime)}`
+          : "All day",
     },
     { Icon: IconMapPin, label: "Venue", value: event.location || "Not set" },
   ];

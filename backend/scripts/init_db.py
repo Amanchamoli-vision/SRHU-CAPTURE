@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import settings  # noqa: E402
 from app.database import db, ensure_indexes, ping  # noqa: E402
+from app.services.event_types import seed_default_event_types  # noqa: E402
 
 
 def main() -> int:
@@ -25,6 +26,11 @@ def main() -> int:
         return 1
 
     ensure_indexes()
+
+    # The built-in event categories. Idempotent: existing rows are left alone,
+    # including any a teacher added.
+    seed_default_event_types()
+    print("Seeded the built-in event types.")
 
     for name in sorted(db.list_collection_names()):
         indexes = ", ".join(sorted(db[name].index_information().keys()))

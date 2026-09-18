@@ -16,6 +16,30 @@ from app.main import app  # noqa: E402
 from tests.test_event_history import EVENT_PAYLOAD, FakeEvents  # noqa: E402
 
 
+# The event-types service binds its collection at import time, so a test that
+# creates an event would otherwise reach for a real MongoDB.
+_event_types_patcher = None
+
+
+def setUpModule() -> None:
+    global _event_types_patcher
+    from unittest.mock import patch as _patch
+
+    from tests.fake_event_types import FakeEventTypes
+
+    _event_types_patcher = _patch(
+        "app.services.event_types.event_types", FakeEventTypes()
+    )
+    _event_types_patcher.start()
+
+
+def tearDownModule() -> None:
+    if _event_types_patcher is not None:
+        _event_types_patcher.stop()
+
+
+
+
 TEACHER_ID = str(ObjectId())
 DEAN_A_ID = str(ObjectId())
 DEAN_B_ID = str(ObjectId())
@@ -54,7 +78,21 @@ class FakeNotifications:
         return MagicMock(inserted_id=document["_id"])
 
     def _matches(self, doc: dict, query: dict) -> bool:
-        return all(doc.get(key) == value for key, value in query.items())
+        for key, expected in query.items():
+            value = doc.get(key)
+            if isinstance(expected, dict):
+                if "$in" in expected and value not in expected["$in"]:
+                    return False
+                if "$ne" in expected and value == expected["$ne"]:
+                    return False
+                if "$exists" in expected and (key in doc) != expected["$exists"]:
+                    return False
+            elif value != expected:
+                return False
+        return True
+
+    def count_documents(self, query: dict) -> int:
+        return sum(1 for doc in self.docs if self._matches(doc, query))
 
     def find(self, query: dict, *_args, **_kwargs):
         return FakeCursor(copy.deepcopy(d) for d in self.docs if self._matches(d, query))

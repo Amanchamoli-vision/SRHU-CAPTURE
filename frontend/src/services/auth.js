@@ -1,7 +1,7 @@
 /**
  * Authentication against the FastAPI backend (users live in MongoDB).
  *
- * This module replaces the former Supabase Auth client. Pages use:
+ * Pages use:
  *   getSession()         -> { access_token, user } | null   (synchronous)
  *   fetchCurrentUser()   -> latest profile from the API, or null
  *   signIn / signOut / refreshSession / changePassword

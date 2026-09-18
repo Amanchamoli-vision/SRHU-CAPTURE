@@ -103,6 +103,16 @@ class PdfTests(unittest.TestCase):
         self.assertIn(b"/URI", linked)
 
 
+    def test_missing_social_link_renders_not_provided(self) -> None:
+        # PRD 17: the link is optional, so its absence must not blank the row
+        # or crash the build -- it reads "Not provided" and is not a link.
+        pdf = build_event_report_pdf(
+            approved_event(social_network_url=None), {"name": "T"}, [], []
+        ).getvalue()
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        self.assertNotIn(b"/URI", pdf)
+
+
 def download(event: dict):
     client = TestClient(app)
     with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
@@ -143,6 +153,44 @@ class DownloadEndpointTests(unittest.TestCase):
     def test_numeric_start_time_downloads(self) -> None:
         event = approved_event(description='Text\n<!--CC_METADATA:{"startTime":930}-->')
         self.assertEqual(download(event).status_code, 200)
+
+    def test_download_without_social_link(self) -> None:
+        # PRD 17: previously 400 "Social Network Link is required".
+        for missing in (None, "", "   "):
+            with self.subTest(social=missing):
+                response = download(approved_event(social_network_url=missing))
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertTrue(response.content.startswith(b"%PDF"))
+
+
+class GenerateWithoutSocialLinkTests(unittest.TestCase):
+    """PRD 17: a missing Social Network Link no longer blocks generation."""
+
+    def test_generate_succeeds_without_social_link(self) -> None:
+        client = TestClient(app)
+        reports = MagicMock()
+        with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
+                patch("app.routers.reports.get_event",
+                      return_value=approved_event(social_network_url=None)), \
+                patch("app.routers.reports.get_event_media", return_value=[]), \
+                patch("app.routers.reports.get_event_documents", return_value=[]), \
+                patch("app.routers.reports.get_teacher", return_value={"name": "T"}), \
+                patch("app.routers.reports.event_reports", reports):
+            response = client.post(
+                "/dean/events/6aac7ecbee2ad335979f1268/generate-report",
+                headers={"Authorization": "Bearer t"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(reports.replace_one.called)
+
+    def test_generated_body_says_not_provided(self) -> None:
+        from app.routers.reports import build_report_content
+
+        body = build_report_content(
+            approved_event(social_network_url=None), {"name": "T", "email": "t@x"}, [], []
+        )
+        self.assertIn("Not provided", body)
 
 
 class DraftVisibilityTests(unittest.TestCase):

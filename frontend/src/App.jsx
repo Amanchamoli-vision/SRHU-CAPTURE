@@ -20,6 +20,7 @@ import TeacherEventDetails from "./pages/teacher/EventDetails";
 // Dean
 import DeanDashboard from "./pages/dean/DeanDashboard";
 import DeanAllEvents from "./pages/dean/AllEvents";
+import DeanArchive from "./pages/dean/Archive";
 import DeanEventDetails from "./pages/dean/EventDetails";
 import DeanProfile from "./pages/dean/Profile";
 
@@ -107,6 +108,15 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={["dean"]}>
                 <DeanAllEvents />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/dean/archive"
+            element={
+              <ProtectedRoute allowedRoles={["dean"]}>
+                <DeanArchive />
               </ProtectedRoute>
             }
           />

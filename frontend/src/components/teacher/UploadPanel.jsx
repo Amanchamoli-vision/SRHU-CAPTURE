@@ -7,13 +7,7 @@ import {
   IconUploadCloud,
   IconX,
 } from "./icons";
-
-const formatFileSize = (bytes) => {
-  if (!bytes) return "0 KB";
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  return `${(kb / 1024).toFixed(1)} MB`;
-};
+import { formatFileSize } from "../../utils/files";
 
 const getFileExtension = (fileName) => {
   const parts = String(fileName || "").split(".");
@@ -35,6 +29,10 @@ export default function UploadPanel({
   uploads = [], // in flight: { key, name, size, progress, error }
   accept,
   max = null, // maximum number of files, or null for no limit
+  // Combined byte budget for this kind, and how much of it is already spent.
+  // Videos and documents are limited this way rather than by count (PRD 9/11).
+  totalLimitBytes = null,
+  usedBytes = 0,
   maxSizeLabel,
   hint,
   emptyLabel,
@@ -50,8 +48,18 @@ export default function UploadPanel({
   const [dragging, setDragging] = useState(false);
 
   const active = items.length + uploads.filter((u) => !u.error).length;
-  const full = max != null && active >= max;
+  const budgetFull = totalLimitBytes != null && usedBytes >= totalLimitBytes;
+  const full = (max != null && active >= max) || budgetFull;
   const locked = disabled || full;
+
+  const budgetPct =
+    totalLimitBytes == null
+      ? 0
+      : Math.min(100, Math.round((usedBytes / totalLimitBytes) * 100));
+  // Amber as the budget runs low, red once it is gone -- the same warning
+  // language the rest of the app uses for "you are about to be blocked".
+  const budgetTone =
+    budgetPct >= 100 ? "var(--c-err)" : budgetPct >= 80 ? "var(--c-ember)" : null;
 
   const handleFiles = (fileList) => {
     const files = Array.from(fileList || []);
@@ -112,6 +120,30 @@ export default function UploadPanel({
           {max != null && ` · ${active} of ${max} added`}
         </p>
       </div>
+
+      {/* --------------------------------------------------- budget meter */}
+      {totalLimitBytes != null && (
+        <div className="mt-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="prose-muted text-[11px]">
+              {formatFileSize(usedBytes)} of {formatFileSize(totalLimitBytes)} used
+            </span>
+            {budgetFull && (
+              <span className="text-[11px] font-semibold text-err">Limit reached</span>
+            )}
+          </div>
+          {/* Reuses the upload bar's own track so the two read as one system. */}
+          <div className="progress-track mt-1">
+            <div
+              className="progress-bar"
+              style={{
+                width: `${Math.max(2, budgetPct)}%`,
+                ...(budgetTone ? { background: budgetTone } : null),
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ----------------------------------------------------- in flight */}
       {uploads.length > 0 && (

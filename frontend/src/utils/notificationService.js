@@ -14,7 +14,7 @@
  */
 import { apiJson } from "../services/api";
 import { decodeEventMetadata } from "./draftStorage";
-import { localDateKey, localDateKeyOffset } from "./dates";
+import { formatTime12h, localDateKey, localDateKeyOffset } from "./dates";
 
 const STORAGE_PREFIX = "cc_teacher_notifs_";
 const REMINDER_STORAGE_PREFIX = "cc_sent_reminders_";
@@ -344,7 +344,7 @@ async function runReminderEvaluation(userId, events, existing, isCancelled) {
 
     const venue = event.location || "Campus Venue";
     const { meta } = decodeEventMetadata(event.description || "");
-    const timeStr = meta.startTime ? ` at ${meta.startTime}` : "";
+    const timeStr = meta.startTime ? ` at ${formatTime12h(meta.startTime)}` : "";
     const name = event.event_name || event.eventName;
 
     const notif = await createTeacherNotification(userId, {
@@ -357,7 +357,7 @@ async function runReminderEvaluation(userId, events, existing, isCancelled) {
         venue,
         event_date: eventDate,
         when,
-        time: meta.startTime || "",
+        time: formatTime12h(meta.startTime) || "",
       },
     });
 

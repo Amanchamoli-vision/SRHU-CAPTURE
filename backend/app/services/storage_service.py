@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import re
+from tempfile import SpooledTemporaryFile
 from urllib.parse import quote
 
 from bson import ObjectId
@@ -48,8 +49,6 @@ MEDIA_TYPES: dict[str, tuple[str, str, frozenset[str]]] = {
     ".png": ("image", "image/png", frozenset({"image/png"})),
     ".webp": ("image", "image/webp", frozenset({"image/webp"})),
     ".gif": ("image", "image/gif", frozenset({"image/gif"})),
-    ".heic": ("image", "image/heic", frozenset({"image/heic", "image/heif"})),
-    ".heif": ("image", "image/heif", frozenset({"image/heif", "image/heic"})),
     ".mp4": ("video", "video/mp4", frozenset({"video/mp4"})),
     ".webm": ("video", "video/webm", frozenset({"video/webm"})),
     ".mov": ("video", "video/quicktime", frozenset({"video/quicktime"})),
@@ -94,12 +93,21 @@ GENERIC_DECLARED_TYPES = frozenset({"", "application/octet-stream", "binary/octe
 DOCUMENT_CONTENT_TYPES = {canonical for canonical, _ in DOCUMENT_TYPES.values()}
 DOCUMENT_EXTENSIONS = set(DOCUMENT_TYPES)
 
+# Types no longer accepted for NEW uploads but still present in storage. HEIC
+# was allowed before PRD 7 narrowed photos to JPG/PNG/WEBP/GIF; dropping it
+# from the servable set would turn existing event photos into downloads.
+LEGACY_SERVABLE_TYPES = frozenset({"image/heic", "image/heif"})
+
 # What may ever be served, and what may be shown inline in the browser.
 SERVABLE_CONTENT_TYPES = (
-    {canonical for _, canonical, _ in MEDIA_TYPES.values()} | DOCUMENT_CONTENT_TYPES
+    {canonical for _, canonical, _ in MEDIA_TYPES.values()}
+    | DOCUMENT_CONTENT_TYPES
+    | set(LEGACY_SERVABLE_TYPES)
 )
 INLINE_CONTENT_TYPES = (
-    {canonical for _, canonical, _ in MEDIA_TYPES.values()} | {"application/pdf"}
+    {canonical for _, canonical, _ in MEDIA_TYPES.values()}
+    | set(LEGACY_SERVABLE_TYPES)
+    | {"application/pdf"}
 )
 
 _OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -117,8 +125,6 @@ _MAGIC_CHECKS = {
     ".png": lambda h: h.startswith(b"\x89PNG\r\n\x1a\n"),
     ".gif": lambda h: h.startswith((b"GIF87a", b"GIF89a")),
     ".webp": lambda h: h.startswith(b"RIFF") and h[8:12] == b"WEBP",
-    ".heic": lambda h: h[4:8] == b"ftyp",
-    ".heif": lambda h: h[4:8] == b"ftyp",
     ".mp4": _is_iso_bmff,
     ".mov": _is_iso_bmff,
     ".webm": lambda h: h.startswith(b"\x1a\x45\xdf\xa3"),
@@ -131,12 +137,21 @@ _MAGIC_CHECKS = {
     ".pptx": lambda h: h.startswith(_ZIP),
 }
 
-# Per-event caps, matching the create-event wizard (4 photos, 2 videos).
-MAX_EVENT_PHOTOS = 4
-MAX_EVENT_VIDEOS = 2
-MAX_EVENT_DOCUMENTS = 20
+# Per-event caps, matching the create-event wizard. Sourced from settings so
+# they can be tuned per deployment; re-exported under the old names because
+# app/routers/events.py imports them from here.
+MAX_EVENT_PHOTOS = settings.max_photos_per_event
+MAX_EVENT_DOCUMENTS = settings.max_documents_per_event
+# Videos are capped by combined size, not by count (PRD 11). Kept only so the
+# existing import in the events router keeps resolving.
+MAX_EVENT_VIDEOS = None
 
 _READ_CHUNK = 1024 * 1024
+
+# Beyond this a buffered upload is written to a temporary file instead of held
+# in memory. Keeps a 200 MB video off the heap while leaving small photos and
+# documents entirely in RAM.
+_SPOOL_THRESHOLD = 2 * 1024 * 1024
 
 
 def _extension(name: str | None) -> str:
@@ -245,42 +260,83 @@ def validate_document(upload: UploadFile) -> None:
     inspect_document(upload)
 
 
-def _too_large() -> HTTPException:
+def _too_large(limit_bytes: int | None = None, *, what: str = "Files") -> HTTPException:
+    megabytes = (
+        settings.max_upload_size_mb if limit_bytes is None
+        else max(1, limit_bytes // (1024 * 1024))
+    )
     return HTTPException(
         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-        detail=f"Files must be smaller than {settings.max_upload_size_mb} MB",
+        detail=f"{what} must be smaller than {megabytes} MB",
     )
 
 
-def read_upload(upload: UploadFile, max_bytes: int | None = None) -> bytes:
-    """Read an upload in chunks, aborting as soon as it passes the size limit.
+def stream_upload(
+    upload: UploadFile,
+    max_bytes: int | None = None,
+    *,
+    what: str = "Files",
+) -> tuple[SpooledTemporaryFile, int]:
+    """Buffer an upload to a spooled file, aborting once it passes the limit.
 
-    Never holds more than ``max_bytes`` (+ one chunk) in memory, however large
-    the request body is.
+    Returns the rewound buffer and its size. Small files stay in memory; past
+    ``_SPOOL_THRESHOLD`` the buffer rolls over to a temporary file on disk, so
+    a 200 MB video costs a couple of MB of heap instead of 200 MB. That matters
+    because the API runs in a small container, where two concurrent video
+    uploads under the old read-it-all approach would OOM the worker.
+
+    The caller is responsible for closing the returned buffer, which also
+    removes the temporary file.
     """
     limit = settings.max_upload_size_bytes if max_bytes is None else max_bytes
 
     declared_size = getattr(upload, "size", None)
     if isinstance(declared_size, int) and declared_size > limit:
-        raise _too_large()
+        raise _too_large(limit, what=what)
 
-    chunks: list[bytes] = []
+    buffer = SpooledTemporaryFile(max_size=_SPOOL_THRESHOLD)
     total = 0
-    while True:
-        chunk = upload.file.read(_READ_CHUNK)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > limit:
-            raise _too_large()
-        chunks.append(chunk)
+    try:
+        while True:
+            chunk = upload.file.read(_READ_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > limit:
+                raise _too_large(limit, what=what)
+            buffer.write(chunk)
 
-    if total == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The uploaded file is empty",
-        )
-    return b"".join(chunks)
+        if total == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file is empty",
+            )
+    except BaseException:
+        buffer.close()
+        raise
+
+    buffer.seek(0)
+    return buffer, total
+
+
+def read_upload(upload: UploadFile, max_bytes: int | None = None) -> bytes:
+    """Read an upload into memory, size-checked.
+
+    Retained for callers that genuinely need the bytes. Prefer
+    :func:`stream_upload` for anything that could be large.
+    """
+    buffer, _size = stream_upload(upload, max_bytes)
+    try:
+        return buffer.read()
+    finally:
+        buffer.close()
+
+
+def peek_head(buffer: SpooledTemporaryFile, size: int = 512) -> bytes:
+    """The first bytes of a buffered upload, leaving it rewound."""
+    head = buffer.read(size)
+    buffer.seek(0)
+    return head
 
 
 # ======================================================================
@@ -313,7 +369,7 @@ def file_route(file_id: str | ObjectId) -> str:
 
 
 def save_upload(
-    data: bytes,
+    data,
     *,
     file_name: str,
     content_type: str | None,
@@ -322,6 +378,11 @@ def save_upload(
     teacher_id: str,
 ) -> dict:
     """Store an upload and return the storage fields for its metadata record.
+
+    ``data`` may be raw bytes or a rewound file-like object; large uploads
+    should pass the buffer from :func:`stream_upload` so nothing is held in
+    memory twice. Both R2's ``upload_fileobj`` and GridFS's ``put`` read a
+    stream directly.
 
     With R2 configured the record gets ``storage="r2"`` and an ``object_key``
     (its URL is signed on every read, see :func:`absolutize`); otherwise the
@@ -335,7 +396,11 @@ def save_upload(
         )
         _, disposition = serving_policy(content_type)
         try:
-            r2_service.upload_bytes(
+            upload_to_r2 = (
+                r2_service.upload_bytes if isinstance(data, bytes)
+                else r2_service.upload_stream
+            )
+            upload_to_r2(
                 data,
                 object_key=object_key,
                 content_type=content_type,

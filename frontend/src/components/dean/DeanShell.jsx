@@ -7,6 +7,7 @@ import NotificationBell from "../NotificationBell";
 import { initialsOf } from "../common/roles";
 import {
   IconArrowUp,
+  IconArchive,
   IconCalendar,
   IconGrid,
   IconLogout,
@@ -19,6 +20,7 @@ import {
 const NAV = [
   { key: "dashboard", to: "/dean/dashboard", label: "Dashboard", Icon: IconGrid },
   { key: "events", to: "/dean/events", label: "All Events", short: "Events", Icon: IconCalendar },
+  { key: "archive", to: "/dean/archive", label: "Archive", Icon: IconArchive },
   { key: "profile", to: "/dean/profile", label: "My Profile", short: "Profile", Icon: IconUser },
 ];
 

@@ -129,6 +129,22 @@ export const IconTrash = (p) => (
   </svg>
 );
 
+export const IconArchive = (p) => (
+  <svg {...bold} {...p}>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+    <path d="M10 12h4" />
+  </svg>
+);
+
+export const IconArchiveRestore = (p) => (
+  <svg {...bold} {...p}>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+    <path d="M12 18v-6m0 0-2.5 2.5M12 12l2.5 2.5" />
+  </svg>
+);
+
 export const IconActivity = (p) => (
   <svg {...bold} {...p}>
     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />

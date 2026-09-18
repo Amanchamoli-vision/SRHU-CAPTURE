@@ -172,8 +172,8 @@ def _verdict(outcome: str, tcp: dict[int, str], port: int) -> None:
             print("  Every SMTP port reported 'network unreachable'. The host has no")
             print("  route for outbound SMTP at all - the provider null-routes it. This")
             print("  is a plan-level block, not a configuration problem, and no code")
-            print("  change works around it. Upgrade the plan, or have Supabase Auth")
-            print("  in place of raw SMTP for this deployment.")
+            print("  change works around it. Upgrade the plan, or use a hosted mail API")
+            print("  (SendGrid, Resend, Mailgun) in place of raw SMTP for this deployment.")
         elif timed_out:
             print("  Every SMTP port timed out. A silent timeout is the signature of")
             print("  provider-level egress filtering, which the free Railway plan applies.")

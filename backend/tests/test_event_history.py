@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import unittest
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from bson import ObjectId
@@ -14,6 +16,31 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
+from app.schemas.events import campus_now  # noqa: E402
+
+
+# The event-types service binds its collection at import time, so a test that
+# creates an event would otherwise reach for a real MongoDB.
+_event_types_patcher = None
+
+
+def setUpModule() -> None:
+    global _event_types_patcher
+    from unittest.mock import patch as _patch
+
+    from tests.fake_event_types import FakeEventTypes
+
+    _event_types_patcher = _patch(
+        "app.services.event_types.event_types", FakeEventTypes()
+    )
+    _event_types_patcher.start()
+
+
+def tearDownModule() -> None:
+    if _event_types_patcher is not None:
+        _event_types_patcher.stop()
+
+
 
 
 TEACHER = {"id": "teacher-1", "name": "Meera Joshi", "email": "meera@srhu.edu.in", "role": "teacher"}
@@ -21,6 +48,21 @@ DEAN = {"id": "dean-1", "name": "Aparna Sharma", "email": "dean@srhu.edu.in", "r
 
 # The bearer token picks the signed-in user, so one client can play both roles.
 TOKENS = {"Bearer teacher": TEACHER, "Bearer dean": DEAN}
+
+
+class FakeEventCursor(list):
+    """The cursor surface paginate() uses: sort, then skip/limit."""
+
+    def sort(self, key, direction):
+        return FakeEventCursor(
+            sorted(self, key=lambda d: d.get(key) or "", reverse=direction == -1)
+        )
+
+    def skip(self, count):
+        return FakeEventCursor(self[count:]) if count else self
+
+    def limit(self, count):
+        return FakeEventCursor(self[:count]) if count else self
 
 
 class FakeEvents:
@@ -42,15 +84,47 @@ class FakeEvents:
 
     @staticmethod
     def _matches(doc: dict, query: dict) -> bool:
-        """Equality and `$in`, which is all the router's filters use."""
+        """Equality, `$in`, `$ne` and `$exists`.
+
+        `$ne` matters for the Dean list (which excludes drafts) and the archive
+        axis; MongoDB treats a missing key and an explicit None as equal, so
+        `doc.get(key)` reproducing that is deliberate, not sloppy.
+        """
         for key, expected in query.items():
-            value = doc.get(key)
-            if isinstance(expected, dict) and "$in" in expected:
-                if value not in expected["$in"]:
+            if key == "$or":
+                if not any(FakeEvents._matches(doc, clause) for clause in expected):
                     return False
+                continue
+
+            value = doc.get(key)
+            if isinstance(expected, dict):
+                if "$in" in expected and value not in expected["$in"]:
+                    return False
+                if "$ne" in expected and value == expected["$ne"]:
+                    return False
+                if "$exists" in expected and (key in doc) != expected["$exists"]:
+                    return False
+                if "$nin" in expected and value in expected["$nin"]:
+                    return False
+                if "$regex" in expected:
+                    flags = re.I if "i" in expected.get("$options", "") else 0
+                    if not isinstance(value, str) or not re.search(
+                        expected["$regex"], value, flags
+                    ):
+                        return False
             elif value != expected:
                 return False
         return True
+
+    def count_documents(self, query: dict) -> int:
+        return sum(1 for doc in self.docs.values() if self._matches(doc, query))
+
+    def find(self, query: dict, *_args, **_kwargs):
+        return FakeEventCursor(
+            copy.deepcopy(doc)
+            for doc in self.docs.values()
+            if self._matches(doc, query)
+        )
 
     def _find(self, query: dict) -> dict | None:
         doc = self.docs.get(query.get("_id"))
@@ -94,9 +168,18 @@ def fake_current_user(authorization):
     return TOKENS[authorization]
 
 
+def future_date(days: int = 30) -> str:
+    """A date safely in the future, in the campus timezone the schema uses.
+
+    Hardcoding one would turn every create-event test into a time bomb the day
+    it passed, now that the schema rejects past dates (PRD 3).
+    """
+    return (campus_now() + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
 EVENT_PAYLOAD = {
     "event_name": "Himalayan Innovation Summit",
-    "event_date": "2026-10-04",
+    "event_date": future_date(),
     "event_type": "Seminar",
     "location": "Main Auditorium",
     "description": "Two days of talks.",
@@ -402,3 +485,115 @@ class DeanTransitionTests(EventHistoryTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RevokeTests(DeanTransitionTests):
+    """PRD 18: revoke is its own action over its own status set.
+
+    The old UI offered "Revoke & Reject" on an approved event, which called
+    /reject -- and rejection only accepts a *pending* event, so the request
+    came back 409. Revoking was unreachable, not just ambiguous.
+    """
+
+    test_approve_twice_is_409_and_records_one_entry = None
+    test_completed_event_cannot_be_rejected_or_sent_back = None
+
+    def approve(self) -> str:
+        event_id = self.submit()
+        response = self.client.patch(
+            f"/dean/events/{event_id}/approve", headers=self.as_dean()
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return event_id
+
+    def revoke(self, event_id, reason="Venue withdrew"):
+        return self.client.patch(
+            f"/dean/events/{event_id}/revoke",
+            json={"revocation_reason": reason},
+            headers=self.as_dean(),
+        )
+
+    def test_approved_event_can_be_revoked(self) -> None:
+        event_id = self.approve()
+
+        response = self.revoke(event_id)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["event"]["status"], "revoked")
+        self.assertEqual(
+            response.json()["event"]["revocation_reason"], "Venue withdrew"
+        )
+
+    def test_rejecting_an_approved_event_is_still_refused(self) -> None:
+        # The old broken path stays closed: reject means "never approved".
+        event_id = self.approve()
+
+        response = self.client.patch(
+            f"/dean/events/{event_id}/reject",
+            json={"rejection_reason": "nope"},
+            headers=self.as_dean(),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"], "Only pending events can be rejected.")
+
+    def test_pending_event_cannot_be_revoked(self) -> None:
+        response = self.revoke(self.submit())
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json()["detail"],
+            "Only an approved event can have its approval revoked.",
+        )
+
+    def test_revoking_twice_is_409(self) -> None:
+        event_id = self.approve()
+        self.assertEqual(self.revoke(event_id).status_code, 200)
+
+        second = self.revoke(event_id)
+
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(
+            second.json()["detail"], "This event's approval has already been revoked."
+        )
+
+    def test_reason_is_required(self) -> None:
+        event_id = self.approve()
+
+        response = self.client.patch(
+            f"/dean/events/{event_id}/revoke",
+            json={"revocation_reason": "   "},
+            headers=self.as_dean(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_revoked_event_can_be_resubmitted_by_the_teacher(self) -> None:
+        # Otherwise revoking would strand the event with nobody able to act.
+        event_id = self.approve()
+        self.revoke(event_id)
+
+        response = self.client.patch(
+            f"/teacher/events/{event_id}/resubmit", headers=self.as_teacher()
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["event"]["status"], "pending")
+
+    def test_history_records_the_whole_arc(self) -> None:
+        event_id = self.approve()
+        self.revoke(event_id)
+        self.client.patch(f"/teacher/events/{event_id}/resubmit", headers=self.as_teacher())
+
+        self.assertEqual(
+            [entry["action"] for entry in self.history_of(event_id)],
+            ["submitted", "approved", "revoked", "resubmitted"],
+        )
+
+    def test_revocation_reason_is_separate_from_rejection_reason(self) -> None:
+        # Merging the two fields is how the actions became indistinguishable.
+        event_id = self.approve()
+        event = self.revoke(event_id).json()["event"]
+
+        self.assertEqual(event["revocation_reason"], "Venue withdrew")
+        self.assertIsNone(event["rejection_reason"])

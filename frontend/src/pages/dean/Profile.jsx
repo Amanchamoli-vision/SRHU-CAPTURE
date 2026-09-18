@@ -593,8 +593,8 @@ function DeanProfile() {
               <p className="mt-3 flex items-start gap-2 text-xs text-muted lg:mt-auto lg:pt-3">
                 <IconInfo className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>
-                  Name and email come from the record the super admin created.
-                  Ask the super admin to change them.
+                  Name and email come from your university account. Contact
+                  the IT office to change them.
                 </span>
               </p>
             </section>

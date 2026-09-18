@@ -52,7 +52,7 @@ export function getStatusBucket(status) {
     return "approved";
   }
 
-  if (value === "rejected") {
+  if (value === "rejected" || value === "revoked") {
     return "rejected";
   }
 
@@ -185,13 +185,28 @@ export function countByStatusBucket(events) {
   };
 }
 
-/** Whether the Dean may still approve / reject, given the current status. */
-export function canApproveEvent(event) {
+// ------------------------------------------------------------------
+// Dean decisions (PRD 18)
+//
+// Reject and revoke are separate actions over separate statuses, not one
+// button that changes label. They previously shared a control that always
+// called /reject -- and because rejection only accepts a *pending* event,
+// pressing it on an approved one answered 409. Revoking was unreachable.
+// ------------------------------------------------------------------
+
+/** Approve, or re-approve something previously refused. */
+export function canApprove(event) {
   return getStatusBucket(event?.status) !== "approved";
 }
 
-export function canRejectEvent(event) {
-  return getStatusBucket(event?.status) !== "rejected";
+/** Reject: a first refusal, only while the event is still awaiting review. */
+export function canReject(event) {
+  return getStatusBucket(event?.status) === "pending";
+}
+
+/** Revoke: withdraw an approval that has already been granted. */
+export function canRevoke(event) {
+  return getStatusBucket(event?.status) === "approved";
 }
 
 /** Changes can only be asked for while the event still awaits a first decision. */
@@ -202,21 +217,6 @@ export function canRequestChanges(event) {
 /** Action labels that read correctly when a previous decision is being revised. */
 export function getApproveLabel(event) {
   return getStatusBucket(event?.status) === "rejected" ? "Re-approve" : "Approve";
-}
-
-export function getRejectLabel(event) {
-  return getStatusBucket(event?.status) === "approved"
-    ? "Revoke & Reject"
-    : "Reject";
-}
-
-/**
- * Compact reject label for the dense Dean table, where "Revoke & Reject" would
- * push the action column off screen. The full label stays in the button's
- * tooltip and the confirm dialog still spells out the consequences.
- */
-export function getRejectLabelShort(event) {
-  return getStatusBucket(event?.status) === "approved" ? "Revoke" : "Reject";
 }
 
 // ============================================================

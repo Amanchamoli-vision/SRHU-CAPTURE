@@ -20,7 +20,9 @@ router = APIRouter(tags=["Reports", "Dean"])
 # ============================================================
 
 class SocialLinkRequest(BaseModel):
-    social_network_url: str
+    # Optional so the Dean can also CLEAR a link that was set by mistake; the
+    # report no longer depends on it (PRD 17).
+    social_network_url: str | None = None
 
 
 # ============================================================
@@ -36,11 +38,15 @@ def is_approved(event) -> bool:
 
 def get_event(event_id: str):
     """The event by id; a draft is reported as missing, exactly like
-    GET /dean/events/{id}, because drafts are never shown to a Dean."""
+    GET /dean/events/{id}, because drafts are never shown to a Dean.
+
+    An archived event is hidden the same way -- a report asserts a live
+    approval, so one must not be generated from the shelf (PRD 1).
+    """
     object_id = to_object_id(event_id)
     event = events.find_one({"_id": object_id}) if object_id else None
 
-    if not event or event.get("status") == "draft":
+    if not event or event.get("status") == "draft" or event.get("archived_at") is not None:
         raise HTTPException(
             status_code=404,
             detail="Event not found"
@@ -133,9 +139,8 @@ def save_social_link(
             detail="Social Network Link can only be added after event approval"
         )
 
-    social_url = validate_social_url(
-        payload.social_network_url
-    )
+    raw_social_url = (payload.social_network_url or "").strip()
+    social_url = validate_social_url(raw_social_url) if raw_social_url else None
 
     result = events.update_one(
         {"_id": to_object_id(event_id), "status": {"$in": list(APPROVED_STAGES)}},
@@ -196,7 +201,9 @@ def build_report_content(
     media,
     documents
 ):
-    social_url = event.get("social_network_url") or ""
+    # PRD 17: the link is optional, so the report says so rather than
+    # leaving an empty line under the heading.
+    social_url = (event.get("social_network_url") or "").strip() or "Not provided"
 
     media_count = len(media)
     document_count = len(documents)
@@ -273,21 +280,6 @@ def generate_report(
         )
 
     # --------------------------------------------------------
-    # Social link is mandatory for report
-    # --------------------------------------------------------
-
-    social_url = (
-        event.get("social_network_url")
-        or ""
-    ).strip()
-
-    if not social_url:
-        raise HTTPException(
-            status_code=400,
-            detail="Social Network Link is required before generating the report"
-        )
-
-    # --------------------------------------------------------
     # Collect event information
     # --------------------------------------------------------
 
@@ -351,15 +343,6 @@ def download_report(
         raise HTTPException(
             status_code=400,
             detail="Only approved events can have a report"
-        )
-
-    if not (
-        event.get("social_network_url")
-        or ""
-    ).strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Social Network Link is required"
         )
 
     report = get_report(event["id"])

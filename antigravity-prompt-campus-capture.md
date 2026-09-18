@@ -4,10 +4,10 @@
 You are making a **visual-only** change to a React + Vite + Tailwind CSS project called "Campus Capture" (SRHU Event Management System). Read this entire prompt before editing anything. Do not expand scope beyond what is listed under "Files you may touch."
 
 ### Hard constraints — do not violate
-- Do **NOT** modify any authentication logic: `useAuth`, `AuthContext.jsx`, `supabase.js`, session handling, redirect logic, or form validation logic in `Login.jsx`.
-- Do **NOT** modify `AuthContext.jsx` or `supabase.js` at all, even cosmetically.
+- Do **NOT** modify any authentication logic: `AuthContext.jsx`, `services/auth.js`, `services/session.js`, session handling, redirect logic, or form validation logic in `Login.jsx`.
+- Do **NOT** modify `AuthContext.jsx` or `services/auth.js` at all, even cosmetically.
 - Do **NOT** add new npm dependencies (no framer-motion, no icon libraries, no UI kits). Use Tailwind utility classes and existing inline SVGs / `frontend/public/icons.svg` only.
-- Do **NOT** add custom Tailwind theme tokens unless `tailwind.config.js` already supports them — check it first before using any non-default color/spacing/font token.
+- Do **NOT** add custom theme tokens unless `frontend/src/index.css` already defines them (Tailwind v4 is configured there via `@theme inline`; there is no `tailwind.config.js`) - check it first before using any non-default color/spacing/font token.
 - Do **NOT** change the file/folder structure except adding one new file: `frontend/src/pages/Landing.jsx`.
 - Do **NOT** touch any other page, dashboard, or component outside the files listed below.
 - Do **NOT** add a redirect-if-authenticated check to the new Landing page. It is a dumb, static, public page — no auth logic at all.

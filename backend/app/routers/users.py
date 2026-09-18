@@ -30,7 +30,11 @@ def update_my_profile(
 
     updated = users.find_one_and_update(
         {"_id": to_object_id(user["id"])},
-        {"$set": {"name": payload.name, "updated_at": utc_now()}},
+        {"$set": {
+            "name": payload.name,
+            "phone": payload.phone,
+            "updated_at": utc_now(),
+        }},
         return_document=True,
     )
 

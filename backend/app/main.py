@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import ensure_indexes, ping
-from app.routers import auth, events, files, reports, superadmin, users
+from app.routers import auth, directory, events, files, reports, superadmin, users
 
 
 # Show the application's own log lines (registration, email_sent, ...) next to
@@ -124,6 +124,8 @@ app.include_router(auth.router)
 app.include_router(users.router)
 
 # Teacher + Dean Event APIs
+app.include_router(directory.router)
+
 app.include_router(events.router)
 
 # Dean Report APIs

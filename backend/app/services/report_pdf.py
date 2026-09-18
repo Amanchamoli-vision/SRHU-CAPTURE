@@ -34,6 +34,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.config import settings
+
 
 LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "srhu-logo.png"
 
@@ -54,11 +56,12 @@ CONTENT_WIDTH = PAGE_WIDTH - 2 * MARGIN
 # wrote, so it is split off before the description is printed.
 METADATA_PATTERN = re.compile(r"\s*<!--CC_METADATA:([\s\S]*?)-->")
 
+# Fields still carried only in the description blob. Organiser and contact
+# were promoted to real columns, so they are read from the event itself (with
+# the blob as a fallback for older events) rather than from here.
 METADATA_LABELS = (
     ("department", "Department"),
-    ("organizer", "Organiser"),
     ("expectedParticipants", "Expected Participants"),
-    ("contactInfo", "Contact"),
 )
 
 
@@ -125,6 +128,31 @@ def format_date(value) -> str:
     return f"{parsed.day} {parsed:%B %Y}"
 
 
+def format_date_range(start, end) -> str:
+    """One day as '15 October 2026', several as '15 - 17 October 2026'.
+
+    The month and year are printed once when both ends share them, which is
+    the common case for a two- or three-day event.
+    """
+    first = format_date(start)
+    if not end or str(end).strip() == str(start).strip():
+        return first
+
+    last = format_date(end)
+    if not first:
+        return last
+    if not last:
+        return first
+
+    # "15 October 2026" -> ("15", "October 2026")
+    first_day, _, first_rest = first.partition(" ")
+    last_day, _, last_rest = last.partition(" ")
+    if first_rest and first_rest == last_rest:
+        return f"{first_day} - {last_day} {last_rest}"
+
+    return f"{first} - {last}"
+
+
 def format_time_range(start, end) -> str:
     def to_12h(value: str) -> str:
         try:
@@ -166,6 +194,9 @@ def _styles() -> dict[str, ParagraphStyle]:
     return {
         "university": ParagraphStyle(
             "University", fontName="Helvetica-Bold", fontSize=15, leading=18, textColor=NAVY
+        ),
+        "school": ParagraphStyle(
+            "School", fontName="Helvetica-Bold", fontSize=10.5, leading=13, textColor=NAVY
         ),
         "product": ParagraphStyle(
             "Product", fontName="Helvetica", fontSize=10, leading=13, textColor=MUTED
@@ -215,9 +246,17 @@ def _logo(height: float) -> Image:
     return Image(buffer, width=width, height=height)
 
 
+# The school issuing the report, printed under the university name on the
+# letterhead. Overridable per deployment so another school can use the same
+# build without a code change.
+REPORT_SCHOOL = settings.report_school
+
+
 def _letterhead(styles) -> list:
     text = [
         Paragraph("Swami Rama Himalayan University", styles["university"]),
+        Spacer(1, 1),
+        Paragraph(REPORT_SCHOOL, styles["school"]),
         Spacer(1, 2),
         Paragraph("Campus Capture &nbsp;·&nbsp; Event Documentation", styles["product"]),
     ]
@@ -345,7 +384,9 @@ class _NumberedCanvas(pdf_canvas.Canvas):
         self.setFont("Helvetica", 7.5)
         self.setFillColor(MUTED)
         self.drawString(
-            MARGIN, y, "Campus Capture  ·  Swami Rama Himalayan University  ·  Official event record"
+            MARGIN,
+            y,
+            f"Campus Capture  ·  {REPORT_SCHOOL}  ·  Official event record",
         )
         self.drawRightString(PAGE_WIDTH - MARGIN, y, f"Page {self._pageNumber} of {total}")
 
@@ -375,14 +416,31 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
     details = [
         ("Event Name", escape(str(event.get("event_name") or ""))),
         ("Event Type", escape(str(event.get("event_type") or ""))),
-        ("Event Date", escape(format_date(event.get("event_date")))),
+        (
+            "Event Date",
+            escape(format_date_range(event.get("event_date"), event.get("end_date"))),
+        ),
     ]
-    time_range = format_time_range(meta.get("startTime", ""), meta.get("endTime", ""))
+    # Prefer the promoted columns; the blob is only a fallback for events
+    # created before those fields existed (see services/event_fields.py).
+    time_range = format_time_range(
+        event.get("start_time") or meta.get("startTime", ""),
+        event.get("end_time") or meta.get("endTime", ""),
+    )
     if time_range:
         details.append(("Time", escape(time_range)))
     details.append(("Venue", escape(str(event.get("location") or ""))))
     for key, label in METADATA_LABELS:
         value = str(meta.get(key) or "").strip()
+        if value:
+            details.append((label, escape(value)))
+
+    # Promoted columns first, blob second, so both old and new events render.
+    for column, blob_key, label in (
+        ("organizer", "organizer", "Organiser"),
+        ("coordinator_contact", "contactInfo", "Contact"),
+    ):
+        value = str(event.get(column) or meta.get(blob_key) or "").strip()
         if value:
             details.append((label, escape(value)))
     details.append((

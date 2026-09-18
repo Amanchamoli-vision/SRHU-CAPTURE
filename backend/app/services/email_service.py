@@ -300,6 +300,7 @@ def send_event_status_email(
     labels = {
         "approved": ("Event approved", "has been approved by the Dean."),
         "rejected": ("Event rejected", "was rejected by the Dean."),
+        "revoked": ("Event approval revoked", "had its approval revoked by the Dean."),
         "needs_changes": ("Event needs changes", "needs changes before it can be approved."),
     }
     stage_labels = {

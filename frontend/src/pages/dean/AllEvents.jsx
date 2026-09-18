@@ -1,17 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiJson, isAbortError } from "../../services/api";
 import DeanShell from "../../components/dean/DeanShell";
 import Modal from "../../components/teacher/Modal";
-import StatusChip from "../../components/teacher/StatusChip";
 import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
+  IconArchive,
   IconCheck,
   IconCheckCircle,
   IconEye,
-  IconInbox,
   IconRefresh,
   IconRotateCcw,
   IconSearch,
@@ -19,18 +18,16 @@ import {
 } from "../../components/teacher/icons";
 import {
   DEAN_STATUS_FILTERS,
-  EVENT_TYPES,
-  canApproveEvent,
-  canRejectEvent,
-  countByStatusBucket,
+  canApprove,
+  canReject,
+  canRevoke,
   getApproveLabel,
-  getRejectLabel,
-  getRejectLabelShort,
   getStatusBucket,
-  matchesEventSearch,
-  matchesStatusFilter,
-  matchesTypeFilter,
 } from "../../utils/constants";
+import useEventTypes from "../../hooks/useEventTypes";
+import useTableQuery from "../../hooks/useTableQuery";
+import Pagination from "../../components/common/Pagination";
+import EventsTable from "../../components/dean/EventsTable";
 
 /**
  * Table columns, ordered by how much each one drives the Dean's decision.
@@ -38,20 +35,11 @@ import {
  * the least decisive field, and the one still shown in full on the details
  * page — that slides under the pin rather than the status or the event name.
  */
-const COLUMNS = [
-  { label: "Event", className: "" },
-  { label: "Status", className: "" },
-  { label: "Type", className: "" },
-  { label: "Date", className: "" },
-  { label: "Location", className: "hidden min-[1340px]:table-cell" },
-  { label: "Action", className: "sticky right-0 text-right" },
-];
-
 /**
  * The three decisions the Dean can take on a row. Shared by the desktop table
  * and the mobile card list so the two can never drift apart.
  */
-function EventActions({ event, isProcessing, onApprove, onReject }) {
+function EventActions({ event, isProcessing, onApprove, onReject, onRevoke, onRemove }) {
   return (
     <>
       <Link
@@ -63,20 +51,49 @@ function EventActions({ event, isProcessing, onApprove, onReject }) {
         <IconEye />
       </Link>
 
-      {canRejectEvent(event) && (
+      {/* Reject and Revoke are separate actions over separate statuses, so
+          at most one of them ever applies to a given row. */}
+      {canReject(event) && (
         <button
           type="button"
           onClick={() => onReject(event)}
           disabled={isProcessing}
-          title={getRejectLabel(event)}
+          title="Reject this event"
           className="btn btn-danger btn-xs"
         >
           {isProcessing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
-          {getRejectLabelShort(event)}
+          Reject
         </button>
       )}
 
-      {canApproveEvent(event) && (
+      {canRevoke(event) && (
+        <button
+          type="button"
+          onClick={() => onRevoke(event)}
+          disabled={isProcessing}
+          title="Withdraw this event's approval"
+          className="btn btn-danger btn-xs"
+        >
+          {isProcessing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
+          Revoke
+        </button>
+      )}
+
+      {/* Remove: archive (reversible) or delete for good. Both live behind
+          one control so the destructive option is never a stray click away
+          from Approve. */}
+      <button
+        type="button"
+        onClick={() => onRemove(event)}
+        disabled={isProcessing}
+        title="Archive or delete this event"
+        aria-label={`Archive or delete ${event.event_name}`}
+        className="icon-btn icon-btn-sm text-err"
+      >
+        <IconArchive />
+      </button>
+
+      {canApprove(event) && (
         <button
           type="button"
           onClick={() => onApprove(event)}
@@ -100,18 +117,35 @@ function AllEvents() {
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState(null);
 
+  // Archiving / deleting, kept separate from `decision`: that state already
+  // branches four ways, and mixing an irreversible delete into it is how a
+  // mis-click ends up destroying an event's media.
+  // { event, mode: "archive" | "delete", confirmText }
+  const [removal, setRemoval] = useState(null);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // Selected date
-  // Empty means all dates
-  const [selectedDate, setSelectedDate] = useState("");
+  // Filters and paging live in the URL (see useTableQuery), so a filtered
+  // page can be linked and reloaded, and there is one place a filter can be
+  // out of step with the rows it produced. Every filter change resets to
+  // page 1 -- narrowing a filter while on page 7 would otherwise show an
+  // empty table and read as a bug.
+  const { query, setFilter, setPage, setPerPage, reset } = useTableQuery();
+  // Categories come from the server now, so a type a teacher added is
+  // filterable here -- which the old hardcoded list could not do.
+  const { types: eventTypes } = useEventTypes();
+  const { page, per, q: searchQuery, status: statusFilter, type: typeFilter,
+          date: selectedDate } = query;
 
-  // Client-side filters. These narrow the events already fetched from the
-  // server; they never trigger a refetch.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [typeFilter, setTypeFilter] = useState("");
+  // The search box is uncontrolled by the URL while typing: writing every
+  // keystroke to history would flood it and refetch per character.
+  const [searchDraft, setSearchDraft] = useState(searchQuery);
+
+  // Totals for the status tabs and the footer, straight from the server --
+  // they must count the whole result set, not the page on screen.
+  const [total, setTotal] = useState(0);
+  const [eventCounts, setEventCounts] = useState({ all: 0 });
 
   // Signed-in Dean, used for the shell's account blocks.
   const [deanProfile, setDeanProfile] = useState(null);
@@ -150,7 +184,7 @@ function AllEvents() {
 
   useEffect(() => () => loadControllerRef.current?.abort(), []);
 
-  const loadEvents = async (date = selectedDate) => {
+  const loadEvents = useCallback(async () => {
     loadControllerRef.current?.abort();
     const controller = new AbortController();
     loadControllerRef.current = controller;
@@ -159,19 +193,36 @@ function AllEvents() {
       setLoading(true);
       setError("");
 
-      const query = date ? `?event_date=${encodeURIComponent(date)}` : "";
-      const data = await apiJson(`/dean/events${query}`, { signal: controller.signal });
+      const params = new URLSearchParams({
+        skip: String(query.skip),
+        limit: String(query.per),
+      });
+      if (query.date) params.set("event_date", query.date);
+      if (query.type) params.set("event_type", query.type);
+      if (query.q) params.set("q", query.q);
+      if (query.status && query.status !== "all") {
+        params.set("status_bucket", query.status);
+      }
+
+      const data = await apiJson(`/dean/events?${params}`, {
+        signal: controller.signal,
+      });
 
       if (controller.signal.aborted) return;
       setEvents(data?.events || []);
+      setTotal(data?.total || 0);
+      setEventCounts(data?.counts || { all: data?.total || 0 });
     } catch (err) {
       if (controller.signal.aborted || isAbortError(err)) return;
       handleApiError(err, "Failed to load events", "Load events error");
       setEvents([]);
+      setTotal(0);
     } finally {
       if (loadControllerRef.current === controller) setLoading(false);
     }
-  };
+    // handleApiError is stable for the lifetime of the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.skip, query.per, query.date, query.type, query.q, query.status]);
 
   // ============================================================
   // INITIAL LOAD
@@ -191,9 +242,23 @@ function AllEvents() {
   };
 
   useEffect(() => {
-    loadEvents("");
+    loadEvents();
+  }, [loadEvents]);
+
+  useEffect(() => {
     loadDeanProfile();
   }, []);
+
+  // Debounced so typing does not fire a request per character; `replace`
+  // keeps the back button useful instead of one entry per keystroke.
+  useEffect(() => {
+    if (searchDraft === searchQuery) return undefined;
+    const timer = setTimeout(
+      () => setFilter("q", searchDraft, { replace: true }),
+      350,
+    );
+    return () => clearTimeout(timer);
+  }, [searchDraft, searchQuery, setFilter]);
 
   // ============================================================
   // AUTO-DISMISS SUCCESS
@@ -216,14 +281,7 @@ function AllEvents() {
   // DATE CHANGE
   // ============================================================
 
-  const handleDateChange = (event) => {
-    const date = event.target.value;
-
-    setSelectedDate(date);
-
-    // Immediately load events for selected date
-    loadEvents(date);
-  };
+  const handleDateChange = (event) => setFilter("date", event.target.value);
 
   // ============================================================
   // FORMAT DATE
@@ -274,12 +332,55 @@ function AllEvents() {
     setReasonError("");
   };
 
-  /** Replace the row the API just returned a fresh copy of. */
-  const applyUpdatedEvent = (updated) => {
-    setEvents((previousEvents) =>
-      previousEvents.map((item) => (item.id === updated.id ? updated : item))
-    );
+  // ============================================================
+  // ARCHIVE / DELETE (PRD 1)
+  // ============================================================
+
+  const confirmRemoval = async () => {
+    const event = removal?.event;
+    if (!event) return;
+
+    const deleting = removal.mode === "delete";
+
+    try {
+      setProcessingId(event.id);
+      setError("");
+      setSuccess("");
+
+      if (deleting) {
+        await apiJson(`/dean/events/${event.id}`, { method: "DELETE" });
+      } else {
+        await apiJson(`/dean/events/${event.id}/archive`, { method: "PATCH" });
+      }
+
+      setRemoval(null);
+      setSuccess(
+        deleting ? "Event deleted permanently." : "Event moved to the archive.",
+      );
+      // Refetch rather than splicing the row out: on a paged list, removing
+      // one row locally would leave 24 of 25 with no way to pull the next in.
+      await loadEvents();
+    } catch (err) {
+      handleApiError(
+        err,
+        deleting ? "Failed to delete event" : "Failed to archive event",
+        "Remove event error",
+      );
+      setRemoval(null);
+    } finally {
+      setProcessingId(null);
+    }
   };
+
+  /**
+   * Reload the current page after a decision.
+   *
+   * Patching the row in place was right while the whole list lived in the
+   * browser. Now that the server does the filtering and the counting, an
+   * approved event has to leave the Pending tab and the tab counts have to
+   * move with it — neither of which a local splice can do.
+   */
+  const refreshAfterDecision = () => loadEvents();
 
   // ============================================================
   // APPROVE EVENT
@@ -299,7 +400,7 @@ function AllEvents() {
 
       const data = await apiJson(`/dean/events/${event.id}/approve`, { method: "PATCH" });
 
-      applyUpdatedEvent(data.event);
+      await refreshAfterDecision();
 
       setSuccess(data.message || "Event approved successfully.");
       setDecision(null);
@@ -337,14 +438,23 @@ function AllEvents() {
 
       // In the body, not the query string: long reasons would hit URL
       // limits and end up in access logs.
-      const data = await apiJson(`/dean/events/${event.id}/reject`, {
-        method: "PATCH",
-        body: { rejection_reason: reason },
-      });
+      const revoking = decision?.kind === "revoke";
+      const data = await apiJson(
+        `/dean/events/${event.id}/${revoking ? "revoke" : "reject"}`,
+        {
+          method: "PATCH",
+          body: revoking
+            ? { revocation_reason: reason }
+            : { rejection_reason: reason },
+        },
+      );
 
-      applyUpdatedEvent(data.event);
+      await refreshAfterDecision();
 
-      setSuccess(data.message || "Event rejected successfully.");
+      setSuccess(
+        data.message ||
+          (revoking ? "Event approval revoked." : "Event rejected successfully."),
+      );
       setDecision(null);
     } catch (err) {
       handleApiError(err, "Failed to reject event", "Reject event error");
@@ -361,22 +471,9 @@ function AllEvents() {
   // client-filtered list, so the chip totals stay stable while filtering.
   // ============================================================
 
-  const eventCounts = useMemo(() => countByStatusBucket(events), [events]);
-
-  // ============================================================
-  // CLIENT-SIDE FILTERING (search + status + program type)
-  // ============================================================
-
-  const visibleEvents = useMemo(
-    () =>
-      events.filter(
-        (event) =>
-          matchesEventSearch(event, searchQuery) &&
-          matchesStatusFilter(event, statusFilter) &&
-          matchesTypeFilter(event, typeFilter)
-      ),
-    [events, searchQuery, statusFilter, typeFilter]
-  );
+  // `events` is one page of an already-filtered result set, so there is no
+  // second, client-side filtering pass to apply.
+  const visibleEvents = events;
 
   const isFiltered =
     searchQuery.trim() !== "" ||
@@ -385,18 +482,16 @@ function AllEvents() {
     selectedDate !== "";
 
   const handleClearAllFilters = () => {
-    setSearchQuery("");
-    setStatusFilter("all");
-    setTypeFilter("");
-    setSelectedDate("");
-    loadEvents("");
+    setSearchDraft("");
+    reset();
   };
 
   // The decision dialog's copy depends on what the current status makes of it:
   // approving a rejection clears the reason, rejecting an approval revokes it.
   const decisionEvent = decision?.event;
   const decisionBucket = getStatusBucket(decisionEvent?.status);
-  const isRevoking = decision?.kind === "reject" && decisionBucket === "approved";
+  // Its own action now, not a rejection wearing a different label (PRD 18).
+  const isRevoking = decision?.kind === "revoke";
   const isReapproving = decision?.kind === "approve" && decisionBucket === "rejected";
   const decisionBusy = Boolean(processingId);
 
@@ -479,17 +574,17 @@ function AllEvents() {
               <input
                 id="eventSearch"
                 type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchDraft}
+                onChange={(e) => setSearchDraft(e.target.value)}
                 placeholder="Search name, venue, or type…"
                 aria-label="Search events"
                 className="input pl-10 pr-9"
               />
 
-              {searchQuery && (
+              {searchDraft && (
                 <button
                   type="button"
-                  onClick={() => setSearchQuery("")}
+                  onClick={() => setSearchDraft("")}
                   aria-label="Clear search"
                   className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted transition hover:text-ink"
                 >
@@ -502,12 +597,12 @@ function AllEvents() {
             <div className="flex w-full gap-2.5 sm:w-auto">
               <select
                 value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
+                onChange={(e) => setFilter("type", e.target.value)}
                 aria-label="Filter by program type"
                 className="input min-w-0 flex-1 sm:w-40 sm:flex-none"
               >
                 <option value="">All programs</option>
-                {EVENT_TYPES.map((type) => (
+                {eventTypes.map((type) => (
                   <option key={type} value={type}>
                     {type}
                   </option>
@@ -543,7 +638,7 @@ function AllEvents() {
                 type="button"
                 role="tab"
                 aria-selected={statusFilter === tab.key}
-                onClick={() => setStatusFilter(tab.key)}
+                onClick={() => setFilter("status", tab.key)}
                 className="tab"
               >
                 {tab.label}
@@ -553,7 +648,9 @@ function AllEvents() {
 
             <div className="ml-auto flex items-center gap-3">
               <p className="num text-xs font-medium text-muted">
-                Showing {visibleEvents.length} of {eventCounts.all}
+                {total === 0
+                  ? "No events"
+                  : `Showing ${query.skip + 1}–${query.skip + visibleEvents.length} of ${total}`}
               </p>
 
               {isFiltered && (
@@ -586,188 +683,145 @@ function AllEvents() {
             </div>
           )}
 
-          {!loading && visibleEvents.length === 0 ? (
-            <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-              <span className="icon-tile mb-4 h-14 w-14 rounded-2xl">
-                <IconInbox className="h-6 w-6" />
-              </span>
+          <EventsTable
+            events={visibleEvents}
+            loading={loading}
+            formatEventDate={formatEventDate}
+            emptyHint={
+              isFiltered
+                ? "No events match the current filters."
+                : "No events have been submitted yet."
+            }
+            onClearFilters={isFiltered ? handleClearAllFilters : undefined}
+            renderActions={(event) => (
+              <EventActions
+                event={event}
+                isProcessing={processingId === event.id}
+                onApprove={(e) => openDecision(e, "approve")}
+                onReject={(e) => openDecision(e, "reject")}
+                onRevoke={(e) => openDecision(e, "revoke")}
+                onRemove={(e) => setRemoval({ event: e, mode: "archive", confirmText: "" })}
+              />
+            )}
+          />
 
-              <p className="h3 text-ink">No events found</p>
-
-              <p className="prose-muted mt-1 text-sm">
-                {isFiltered
-                  ? "No events match the current filters."
-                  : "No events have been submitted yet."}
-              </p>
-
-              {isFiltered && (
-                <button
-                  type="button"
-                  onClick={handleClearAllFilters}
-                  className="btn btn-brand btn-sm mt-5"
-                >
-                  <IconRotateCcw />
-                  Clear filters
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="min-h-0 flex-1 overflow-auto">
-
-              {/* ------------------------------------------------
-                  MOBILE: a table cannot show a decision's context
-                  in 390px, so each event becomes a card instead.
-              ------------------------------------------------ */}
-              <ul className="divide-y divide-line/8 md:hidden">
-                {visibleEvents.map((event) => {
-                  const rejected = getStatusBucket(event.status) === "rejected";
-
-                  return (
-                    <li
-                      key={event.id}
-                      style={rejected ? { "--track": trackOf("rejected") } : undefined}
-                      className={`px-4 py-3.5 ${
-                        rejected
-                          ? "bg-[color-mix(in_srgb,var(--track)_6%,transparent)]"
-                          : ""
-                      }`}
-                    >
-                      <Link
-                        to={`/dean/events/${event.id}`}
-                        className="block w-full truncate text-left font-display text-sm font-semibold text-ink"
-                        title={event.event_name}
-                      >
-                        {event.event_name || "Untitled Event"}
-                      </Link>
-
-                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted">
-                        <StatusChip status={event.status} />
-                        {/* Joined rather than separate spans so a wrap never
-                            strands a lone separator at the end of a line. */}
-                        <span>
-                          {[
-                            event.event_type,
-                            formatEventDate(event.event_date),
-                            event.location,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                      </div>
-
-                      {rejected && event.rejection_reason && (
-                        <p className="mt-1.5 text-xs" style={{ color: trackOf("rejected") }}>
-                          <span className="font-semibold">Reason:</span>{" "}
-                          {event.rejection_reason}
-                        </p>
-                      )}
-
-                      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                        <EventActions
-                          event={event}
-                          isProcessing={processingId === event.id}
-                          onApprove={(e) => openDecision(e, "approve")}
-                          onReject={(e) => openDecision(e, "reject")}
-                        />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-
-              <table className="hidden w-full text-left md:table">
-                <thead className="sticky top-0 z-10">
-                  <tr>
-                    {COLUMNS.map((column) => (
-                      <th
-                        key={column.label}
-                        className={`whitespace-nowrap border-b hairline bg-raised/45 px-4 py-3 text-[11px] font-semibold uppercase tracking-[.12em] text-muted backdrop-blur ${column.className}`}
-                      >
-                        {column.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-line/8">
-                  {visibleEvents.map((event) => {
-                    const isProcessing = processingId === event.id;
-                    const rejected = getStatusBucket(event.status) === "rejected";
-
-                    return (
-                      <tr
-                        key={event.id}
-                        style={rejected ? { "--track": trackOf("rejected") } : undefined}
-                        className={`group transition hover:bg-raised/35 ${
-                          rejected
-                            ? "bg-[color-mix(in_srgb,var(--track)_5%,transparent)]"
-                            : ""
-                        }`}
-                      >
-                        {/* Event */}
-                        <td className="max-w-56 px-4 py-3 xl:max-w-72">
-                          <Link
-                            to={`/dean/events/${event.id}`}
-                            title={event.event_name}
-                            className="block max-w-full truncate text-left font-display text-sm font-semibold text-ink transition hover:text-accent"
-                          >
-                            {event.event_name || "Untitled Event"}
-                          </Link>
-
-                          {rejected && event.rejection_reason && (
-                            <p
-                              title={event.rejection_reason}
-                              className="max-w-full truncate text-xs"
-                              style={{ color: trackOf("rejected") }}
-                            >
-                              <span className="font-semibold">Reason:</span>{" "}
-                              {event.rejection_reason}
-                            </p>
-                          )}
-                        </td>
-
-                        {/* Status */}
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <StatusChip status={event.status} />
-                        </td>
-
-                        {/* Type */}
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-muted">
-                          {event.event_type || "—"}
-                        </td>
-
-                        {/* Date */}
-                        <td className="whitespace-nowrap px-4 py-3 text-sm text-muted">
-                          {formatEventDate(event.event_date)}
-                        </td>
-
-                        {/* Location */}
-                        <td className="hidden max-w-48 px-4 py-3 text-sm text-muted min-[1340px]:table-cell">
-                          <span className="block truncate" title={event.location}>
-                            {event.location || "—"}
-                          </span>
-                        </td>
-
-                        {/* Action */}
-                        <td className="sticky right-0 whitespace-nowrap bg-surface px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.12)] transition group-hover:bg-raised/60">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <EventActions
-                              event={event}
-                              isProcessing={isProcessing}
-                              onApprove={(e) => openDecision(e, "approve")}
-                              onReject={(e) => openDecision(e, "reject")}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          {/* Outside the scrolling body: the page is height-locked, so the
+              controls have to stay put while the rows scroll under them. */}
+          {total > 0 && (
+            <Pagination
+              page={page}
+              perPage={per}
+              total={total}
+              onPageChange={setPage}
+              onPerPageChange={setPerPage}
+              disabled={loading}
+            />
           )}
         </div>
       </div>
+
+      {/* ==================================================================
+          ARCHIVE OR DELETE
+          Two outcomes behind one control, with the reversible one selected by
+          default and the irreversible one gated behind typing DELETE.
+      ================================================================== */}
+      <Modal
+        open={Boolean(removal)}
+        onClose={() => !processingId && setRemoval(null)}
+        eyebrow="Remove"
+        title="Remove this event?"
+        subtitle={removal?.event?.event_name || ""}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setRemoval(null)}
+              disabled={Boolean(processingId)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                removal?.mode === "delete" ? "btn-danger" : "btn-brand"
+              }`}
+              onClick={confirmRemoval}
+              disabled={
+                Boolean(processingId) ||
+                (removal?.mode === "delete" && removal?.confirmText !== "DELETE")
+              }
+            >
+              {processingId ? <span className="spin h-3.5 w-3.5" /> : null}
+              {removal?.mode === "delete" ? "Delete permanently" : "Archive"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-2.5">
+          {[
+            {
+              mode: "archive",
+              label: "Archive",
+              hint: "Hides it from All Events but keeps the record, its media and its report. You can restore it from the Archive at any time.",
+            },
+            {
+              mode: "delete",
+              label: "Delete permanently",
+              hint: "Removes the event, its photos, videos, documents and report. This cannot be undone.",
+            },
+          ].map((option) => (
+            <label
+              key={option.mode}
+              className={`glass flex cursor-pointer gap-3 rounded-xl p-3.5 ${
+                removal?.mode === option.mode ? "ring-1 ring-accent/40" : ""
+              }`}
+            >
+              <input
+                type="radio"
+                name="removalMode"
+                checked={removal?.mode === option.mode}
+                onChange={() =>
+                  setRemoval((current) => ({
+                    ...current,
+                    mode: option.mode,
+                    confirmText: "",
+                  }))
+                }
+                className="mt-1 shrink-0"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-ink">
+                  {option.label}
+                </span>
+                <span className="prose-muted block text-xs">{option.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+
+        {removal?.mode === "delete" && (
+          <div className="field mt-4">
+            <label htmlFor="deleteConfirm">
+              Type <span className="font-semibold">DELETE</span> to confirm
+            </label>
+            <input
+              id="deleteConfirm"
+              type="text"
+              value={removal.confirmText}
+              onChange={(event) =>
+                setRemoval((current) => ({
+                  ...current,
+                  confirmText: event.target.value,
+                }))
+              }
+              autoComplete="off"
+              placeholder="DELETE"
+              className="input"
+            />
+          </div>
+        )}
+      </Modal>
 
       {/* ==================================================================
           THE DECISION
@@ -782,9 +836,9 @@ function AllEvents() {
           decision?.kind === "approve"
             ? isReapproving
               ? "Re-approve event"
-              : "Approve event"
+              : "Do you want to approve?"
             : isRevoking
-            ? "Revoke approval & reject"
+            ? "Revoke this approval?"
             : "Reject event"
         }
         subtitle={
@@ -802,6 +856,19 @@ function AllEvents() {
             >
               Cancel
             </button>
+
+            {decision?.kind === "approve" && (
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(`/dean/events/${decisionEvent?.id}?action=approve`)
+                }
+                disabled={decisionBusy}
+                className="btn btn-ghost btn-sm"
+              >
+                Open event and approve
+              </button>
+            )}
 
             {decision?.kind === "approve" ? (
               <button
@@ -825,7 +892,13 @@ function AllEvents() {
                 className="btn btn-danger btn-sm"
               >
                 {decisionBusy ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
-                {decisionBusy ? "Rejecting…" : isRevoking ? "Revoke & reject" : "Reject"}
+                {decisionBusy
+                  ? isRevoking
+                    ? "Revoking…"
+                    : "Rejecting…"
+                  : isRevoking
+                  ? "Revoke approval"
+                  : "Reject"}
               </button>
             )}
           </>
@@ -867,16 +940,20 @@ function AllEvents() {
           >
             <p className="text-sm text-ink">
               {isRevoking
-                ? "This event is approved. Rejecting it revokes the approval, hides its generated report, and notifies the teacher."
+                ? "This event is approved. Revoking withdraws that approval, invalidates any generated report, and notifies the teacher — who can then fix and resubmit it."
                 : "This event is rejected. Re-approving it clears the existing rejection reason and notifies the teacher."}
             </p>
           </div>
         )}
 
-        {decision?.kind === "reject" && (
+        {/* Revoke belongs here too: confirmReject will not send without a
+            reason, so omitting the field made the button a silent no-op. */}
+        {(decision?.kind === "reject" || decision?.kind === "revoke") && (
           <div className="field mt-5">
             <label htmlFor="rejectReason">
-              Reason for rejection
+              {decision?.kind === "revoke"
+                ? "Reason for revoking approval"
+                : "Reason for rejection"}
               <span className="req">*</span>
             </label>
 
@@ -889,7 +966,11 @@ function AllEvents() {
               }}
               rows={4}
               autoFocus
-              placeholder="What needs to change before this can be approved?"
+              placeholder={
+                decision?.kind === "revoke"
+                  ? "Why is this approval being withdrawn?"
+                  : "What needs to change before this can be approved?"
+              }
               aria-invalid={reasonError ? "true" : undefined}
               aria-describedby={reasonError ? "rejectReasonError" : undefined}
               className="input"

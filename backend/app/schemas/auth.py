@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.schemas.common import normalize_phone
 from app.utils.security import password_byte_error
 
 
@@ -81,8 +82,15 @@ class ChangePasswordRequest(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    # Optional. Setting it lists this person in the coordinator directory.
+    phone: str | None = Field(default=None, max_length=24)
 
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
         return _normalize_name(value)
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone_field(cls, value: str | None) -> str | None:
+        return normalize_phone(value)

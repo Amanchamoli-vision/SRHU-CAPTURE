@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiFetch, apiJson, errorFromResponse } from "../../services/api";
 import useMediaRefresh from "../../components/common/useMediaRefresh";
@@ -12,6 +12,7 @@ import StatusChip from "../../components/teacher/StatusChip";
 import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
+  IconArchive,
   IconArrowLeft,
   IconArrowRight,
   IconBuilding,
@@ -34,20 +35,22 @@ import {
   RidgeDivider,
 } from "../../components/teacher/icons";
 import {
-  canApproveEvent,
-  canRejectEvent,
+  canApprove,
+  canReject,
+  canRevoke,
   canRequestChanges,
   getApproveLabel,
   getNextStage,
   getPreviousStage,
-  getRejectLabel,
   getStatusBucket,
   isRejected,
 } from "../../utils/constants";
-import { decodeEventMetadata } from "../../utils/draftStorage";
+import { formatDateRange, formatTime12h } from "../../utils/dates";
+import { readEventFields } from "../../utils/eventFields";
 
 function EventDetails() {
   const { eventId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
   const [event, setEvent] = useState(null);
@@ -206,11 +209,47 @@ function EventDetails() {
   // OPEN / CLOSE A DECISION
   // ============================================================
 
+  // Moving an event backwards is the one stage change that takes something
+  // away from the teacher, so unlike advancing it asks for confirmation.
+  const [stageBack, setStageBack] = useState(null);
+
+  const handleRestore = async () => {
+    if (!event) return;
+    try {
+      setProcessing(true);
+      setError("");
+      const data = await apiJson(`/dean/events/${event.id}/restore`, {
+        method: "PATCH",
+      });
+      setEvent(data.event);
+      setSuccess(data.message || "Event restored.");
+    } catch (err) {
+      handleApiError(err, "Failed to restore event", "Restore event error");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const openDecision = (kind) => {
     setDecisionKind(kind);
     setRejectReason("");
     setReasonError("");
   };
+
+  /**
+   * "Open event and approve" on the All Events dialog lands here with
+   * ?action=approve (PRD 16), so the Dean sees the full proposal and the
+   * confirmation together rather than approving from a table row.
+   *
+   * The parameter is cleared with replace, or a refresh would reopen a dialog
+   * the Dean had already dismissed.
+   */
+  useEffect(() => {
+    if (!event || searchParams.get("action") !== "approve") return;
+
+    if (canApprove(event)) setDecisionKind("approve");
+    setSearchParams({}, { replace: true });
+  }, [event, searchParams, setSearchParams]);
 
   const closeDecision = () => {
     if (processing) return; // never abandon a request mid-flight
@@ -276,14 +315,22 @@ function EventDetails() {
 
       // In the body, not the query string: long reasons would hit URL
       // limits and end up in access logs.
-      const data = await apiJson(`/dean/events/${event.id}/reject`, {
-        method: "PATCH",
-        body: { rejection_reason: reason },
-      });
+      const data = await apiJson(
+        `/dean/events/${event.id}/${isRevoking ? "revoke" : "reject"}`,
+        {
+          method: "PATCH",
+          body: isRevoking
+            ? { revocation_reason: reason }
+            : { rejection_reason: reason },
+        },
+      );
 
       setEvent(data.event);
 
-      setSuccess(data.message || "Event rejected successfully.");
+      setSuccess(
+        data.message ||
+          (isRevoking ? "Event approval revoked." : "Event rejected successfully."),
+      );
       setDecisionKind(null);
 
       // Mirrors confirmApprove: keep report state in sync when the decision
@@ -361,11 +408,6 @@ function EventDetails() {
   const handleSaveSocialLink = async () => {
     if (!event) return;
 
-    if (!socialNetworkUrl.trim()) {
-      setError("Please enter a Social Network Link.");
-      return;
-    }
-
     try {
       setSavingSocialLink(true);
       setError("");
@@ -407,11 +449,6 @@ function EventDetails() {
     // the backend's is_approved() and the report panel's own visibility.
     if (getStatusBucket(event.status) !== "approved") {
       setError("Report can only be generated for an approved event.");
-      return;
-    }
-
-    if (!socialNetworkUrl.trim()) {
-      setError("Social Network Link is required before generating the report.");
       return;
     }
 
@@ -545,18 +582,24 @@ function EventDetails() {
   // Derived view data
   // ----------------------------------------------------------
 
-  // Teacher extras are encoded into description as an HTML comment; decode so
-  // the Dean sees a clean description plus the fields that were hidden in it.
-  const { description: cleanDescription, meta } = decodeEventMetadata(
-    event.description || ""
-  );
+  // Times, organiser and contact are real fields now; department and
+  // expected participants are still carried in the description blob.
+  // readEventFields prefers the columns and falls back to the blob, so an
+  // event created before the promotion still renders in full.
+  const meta = readEventFields(event);
+  const cleanDescription = meta.description;
 
   const rejected = isRejected(event.status);
+  // An archived event stays readable so it can be reviewed before restoring
+  // or deleting, but every decision on it is refused by the server — so the
+  // controls that would 404 are replaced by the one action that applies.
+  const archived = Boolean(event.archived_at);
   const nextStage = getNextStage(event.status);
   const previousStage = getPreviousStage(event.status);
   const isApproved = getStatusBucket(event.status) === "approved";
 
-  const isRevoking = decisionKind === "reject" && isApproved;
+  // Its own action now, not a rejection wearing a different label (PRD 18).
+  const isRevoking = decisionKind === "revoke";
   const isReapproving = decisionKind === "approve" && rejected;
 
   const formatStamp = (value) => {
@@ -585,12 +628,18 @@ function EventDetails() {
 
   const timeRange =
     meta.startTime || meta.endTime
-      ? `${meta.startTime || "?"}${meta.endTime ? ` – ${meta.endTime}` : ""}`
+      ? `${formatTime12h(meta.startTime) || "?"}${
+          meta.endTime ? ` – ${formatTime12h(meta.endTime)}` : ""
+        }`
       : "Not set";
 
   // The hero's four facts: what the Dean checks first, in the order they ask.
   const facts = [
-    { label: "Date", value: formatDay(event.event_date), Icon: IconCalendar },
+    {
+      label: event.end_date ? "Dates" : "Date",
+      value: formatDateRange(event.event_date, event.end_date),
+      Icon: IconCalendar,
+    },
     { label: "Venue", value: event.location || "Not set", Icon: IconMapPin },
     { label: "Time", value: timeRange, Icon: IconClock },
     {
@@ -820,7 +869,9 @@ function EventDetails() {
             </section>
 
             {/* ---- Report (post-approval only) ---- */}
-            {isApproved && (
+            {/* Reports assert a live approval, and the server refuses to
+                generate one for an archived event, so the panel goes too. */}
+            {isApproved && !archived && (
               <>
                 <RidgeDivider className="divider" />
 
@@ -851,7 +902,7 @@ function EventDetails() {
                     <div className="field">
                       <label htmlFor="reportSocialLink">
                         Social network link
-                        <span className="req">*</span>
+                        <span className="ml-2 font-normal text-muted">(Optional)</span>
                       </label>
 
                       <div className="flex flex-wrap gap-2.5">
@@ -867,7 +918,7 @@ function EventDetails() {
                         <button
                           type="button"
                           onClick={handleSaveSocialLink}
-                          disabled={savingSocialLink || !socialNetworkUrl.trim()}
+                          disabled={savingSocialLink}
                           className="btn btn-ghost btn-sm shrink-0"
                         >
                           {savingSocialLink && <span className="spin h-3.5 w-3.5" />}
@@ -876,8 +927,9 @@ function EventDetails() {
                       </div>
 
                       {!socialNetworkUrl.trim() && (
-                        <p className="text-xs font-medium text-emberink">
-                          Required before the report can be generated.
+                        <p className="prose-muted text-xs">
+                          Added to the generated report when present. The report
+                          can be generated without it.
                         </p>
                       )}
                     </div>
@@ -886,7 +938,7 @@ function EventDetails() {
                       <button
                         type="button"
                         onClick={handleGenerateReport}
-                        disabled={reportLoading || !socialNetworkUrl.trim()}
+                        disabled={reportLoading}
                         className="btn btn-brand btn-sm flex-1"
                       >
                         {reportLoading ? (
@@ -943,35 +995,52 @@ function EventDetails() {
                   perspective="dean"
                 />
 
-                {/* Advance or step back through the delivery stages */}
+                {/* PRD 18: the two directions were an unlabelled row of
+                    buttons, so it was not obvious which one moved the event
+                    forward or what the teacher would see. They are now two
+                    labelled groups, each saying what it does. */}
                 {(nextStage || previousStage) && (
-                  <div className="mt-5 flex flex-wrap gap-2.5 border-t hairline pt-5">
+                  <div className="mt-5 space-y-4 border-t hairline pt-5">
+                    <p className="rail-label">Move this event</p>
+
                     {nextStage && (
-                      <button
-                        type="button"
-                        onClick={() => handleChangeStage(nextStage.key)}
-                        disabled={stageSaving}
-                        className="btn btn-brand btn-xs"
-                      >
-                        {stageSaving ? (
-                          <span className="spin h-3.5 w-3.5" />
-                        ) : (
-                          <IconArrowRight />
-                        )}
-                        {stageSaving ? "Saving…" : nextStage.label}
-                      </button>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => handleChangeStage(nextStage.key)}
+                          disabled={stageSaving}
+                          className="btn btn-brand btn-xs"
+                        >
+                          {stageSaving ? (
+                            <span className="spin h-3.5 w-3.5" />
+                          ) : (
+                            <IconArrowRight />
+                          )}
+                          {stageSaving ? "Saving…" : nextStage.label}
+                        </button>
+                        <p className="prose-muted mt-1.5 text-xs">
+                          Advances the event. The teacher is notified and sees
+                          it as “{nextStage.label}”.
+                        </p>
+                      </div>
                     )}
 
                     {previousStage && (
-                      <button
-                        type="button"
-                        onClick={() => handleChangeStage(previousStage.key)}
-                        disabled={stageSaving}
-                        className="btn btn-ghost btn-xs"
-                      >
-                        <IconArrowLeft />
-                        {previousStage.label}
-                      </button>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => setStageBack(previousStage)}
+                          disabled={stageSaving}
+                          className="btn btn-ghost btn-xs"
+                        >
+                          <IconArrowLeft />
+                          {previousStage.label}
+                        </button>
+                        <p className="prose-muted mt-1.5 text-xs">
+                          Steps the event back. Use this only to undo a stage
+                          set by mistake — the teacher is notified of that too.
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1004,28 +1073,53 @@ function EventDetails() {
               </section>
             )}
 
-            {/* ---- Decision ---- */}
+            {/* ---- Decision (or, while archived, the way back) ---- */}
             <section className="glass p-6">
               <div className="flex items-center gap-3">
                 <span className="icon-tile">
-                  <IconShield />
+                  {archived ? <IconArchive /> : <IconShield />}
                 </span>
                 <div>
-                  <p className="eyebrow">Decision</p>
-                  <h2 className="h3 text-ink">Dean decision</h2>
+                  <p className="eyebrow">{archived ? "Archived" : "Decision"}</p>
+                  <h2 className="h3 text-ink">
+                    {archived ? "This event is archived" : "Dean decision"}
+                  </h2>
                 </div>
               </div>
 
+              {archived && (
+                <>
+                  <p className="prose-muted mt-3 text-xs">
+                    It is hidden from All Events and from the teacher&rsquo;s
+                    list, and no decision can be taken on it until it is
+                    restored. Its media, documents and history are untouched.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleRestore}
+                    disabled={processing}
+                    className="btn btn-ok btn-sm mt-5 w-full"
+                  >
+                    {processing ? <span className="spin h-3.5 w-3.5" /> : <IconArchive />}
+                    {processing ? "Restoring…" : "Restore this event"}
+                  </button>
+                </>
+              )}
+
+              {!archived && (
               <p className="prose-muted mt-3 flex items-center gap-1.5 text-xs">
                 Currently
                 <StatusChip status={event.status} />
               </p>
+              )}
+              {!archived && (
               <p className="prose-muted mt-1.5 text-xs">
                 You can revise a decision at any time; the teacher sees each one in their history.
               </p>
+              )}
 
-              <div className="mt-5 flex flex-wrap gap-2.5">
-                {canApproveEvent(event) && (
+              <div className={`mt-5 flex-wrap gap-2.5 ${archived ? "hidden" : "flex"}`}>
+                {canApprove(event) && (
                   <button
                     type="button"
                     onClick={() => openDecision("approve")}
@@ -1037,7 +1131,9 @@ function EventDetails() {
                   </button>
                 )}
 
-                {canRejectEvent(event) && (
+                {/* Reject and Revoke are distinct actions over distinct
+                    statuses, so exactly one of them applies at a time. */}
+                {canReject(event) && (
                   <button
                     type="button"
                     onClick={() => openDecision("reject")}
@@ -1045,7 +1141,19 @@ function EventDetails() {
                     className="btn btn-danger btn-sm flex-1"
                   >
                     <IconX />
-                    {getRejectLabel(event)}
+                    Reject
+                  </button>
+                )}
+
+                {canRevoke(event) && (
+                  <button
+                    type="button"
+                    onClick={() => openDecision("revoke")}
+                    disabled={processing}
+                    className="btn btn-ghost btn-sm flex-1 text-err"
+                  >
+                    <IconX />
+                    Revoke approval
                   </button>
                 )}
 
@@ -1066,6 +1174,48 @@ function EventDetails() {
         </div>
       </div>
 
+      {/* Stepping an event backwards removes a stage the teacher has already
+          been told about, so it confirms first. Advancing does not — that is
+          the expected direction and is trivially undone by this same control. */}
+      <Modal
+        open={Boolean(stageBack)}
+        onClose={() => !stageSaving && setStageBack(null)}
+        eyebrow="Event progress"
+        title={`Move this event back to ${stageBack?.label?.replace(/^Move back to /i, "") || "the previous stage"}?`}
+        subtitle="The teacher is notified, and the event loses the later stage."
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setStageBack(null)}
+              disabled={stageSaving}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={stageSaving}
+              onClick={async () => {
+                const target = stageBack;
+                setStageBack(null);
+                if (target) await handleChangeStage(target.key);
+              }}
+            >
+              {stageSaving ? <span className="spin h-3.5 w-3.5" /> : <IconArrowLeft />}
+              {stageSaving ? "Saving…" : "Move back"}
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink">
+          Use this to undo a stage that was set by mistake. If the event really
+          did move backwards, say so in the event history instead so the record
+          stays accurate.
+        </p>
+      </Modal>
+
       {/* ==================================================================
           THE DECISION
           One dialog for both halves of the decision, the same one the All
@@ -1079,11 +1229,11 @@ function EventDetails() {
           decisionKind === "approve"
             ? isReapproving
               ? "Re-approve event"
-              : "Approve event"
+              : "Do you want to approve?"
             : decisionKind === "changes"
             ? "Request changes"
             : isRevoking
-            ? "Revoke approval & reject"
+            ? "Revoke this approval?"
             : "Reject event"
         }
         subtitle={
@@ -1132,7 +1282,13 @@ function EventDetails() {
                 className="btn btn-danger btn-sm"
               >
                 {processing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
-                {processing ? "Rejecting…" : isRevoking ? "Revoke & reject" : "Reject"}
+                {processing
+                  ? isRevoking
+                    ? "Revoking…"
+                    : "Rejecting…"
+                  : isRevoking
+                  ? "Revoke approval"
+                  : "Reject"}
               </button>
             )}
           </>
@@ -1170,16 +1326,23 @@ function EventDetails() {
           >
             <p className="text-sm text-ink">
               {isRevoking
-                ? "This event is approved. Rejecting it revokes the approval, hides its generated report, and notifies the teacher."
+                ? "This event is approved. Revoking withdraws that approval, invalidates any generated report, and notifies the teacher — who can then fix and resubmit it."
                 : "This event is rejected. Re-approving it clears the existing rejection reason and notifies the teacher."}
             </p>
           </div>
         )}
 
-        {(decisionKind === "reject" || decisionKind === "changes") && (
+        {/* Every refusal carries a reason. Revoke must be listed here too:
+            confirmReject refuses to send without one, so leaving it out made
+            the Revoke button do nothing at all, silently. */}
+        {decisionKind !== "approve" && decisionKind !== null && (
           <div className="field mt-5">
             <label htmlFor="deanRejectReason">
-              {decisionKind === "changes" ? "What should the teacher change?" : "Reason for rejection"}
+              {decisionKind === "changes"
+                ? "What should the teacher change?"
+                : decisionKind === "revoke"
+                ? "Reason for revoking approval"
+                : "Reason for rejection"}
               <span className="req">*</span>
             </label>
 
@@ -1192,7 +1355,11 @@ function EventDetails() {
               }}
               rows={4}
               autoFocus
-              placeholder="What needs to change before this can be approved?"
+              placeholder={
+                decisionKind === "revoke"
+                  ? "Why is this approval being withdrawn?"
+                  : "What needs to change before this can be approved?"
+              }
               aria-invalid={reasonError ? "true" : undefined}
               aria-describedby={reasonError ? "deanRejectReasonError" : undefined}
               className="input"
