@@ -201,7 +201,7 @@ def _letterhead(styles) -> list:
         Spacer(1, 2),
         Paragraph("Campus Capture &nbsp;·&nbsp; Event Documentation", styles["product"]),
     ]
-    logo = _logo(24 * mm)
+    logo = _logo(20 * mm)
     table = Table(
         [[logo, text]],
         colWidths=[logo.drawWidth + 6 * mm, CONTENT_WIDTH - logo.drawWidth - 6 * mm],
@@ -219,7 +219,7 @@ def _letterhead(styles) -> list:
         ("LINEABOVE", (0, 0), (-1, 0), 1.6, NAVY),
         ("LINEBELOW", (0, 0), (-1, 0), 0.6, GOLD),
     ]))
-    return [table, Spacer(1, 5 * mm), rules]
+    return [table, Spacer(1, 4 * mm), rules]
 
 
 def _key_value_table(rows, styles) -> Table:
@@ -269,14 +269,13 @@ def _signature_block(styles) -> KeepTogether:
         ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
-    return KeepTogether([
-        Spacer(1, 12 * mm),
-        Paragraph("Authorisation", styles["section"]),
-        table,
-    ])
+    # No heading of its own: a right-aligned block at the foot of the record
+    # already reads as the sign-off, and the space keeps typical reports on
+    # a single page.
+    return KeepTogether([Spacer(1, 8 * mm), table])
 
 
 # ============================================================
@@ -326,7 +325,7 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
 
     story = _letterhead(styles)
     story += [
-        Spacer(1, 7 * mm),
+        Spacer(1, 5 * mm),
         Paragraph("EVENT REPORT", styles["title"]),
         Spacer(1, 1.5 * mm),
         Paragraph(
