@@ -35,6 +35,12 @@ class FakeCursor(list):
     def sort(self, key, direction):
         return FakeCursor(sorted(self, key=lambda d: d.get(key), reverse=direction == -1))
 
+    def limit(self, count):
+        return FakeCursor(self[:count]) if count else self
+
+    def skip(self, count):
+        return FakeCursor(self[count:])
+
 
 class FakeNotifications:
     """In-memory notifications collection: insert, scoped find, mark read."""
@@ -93,8 +99,10 @@ class NotificationRoutingTests(unittest.TestCase):
         self.client = TestClient(app)
         self.notifications = FakeNotifications()
 
+        self.events = FakeEvents()
         self.patches = [
-            patch("app.routers.events.events", FakeEvents()),
+            patch("app.routers.events.events", self.events),
+            patch("app.routers.events.event_reports", MagicMock()),
             patch("app.routers.events.notifications", self.notifications),
             patch("app.routers.events.users", FakeUsers()),
             patch("app.routers.events.get_current_user", fake_current_user),
@@ -187,6 +195,81 @@ class NotificationRoutingTests(unittest.TestCase):
         self.assertTrue(all(n["is_read"] for n in self.notifications.for_user(DEAN_A_ID)))
         self.assertFalse(any(n["is_read"] for n in self.notifications.for_user(DEAN_B_ID)))
         self.assertFalse(self.notifications.for_user(TEACHER_ID)[0]["is_read"])
+
+
+    def test_editing_a_pending_event_does_not_renotify_deans(self) -> None:
+        event_id = self.submit()
+        for _ in range(3):
+            response = self.client.patch(
+                f"/teacher/events/{event_id}", json=EVENT_PAYLOAD,
+                headers={"Authorization": "Bearer teacher"},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.types_for(DEAN_A_ID), ["submitted"])
+
+    def test_resubmitting_a_pending_event_is_refused(self) -> None:
+        event_id = self.submit()
+        response = self.client.patch(
+            f"/teacher/events/{event_id}/resubmit", headers={"Authorization": "Bearer teacher"}
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.types_for(DEAN_A_ID), ["submitted"])
+
+    def test_feed_is_limited(self) -> None:
+        for index in range(5):
+            self.client.post(
+                "/notifications",
+                json={"title": f"R{index}", "message": "m"},
+                headers={"Authorization": "Bearer teacher"},
+            )
+        feed = self.client.get(
+            "/notifications", params={"limit": 2}, headers={"Authorization": "Bearer teacher"}
+        ).json()["notifications"]
+        self.assertEqual(len(feed), 2)
+        self.assertGreaterEqual(feed[0]["created_at"], feed[1]["created_at"])
+
+        too_many = self.client.get(
+            "/notifications", params={"limit": 501}, headers={"Authorization": "Bearer teacher"}
+        )
+        self.assertEqual(too_many.status_code, 422)
+
+
+class ClientNotificationTests(NotificationRoutingTests):
+    """B-31: what a client may create for itself."""
+
+    test_a_submission_reaches_every_dean_and_not_the_teacher = None
+    test_a_draft_stays_private_until_it_is_submitted = None
+    test_reject_then_resubmit_notifies_both_sides = None
+    test_delivery_stages_reach_the_teacher = None
+    test_each_user_reads_and_clears_only_their_own = None
+    test_editing_a_pending_event_does_not_renotify_deans = None
+    test_resubmitting_a_pending_event_is_refused = None
+    test_feed_is_limited = None
+
+    def post(self, token="Bearer teacher", **body):
+        payload = {"title": "Your event is tomorrow", "message": "Soon.", **body}
+        return self.client.post("/notifications", json=payload, headers={"Authorization": token})
+
+    def test_a_reminder_for_an_own_event_is_accepted(self) -> None:
+        event_id = self.submit()
+        response = self.post(event_id=event_id, data={"event_date": "2026-10-04", "when": "tomorrow"})
+        self.assertEqual(response.status_code, 201, response.text)
+
+    def test_only_reminders_may_be_created(self) -> None:
+        for kind in ("approved", "submitted", "made_up"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.post(notification_type=kind).status_code, 422)
+
+    def test_someone_elses_event_is_refused(self) -> None:
+        event_id = self.submit()
+        response = self.post(token="Bearer dean-a", event_id=event_id)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.post(event_id=str(ObjectId())).status_code, 400)
+        self.assertEqual(self.post(event_id="not-an-id").status_code, 400)
+
+    def test_data_is_capped(self) -> None:
+        response = self.post(data={"blob": "x" * 5000})
+        self.assertEqual(response.status_code, 422)
 
 
 class StatusEmailTests(unittest.TestCase):

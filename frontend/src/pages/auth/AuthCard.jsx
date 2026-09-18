@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
-import srhuLogo from "../../assets/logo.png";
+// White crest: the masthead is the SRHU-blue band, like the app header.
+import srhuLogo from "../../assets/srhu-logo-dark.png";
+import RidgeCanvas from "../../components/landing/RidgeCanvas";
 import useThemeToggle from "../../components/theme/useThemeToggle";
 import {
-  ContourWash,
   IconMoon,
   IconSun,
   RidgeDivider,
@@ -21,19 +22,18 @@ export default function AuthCard({ eyebrow, title, subtitle, children, footer })
     <div className="hv-root flex min-h-screen items-center justify-center px-5 py-10 sm:px-8">
       <div className="glass w-full max-w-md overflow-hidden">
 
-        {/* The masthead is a permanently-dark island, the same device the
-            Sign in screen uses for its institutional panel. */}
-        <div className="theme-dark relative overflow-hidden px-7 py-6">
+        {/* The masthead is the SRHU-blue band with the shared hero's
+            ridgelines and grid — the same device as the Sign in panel. */}
+        <div className="hv-band-dark relative overflow-hidden px-7 py-6">
+          <RidgeCanvas />
           <div className="hero-grid" aria-hidden="true" />
-          <div className="hero-vignette" aria-hidden="true" />
-          <ContourWash className="contour-bg opacity-40" />
 
           <div className="relative flex items-center justify-between gap-3">
             <Link to="/" className="flex min-w-0 items-center gap-3">
               <img
                 src={srhuLogo}
                 alt="Swami Rama Himalayan University"
-                className="h-11 w-auto shrink-0 rounded-lg bg-white/90 object-contain p-1"
+                className="h-11 w-auto shrink-0 object-contain"
               />
               <span className="min-w-0 leading-tight">
                 <span className="wordmark block truncate text-ink">Campus Capture</span>

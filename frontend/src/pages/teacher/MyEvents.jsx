@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson } from "../../services/api";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { canTeacherEditEvent } from "../../utils/constants";
+import { localDateKey, localDateKeyOffset } from "../../utils/dates";
 import {
   getTeacherDrafts,
   deleteTeacherDraft,
@@ -324,29 +325,21 @@ function MyEvents() {
     if (!eventDateStr) return false;
 
     if (dateFilter === "today") {
-      const todayStr = new Date().toISOString().split("T")[0];
-      return eventDateStr === todayStr;
+      return eventDateStr === localDateKey();
     }
 
     if (dateFilter === "this_week") {
-      const d = new Date(eventDateStr);
-      if (isNaN(d.getTime())) return false;
-      const now = new Date();
-      const day = now.getDay();
-      const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-      const monday = new Date(now.setDate(diff));
-      monday.setHours(0, 0, 0, 0);
-      const sunday = new Date(monday);
-      sunday.setDate(monday.getDate() + 6);
-      sunday.setHours(23, 59, 59, 999);
-      return d >= monday && d <= sunday;
+      // Compare local calendar keys: new Date("YYYY-MM-DD") is UTC midnight.
+      const day = new Date().getDay();
+      const sinceMonday = day === 0 ? 6 : day - 1;
+      const mondayKey = localDateKeyOffset(-sinceMonday);
+      const sundayKey = localDateKeyOffset(6 - sinceMonday);
+      const key = String(eventDateStr).slice(0, 10);
+      return key >= mondayKey && key <= sundayKey;
     }
 
     if (dateFilter === "this_month") {
-      const d = new Date(eventDateStr);
-      if (isNaN(d.getTime())) return false;
-      const now = new Date();
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+      return String(eventDateStr).slice(0, 7) === localDateKey().slice(0, 7);
     }
 
     if (dateFilter === "custom") {

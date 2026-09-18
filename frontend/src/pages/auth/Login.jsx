@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import { signIn } from "../../services/auth";
 import { useAuth } from "../../context/AuthContext";
 import AuthLayout, { AuthAlert } from "../../components/auth/AuthLayout";
 import EyeIcon from "../../components/common/EyeIcon";
+import { postLoginPath } from "../../components/common/roles";
 import {
   IconAlertTriangle,
   IconArrowRight,
@@ -19,6 +20,10 @@ const BULLETS = [
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // Set by ProtectedRoute when it bounced a deep link (e.g. an emailed event
+  // link) to this page; honoured after sign-in if it is in the user's area.
+  const from = location.state?.from;
   const { user: currentUser, role: currentRole, loading: authLoading, signOut } = useAuth();
 
   const [email, setEmail] = useState("");
@@ -31,15 +36,10 @@ function Login() {
   // Redirect if user already has an active authenticated session
   useEffect(() => {
     if (!authLoading && currentUser && currentRole) {
-      if (currentRole === "superadmin") {
-        navigate("/superadmin/dashboard", { replace: true });
-      } else if (currentRole === "dean") {
-        navigate("/dean/dashboard", { replace: true });
-      } else if (currentRole === "teacher") {
-        navigate("/teacher/dashboard", { replace: true });
-      }
+      const target = postLoginPath(currentUser, from);
+      if (target) navigate(target, { replace: true });
     }
-  }, [currentUser, currentRole, authLoading, navigate]);
+  }, [currentUser, currentRole, authLoading, navigate, from]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -109,25 +109,12 @@ function Login() {
       // -----------------------------
       // Validate role
       // -----------------------------
-      const role = profile.role?.toLowerCase();
+      // A Dean with a temporary password goes to the change-password screen;
+      // otherwise the deep link they came from, or their dashboard.
+      const target = postLoginPath(profile, from);
 
-      // -----------------------------
-      // Redirect according to role
-      // -----------------------------
-      if (role === "superadmin") {
-        navigate("/superadmin/dashboard", { replace: true });
-
-        return;
-      }
-
-      if (role === "dean") {
-        navigate("/dean/dashboard", { replace: true });
-
-        return;
-      }
-
-      if (role === "teacher") {
-        navigate("/teacher/dashboard", { replace: true });
+      if (target) {
+        navigate(target, { replace: true });
 
         return;
       }

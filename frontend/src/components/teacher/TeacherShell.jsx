@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import srhuLogo from "../../assets/logo.png";
+// The white crest: the shell header is SRHU blue in both themes.
+import srhuLogo from "../../assets/srhu-logo-dark.png";
 import NotificationBell from "../NotificationBell";
 import useThemeToggle from "../theme/useThemeToggle";
 import {
@@ -96,7 +97,8 @@ export default function TeacherShell({
             <div className="min-w-0 leading-tight">
               <p className="wordmark truncate">Campus Capture</p>
               <p className="truncate text-[11px] font-medium text-muted">
-                Swami Rama Himalayan University
+                Teacher Panel
+                <span className="hidden sm:inline"> · Swami Rama Himalayan University</span>
               </p>
             </div>
           </Link>
@@ -135,7 +137,7 @@ export default function TeacherShell({
             {/* Only while the rail is off-screen; from lg up the rail's own
                 account block is the one place the signed-in user appears. */}
             <div className="hidden items-center gap-2.5 sm:flex lg:hidden">
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/12 font-display text-sm font-semibold text-accent ring-1 ring-accent/20">
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
                 {initial}
               </span>
               <span className="hidden leading-tight md:block">
@@ -186,10 +188,23 @@ export default function TeacherShell({
             </Link>
           ))}
 
+          {/* Same account block as the Dean and Super Admin menus. */}
+          <div className="rail-account mt-6 px-0">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
+              {initial}
+            </span>
+            <span className="min-w-0 leading-tight">
+              <span className="block truncate text-sm font-semibold text-ink">
+                {profile?.name || "Teacher"}
+              </span>
+              <span className="block text-[11px] text-muted">Teacher</span>
+            </span>
+          </div>
+
           <button
             type="button"
             onClick={() => { setMenuOpen(false); onLogout?.(); }}
-            className="btn btn-ghost btn-block mt-6"
+            className="btn btn-ghost btn-block mt-4"
           >
             <IconLogout />
             Logout
@@ -237,7 +252,7 @@ export default function TeacherShell({
             <RidgeDivider className="divider my-3 h-7 shrink-0" />
 
             <div className="rail-account">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/12 font-display text-sm font-semibold text-accent ring-1 ring-accent/20">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
                 {initial}
               </span>
               <span className="min-w-0 leading-tight">

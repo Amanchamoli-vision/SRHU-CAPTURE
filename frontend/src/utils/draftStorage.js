@@ -39,7 +39,9 @@ export function getTeacherDraftById(userId, draftId) {
  * Save or update a draft for the given teacher
  * @param {string} userId
  * @param {Object} draftData
- * @returns {Object} Saved draft object
+ * @returns {Object|null} Saved draft object, or null when it could not be
+ *   written (storage full, private mode, blocked) -- callers must tell the
+ *   user instead of claiming the draft was saved.
  */
 export function saveTeacherDraft(userId, draftData) {
   if (!userId) throw new Error("User ID is required to save drafts");
@@ -81,6 +83,7 @@ export function saveTeacherDraft(userId, draftData) {
     localStorage.setItem(`${STORAGE_PREFIX}${userId}`, JSON.stringify(drafts));
   } catch (err) {
     console.error("Failed to persist draft to localStorage:", err);
+    return null;
   }
 
   return cleanDraft;
@@ -113,9 +116,7 @@ export function deleteTeacherDraft(userId, draftId) {
  * @returns {string}
  */
 export function encodeEventMetadata(baseDescription = "", metadata = {}) {
-  const cleanBase = (baseDescription || "")
-    .replace(/\s*<!--CC_METADATA:[\s\S]*?-->/g, "")
-    .trim();
+  const cleanBase = decodeEventMetadata(baseDescription || "").description;
 
   const payload = {
     startTime: metadata.startTime || metadata.start_time || "",
@@ -126,8 +127,46 @@ export function encodeEventMetadata(baseDescription = "", metadata = {}) {
     contactInfo: metadata.contactInfo || metadata.contact_info || "",
   };
 
-  const jsonStr = JSON.stringify(payload);
+  // "\u002d" is a JSON escape for "-", so JSON.parse restores it, but the
+  // stored text can never contain "-->" (or "--") inside the comment.
+  const jsonStr = JSON.stringify(payload).replace(/--/g, "\\u002d\\u002d");
   return cleanBase ? `${cleanBase}\n\n<!--CC_METADATA:${jsonStr}-->` : `<!--CC_METADATA:${jsonStr}-->`;
+}
+
+const METADATA_OPEN = "<!--CC_METADATA:";
+const METADATA_CLOSE = "-->";
+
+/**
+ * Locate the metadata comment and parse its JSON.
+ *
+ * New descriptions never contain "--" inside the JSON (see
+ * encodeEventMetadata), but older ones may hold a raw "-->" inside a value.
+ * So instead of stopping at the first "-->", try each "-->" in turn and take
+ * the first candidate that parses as a JSON object.
+ *
+ * Returns { start, end, meta } (end is exclusive, and swallows the leading
+ * whitespace before the block) or null.
+ */
+function findMetadataBlock(text) {
+  const openAt = text.lastIndexOf(METADATA_OPEN);
+  if (openAt < 0) return null;
+  const jsonStart = openAt + METADATA_OPEN.length;
+
+  let closeAt = text.indexOf(METADATA_CLOSE, jsonStart);
+  while (closeAt >= 0) {
+    try {
+      const parsed = JSON.parse(text.slice(jsonStart, closeAt));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        let start = openAt;
+        while (start > 0 && /\s/.test(text[start - 1])) start -= 1;
+        return { start, end: closeAt + METADATA_CLOSE.length, meta: parsed };
+      }
+    } catch {
+      /* not the real end of the block yet */
+    }
+    closeAt = text.indexOf(METADATA_CLOSE, closeAt + 1);
+  }
+  return null;
 }
 
 /**
@@ -150,7 +189,7 @@ export function decodeEventMetadata(rawDescription = "") {
     };
   }
 
-  const match = rawDescription.match(/<!--CC_METADATA:([\s\S]*?)-->/);
+  const match = findMetadataBlock(rawDescription);
   let meta = {
     startTime: "",
     endTime: "",
@@ -160,15 +199,15 @@ export function decodeEventMetadata(rawDescription = "") {
     contactInfo: "",
   };
 
-  if (match && match[1]) {
-    try {
-      meta = { ...meta, ...JSON.parse(match[1]) };
-    } catch {
-      // ignore JSON parse failures
-    }
+  if (match) {
+    meta = { ...meta, ...match.meta };
   }
 
-  const cleanDescription = rawDescription
+  const cleanDescription = (
+    match
+      ? rawDescription.slice(0, match.start) + rawDescription.slice(match.end)
+      : rawDescription
+  )
     .replace(/\s*<!--CC_METADATA:[\s\S]*?-->/g, "")
     .trim();
 
@@ -210,5 +249,9 @@ export function duplicateEventAsDraft(userId, sourceEvent) {
     status: "draft",
   };
 
-  return saveTeacherDraft(userId, draftData);
+  const saved = saveTeacherDraft(userId, draftData);
+  if (!saved) {
+    throw new Error("This browser could not store the draft (storage full or blocked).");
+  }
+  return saved;
 }

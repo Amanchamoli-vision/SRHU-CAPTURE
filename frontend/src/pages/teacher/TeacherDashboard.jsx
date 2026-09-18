@@ -14,6 +14,7 @@ import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
 import Lifecycle from "../../components/teacher/Lifecycle";
 import StatusChip from "../../components/teacher/StatusChip";
+import StatCard from "../../components/common/StatCard";
 import { isApprovedStatus, isPendingStatus, trackOf } from "../../components/teacher/status";
 import {
   IconActivity,
@@ -27,6 +28,7 @@ import {
   IconInbox,
   IconLayers,
   IconPlus,
+  IconRefresh,
   IconTrash,
   IconXCircle,
 } from "../../components/teacher/icons";
@@ -40,6 +42,7 @@ function TeacherDashboard() {
   const [events, setEvents] = useState([]);
   const [drafts, setDrafts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   // Modals state
   const [trackingEvent, setTrackingEvent] = useState(null);
@@ -50,11 +53,12 @@ function TeacherDashboard() {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
+      setLoadError("");
 
       const userProfile = await fetchCurrentUser();
 
       if (!userProfile) {
-        navigate("/");
+        navigate("/login", { replace: true });
         return;
       }
 
@@ -75,6 +79,12 @@ function TeacherDashboard() {
       setDrafts(teacherDrafts || []);
     } catch (error) {
       console.error("Dashboard error:", error);
+      if (error?.status === 401) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      // Without this the dashboard would show zeros as if there were no events.
+      setLoadError(error?.message || "Unable to load your events right now.");
     } finally {
       setLoading(false);
     }
@@ -86,7 +96,7 @@ function TeacherDashboard() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/");
+    navigate("/login");
   };
 
   // Actions
@@ -198,6 +208,23 @@ function TeacherDashboard() {
     >
       <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
 
+        {loadError && (
+          <div className="toast toast-err mb-6" role="alert">
+            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+            <p className="min-w-0 flex-1 text-sm font-medium text-ink">
+              {loadError} The counts below may be incomplete.
+            </p>
+            <button
+              type="button"
+              onClick={fetchDashboardData}
+              className="btn btn-ghost btn-xs shrink-0"
+            >
+              <IconRefresh />
+              Retry
+            </button>
+          </div>
+        )}
+
         {actionNotice && (
           <div className="toast toast-ok mb-6" role="status">
             <span className="dot mt-1" style={{ "--track": trackOf("approved") }} />
@@ -219,37 +246,20 @@ function TeacherDashboard() {
         />
 
         {/* ------------------------------------------------ summary cards
-            Compact on this page: label and icon on one line, the count and
-            its link on the next. `stat-card` is shared with the Dean and
-            Super Admin dashboards, so the tightening is local utilities. */}
+            The shared KPI card, identical on the Dean and Super Admin
+            dashboards. */}
         <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {summaryCards.map((card, i) => (
-            <Link
+            <StatCard
               key={card.key}
+              index={i}
               to={`/teacher/my-events?filter=${card.key}`}
-              style={{ "--track": card.track, "--i": i + 1 }}
-              className="stat-card reveal group rounded-2xl p-3.5 sm:p-4"
-            >
-              <div className="relative flex items-center justify-between gap-2">
-                <p className="truncate text-xs font-medium text-muted sm:text-sm">{card.label}</p>
-                <span className="icon-tile icon-tile-track h-8 w-8 rounded-lg [&>svg]:h-4 [&>svg]:w-4">
-                  <card.Icon />
-                </span>
-              </div>
-
-              <div className="relative mt-1.5 flex items-end justify-between gap-2">
-                <p
-                  className="stat-num text-[1.75rem] sm:text-[2rem]"
-                  style={{ color: card.track }}
-                >
-                  {card.value}
-                </p>
-                <span className="mb-1 hidden items-center gap-1 text-xs font-semibold text-muted transition group-hover:text-ink sm:inline-flex">
-                  {card.hint}
-                  <IconArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                </span>
-              </div>
-            </Link>
+              label={card.label}
+              value={card.value}
+              Icon={card.Icon}
+              track={card.track}
+              hint={card.hint}
+            />
           ))}
         </div>
 
@@ -510,7 +520,8 @@ const NotSet = () => <span className="italic text-muted/70">Not set</span>;
  * the desktop table so the two can never offer different actions.
  */
 function RowActions({ item, onDuplicate, onDelete, onTrack }) {
-  // Editable until the Dean approves it; mirrors the RLS policy.
+  // Editable until the Dean approves it; mirrors TEACHER_EDITABLE_STATUSES in
+  // backend/app/models/documents.py (the server enforces it).
   const canEdit = item.isDraft || canTeacherEditEvent(item);
   const canDelete = item.isDraft || canTeacherEditEvent(item);
 

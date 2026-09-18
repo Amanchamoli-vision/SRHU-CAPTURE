@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers.auth import find_user_by_email  # noqa: E402
 from app.services import email_service  # noqa: E402
+from app.utils import rate_limit  # noqa: E402
+from app.utils.security import hash_password  # noqa: E402
 from app.utils.serializers import utc_now  # noqa: E402
 
 STORED_EMAIL = "yogesh.chauhandsvvain@gmail.com"
@@ -48,29 +50,59 @@ def regex_lookup(stored: dict):
     return find_one
 
 
+PASSWORD = "secret1"
+PASSWORD_HASH = hash_password(PASSWORD)
+
+
 class VerifyEmailTests(unittest.TestCase):
     def setUp(self) -> None:
+        rate_limit.reset()
         self.client = TestClient(app)
         self.users = MagicMock()
         patcher = patch("app.routers.auth.users", self.users)
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def verify(self, password: str = PASSWORD):
+        return self.client.post(
+            "/auth/verify-email", json={"token": "t" * 43, "password": password}
+        )
+
     def test_first_click_verifies_and_keeps_the_token(self) -> None:
-        self.users.find_one.return_value = stored_user()
-        response = self.client.post("/auth/verify-email", json={"token": "t" * 43})
+        self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH)
+        response = self.verify()
 
         self.assertEqual(response.status_code, 200, response.text)
         changes = self.users.update_one.call_args[0][1]["$set"]
         self.assertTrue(changes["email_verified"])
         self.assertNotIn("verification_token_hash", changes)
 
+    def test_wrong_password_is_refused_and_the_token_is_kept(self) -> None:
+        """Pre-registration takeover: the real owner must not verify a stranger's account."""
+        self.users.find_one.return_value = stored_user(password_hash=hash_password("attacker"))
+        response = self.verify(PASSWORD)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "The password doesn't match this account. If you didn't create it, "
+            "use Forgot password to set your own password.",
+        )
+        self.users.update_one.assert_not_called()
+        self.users.find_one_and_update.assert_not_called()
+
+    def test_password_is_required(self) -> None:
+        self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH)
+        response = self.client.post("/auth/verify-email", json={"token": "t" * 43})
+        self.assertEqual(response.status_code, 422)
+
     def test_second_click_is_a_success_not_an_error(self) -> None:
         """StrictMode, a double click or a link scanner must not show "invalid"."""
         self.users.find_one.return_value = stored_user(
-            email_verified=True, verification_expires_at=None
+            email_verified=True, verification_expires_at=None, password_hash=PASSWORD_HASH
         )
-        response = self.client.post("/auth/verify-email", json={"token": "t" * 43})
+        # The password is not checked once the account is already verified.
+        response = self.verify("anything")
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn("already verified", response.json()["message"])
@@ -78,8 +110,14 @@ class VerifyEmailTests(unittest.TestCase):
 
     def test_unknown_token_is_still_rejected(self) -> None:
         self.users.find_one.return_value = None
-        response = self.client.post("/auth/verify-email", json={"token": "t" * 43})
+        response = self.verify()
         self.assertEqual(response.status_code, 400)
+
+    def test_verify_is_rate_limited_per_ip(self) -> None:
+        self.users.find_one.return_value = None
+        for _ in range(20):
+            self.assertEqual(self.verify().status_code, 400)
+        self.assertEqual(self.verify().status_code, 429)
 
 
 class GmailLookupTests(unittest.TestCase):
@@ -102,7 +140,17 @@ class GmailLookupTests(unittest.TestCase):
         self.assertIsNone(find_user_by_email("ab@srhu.edu.in"))
         self.assertEqual(self.users.find_one.call_count, 1)
 
+    def test_several_dot_variants_resolve_deterministically(self) -> None:
+        """With more than one stored spelling, a verified and then the oldest one wins."""
+        self.users.find_one.side_effect = None
+        self.users.find_one.return_value = None
+        find_user_by_email("yogeshchauhandsvvain@gmail.com")
+        regex_call = self.users.find_one.call_args_list[-1]
+        self.assertIn("$regex", regex_call.args[0]["email"])
+        self.assertEqual(regex_call.kwargs["sort"][0], ("email_verified", -1))
+
     def test_resend_goes_to_the_stored_address(self) -> None:
+        rate_limit.reset()
         client = TestClient(app)
         with patch.multiple(
             "app.routers.auth.settings", smtp_host="smtp.example.com", smtp_from_email="n@example.com"
@@ -144,6 +192,21 @@ class SendRetryTests(unittest.TestCase):
             with self.assertRaises(email_service.EmailDeliveryError):
                 email_service.send_email("a@example.com", "Subject", "Body")
         self.assertEqual(deliver.call_count, 2)
+
+    def test_line_breaks_in_the_subject_are_flattened(self) -> None:
+        """An event name with CR/LF used to raise an uncaught ValueError."""
+        with patch.object(email_service, "_deliver") as deliver:
+            email_service.send_email("a@example.com", "Event approved: Day\r\nBcc: x@evil", "Body")
+        message = deliver.call_args[0][0]
+        self.assertEqual(message["Subject"], "Event approved: Day Bcc: x@evil")
+        self.assertIsNone(message["Bcc"])
+
+    def test_unbuildable_message_is_a_delivery_error(self) -> None:
+        with patch.object(email_service, "_build_message", side_effect=ValueError("bad header")), \
+                patch.object(email_service, "_deliver") as deliver:
+            with self.assertRaises(email_service.EmailDeliveryError):
+                email_service.send_email("a@example.com", "Subject", "Body")
+        deliver.assert_not_called()
 
 
 if __name__ == "__main__":

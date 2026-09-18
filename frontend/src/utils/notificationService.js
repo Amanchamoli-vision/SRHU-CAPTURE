@@ -14,6 +14,7 @@
  */
 import { apiJson } from "../services/api";
 import { decodeEventMetadata } from "./draftStorage";
+import { localDateKey, localDateKeyOffset } from "./dates";
 
 const STORAGE_PREFIX = "cc_teacher_notifs_";
 const REMINDER_STORAGE_PREFIX = "cc_sent_reminders_";
@@ -143,10 +144,32 @@ export async function markAllNotificationsAsRead(userId) {
   );
 }
 
+/** POST a notification. Resolves to the server's copy, or null if it was not stored. */
+async function postNotification({ eventId, notificationType, title, message, data }) {
+  try {
+    const result = await apiJson("/notifications", {
+      method: "POST",
+      body: {
+        event_id: eventId,
+        notification_type: notificationType,
+        title,
+        message,
+        data,
+      },
+    });
+    return result?.notification?.id ? result.notification : null;
+  } catch (err) {
+    console.warn("Insert notification DB warning (kept in local cache):", err);
+    return null;
+  }
+}
+
 /**
  * Create a new notification for the signed-in user (client-generated, such as
  * an event-date reminder). Stored on the server when it is reachable, and kept
- * locally with a browser-minted id until it is.
+ * locally with a browser-minted id until it is (see syncPendingNotifications).
+ *
+ * The returned object has `pending: true` when the server did not store it.
  */
 export async function createTeacherNotification(userId, {
   eventId = null,
@@ -170,31 +193,66 @@ export async function createTeacherNotification(userId, {
     read_at: null,
   };
 
-  try {
-    const result = await apiJson("/notifications", {
-      method: "POST",
-      body: {
-        event_id: eventId,
-        notification_type: notificationType,
-        title,
-        message,
-        data,
-      },
-    });
-
-    if (result?.notification?.id) {
-      newNotif.id = result.notification.id;
-      newNotif.created_at = result.notification.created_at || newNotif.created_at;
-    }
-  } catch (err) {
-    console.warn("Insert notification DB warning (saved to local cache):", err);
+  const stored = await postNotification({ eventId, notificationType, title, message, data });
+  if (stored) {
+    newNotif.id = stored.id;
+    newNotif.created_at = stored.created_at || newNotif.created_at;
   }
 
   const list = getLocalNotifications(userId);
   list.unshift(newNotif);
   saveLocalNotifications(userId, list);
 
-  return newNotif;
+  return { ...newNotif, pending: !stored };
+}
+
+/**
+ * Retry the notifications that never reached the server (created offline).
+ * Reminders for a day that has already passed are dropped instead of sent.
+ * Returns the number that were stored on the server.
+ */
+async function syncPendingNotifications(userId, isCancelled = () => false) {
+  const today = localDateKey();
+  const pending = getLocalNotifications(userId).filter(isLocalOnly);
+  if (pending.length === 0) return 0;
+
+  const dropped = new Set();
+  const stored = new Map(); // local id -> server copy
+
+  for (const notif of pending) {
+    if (isCancelled()) break;
+
+    const eventDate = notif.data?.event_date;
+    if (notif.notification_type === "reminder" && eventDate && eventDate < today) {
+      dropped.add(notif.id);
+      continue;
+    }
+
+    const serverCopy = await postNotification({
+      eventId: notif.event_id,
+      notificationType: notif.notification_type,
+      title: notif.title,
+      message: notif.message,
+      data: notif.data,
+    });
+    // Still offline: leave the rest for the next evaluation.
+    if (!serverCopy) break;
+    stored.set(notif.id, serverCopy);
+  }
+
+  if (dropped.size > 0 || stored.size > 0) {
+    // Re-read: the bell may have written the cache while we were waiting.
+    const next = getLocalNotifications(userId)
+      .filter((n) => !dropped.has(n.id))
+      .map((n) => {
+        const serverCopy = stored.get(n.id);
+        return serverCopy
+          ? { ...n, id: serverCopy.id, created_at: serverCopy.created_at || n.created_at }
+          : n;
+      });
+    saveLocalNotifications(userId, next);
+  }
+  return stored.size;
 }
 
 /**
@@ -205,16 +263,36 @@ export async function createTeacherNotification(userId, {
  * holds — not only against this browser's memory — so opening the portal on a
  * second device does not remind the teacher twice.
  *
- * Returns true when at least one reminder was created.
+ * A reminder only counts as sent once the server has accepted it. One created
+ * offline stays in the local cache and is retried on the next evaluation.
+ *
+ * Only one evaluation runs at a time per page: a second call while one is in
+ * flight gets the same promise, so quick navigation between pages cannot
+ * create duplicates. Pass `isCancelled` to stop early (e.g. on unmount).
+ *
+ * Returns true when at least one reminder was created or synced.
  */
-export async function evaluateEventReminders(userId, events = [], existing = []) {
-  if (!userId || !Array.isArray(events) || events.length === 0) return false;
+let evaluationInFlight = null;
 
-  const toKey = (date) => date.toISOString().split("T")[0];
-  const todayStr = toKey(new Date());
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = toKey(tomorrow);
+export function evaluateEventReminders(userId, events = [], existing = [], { isCancelled } = {}) {
+  if (evaluationInFlight) return evaluationInFlight;
+  evaluationInFlight = runReminderEvaluation(userId, events, existing, isCancelled || (() => false))
+    .finally(() => {
+      evaluationInFlight = null;
+    });
+  return evaluationInFlight;
+}
+
+async function runReminderEvaluation(userId, events, existing, isCancelled) {
+  if (!userId || !Array.isArray(events)) return false;
+
+  let created = (await syncPendingNotifications(userId, isCancelled)) > 0;
+  if (events.length === 0 || isCancelled()) return created;
+
+  // Local calendar dates: toISOString() is UTC and would be a day behind
+  // between 00:00 and 05:29 IST.
+  const todayStr = localDateKey();
+  const tomorrowStr = localDateKeyOffset(1);
 
   let sentKeys = new Set();
   try {
@@ -224,16 +302,34 @@ export async function evaluateEventReminders(userId, events = [], existing = [])
     sentKeys = new Set();
   }
 
+  const keyOf = (n) => `${n.event_id}_${n.data.event_date}_${n.data.when || ""}`;
+  const isReminder = (n) => n.notification_type === "reminder" && n.event_id && n.data?.event_date;
+
   // Reminders the server already has, keyed the same way as sentKeys.
   for (const n of existing) {
-    if (n.notification_type === "reminder" && n.event_id && n.data?.event_date) {
-      sentKeys.add(`${n.event_id}_${n.data.event_date}_${n.data.when || ""}`);
-    }
+    if (isReminder(n) && !isLocalOnly(n)) sentKeys.add(keyOf(n));
   }
 
-  let created = false;
+  // Reminders created offline and still waiting to be synced: do not create
+  // them again, but do not mark them sent either.
+  const pendingKeys = new Set(
+    getLocalNotifications(userId).filter((n) => isLocalOnly(n) && isReminder(n)).map(keyOf)
+  );
+
+  const persistSentKeys = () => {
+    try {
+      localStorage.setItem(
+        `${REMINDER_STORAGE_PREFIX}${userId}`,
+        JSON.stringify(Array.from(sentKeys))
+      );
+    } catch (err) {
+      console.error("Failed to save sent reminders:", err);
+    }
+  };
 
   for (const event of events) {
+    if (isCancelled()) break;
+
     // Only for events that are going ahead.
     if (event.status === "rejected" || event.status === "draft") continue;
 
@@ -244,14 +340,14 @@ export async function evaluateEventReminders(userId, events = [], existing = [])
     if (!when) continue;
 
     const key = `${event.id}_${eventDate}_${when}`;
-    if (sentKeys.has(key)) continue;
+    if (sentKeys.has(key) || pendingKeys.has(key)) continue;
 
     const venue = event.location || "Campus Venue";
     const { meta } = decodeEventMetadata(event.description || "");
     const timeStr = meta.startTime ? ` at ${meta.startTime}` : "";
     const name = event.event_name || event.eventName;
 
-    await createTeacherNotification(userId, {
+    const notif = await createTeacherNotification(userId, {
       eventId: event.id,
       notificationType: "reminder",
       title: when === "today" ? "Your event is today" : "Your event is tomorrow",
@@ -265,18 +361,16 @@ export async function evaluateEventReminders(userId, events = [], existing = [])
       },
     });
 
-    sentKeys.add(key);
+    if (!notif) continue;
     created = true;
+    if (notif.pending) {
+      pendingKeys.add(key);
+    } else {
+      sentKeys.add(key);
+      persistSentKeys();
+    }
   }
 
-  try {
-    localStorage.setItem(
-      `${REMINDER_STORAGE_PREFIX}${userId}`,
-      JSON.stringify(Array.from(sentKeys))
-    );
-  } catch (err) {
-    console.error("Failed to save sent reminders:", err);
-  }
-
+  persistSentKeys();
   return created;
 }

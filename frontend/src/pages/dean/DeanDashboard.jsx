@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import {
-  fetchCurrentUser,
-  getSession as getStoredSession,
-  refreshSession,
-  signOut,
-} from "../../services/auth";
-import { API_BASE_URL } from "../../services/api";
+import { fetchCurrentUser, signOut } from "../../services/auth";
+import { apiJson, isAbortError } from "../../services/api";
 import DeanShell from "../../components/dean/DeanShell";
 import { programShare } from "../../components/dean/programShades";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
+import StatCard from "../../components/common/StatCard";
 import { trackOf } from "../../components/teacher/status";
 import useThemeTokens from "../../components/theme/useThemeTokens";
 import {
@@ -31,7 +27,6 @@ import {
   IconSearch,
   IconX,
   IconXCircle,
-  RidgeDivider,
 } from "../../components/teacher/icons";
 import { decodeEventMetadata } from "../../utils/draftStorage";
 import {
@@ -91,21 +86,6 @@ export default function DeanDashboard() {
   }, [selectedDate, selectedEventType]);
 
   // ============================================
-  // GET SESSION
-  // ============================================
-
-  const getSession = async () => {
-    const session = getStoredSession();
-
-    if (!session) {
-      navigate("/login");
-      return null;
-    }
-
-    return session;
-  };
-
-  // ============================================
   // LOGOUT
   // ============================================
 
@@ -115,53 +95,15 @@ export default function DeanDashboard() {
   };
 
   // ============================================
-  // AUTHORIZED FETCH (handles expired/invalid token)
+  // ERRORS
+  // apiJson clears the session on a 401 (the token is refreshed ahead of
+  // expiry, so a 401 means it was revoked or expired): go to the login page.
   // ============================================
 
-  const authorizedFetch = async (url, options = {}) => {
-    const session = await getSession();
-
-    if (!session) {
-      return null;
-    }
-
-    const doFetch = (token) =>
-      fetch(url, {
-        ...options,
-        headers: {
-          ...(options.headers || {}),
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-    let response = await doFetch(session.access_token);
-
-    if (response.status === 401) {
-      console.warn("Access token rejected (401). Attempting session refresh...");
-
-      const refreshed = await refreshSession();
-
-      if (!refreshed?.access_token) {
-        console.error("Session refresh failed, redirecting to login.");
-
-        await signOut();
-        navigate("/login");
-        return null;
-      }
-
-      response = await doFetch(refreshed.access_token);
-
-      if (response.status === 401) {
-        console.error("Still unauthorized after refresh, redirecting to login.");
-
-        await signOut();
-        navigate("/login");
-        return null;
-      }
-    }
-
-    return response;
+  const isSignedOut = (err) => {
+    if (err?.status !== 401) return false;
+    navigate("/login", { replace: true });
+    return true;
   };
 
   // ============================================
@@ -172,30 +114,18 @@ export default function DeanDashboard() {
     try {
       setLoadingStats(true);
 
-      const response = await authorizedFetch(
-        `${API_BASE_URL}/dean/dashboard/stats`,
-        { method: "GET" }
-      );
-
-      if (!response) {
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Stats API failed: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await apiJson("/dean/dashboard/stats");
 
       setStats({
-        total_events: data.total_events || 0,
-        pending_events: data.pending_events || 0,
-        approved_events: data.approved_events || 0,
-        rejected_events: data.rejected_events || 0,
+        total_events: data?.total_events || 0,
+        pending_events: data?.pending_events || 0,
+        approved_events: data?.approved_events || 0,
+        rejected_events: data?.rejected_events || 0,
       });
     } catch (err) {
       console.error("Stats error:", err);
-      setError("Unable to load dashboard statistics.");
+      if (isSignedOut(err)) return;
+      setError(err?.message || "Unable to load dashboard statistics.");
     } finally {
       setLoadingStats(false);
     }
@@ -203,9 +133,21 @@ export default function DeanDashboard() {
 
   // ============================================
   // LOAD EVENTS
+  //
+  // Filters can change faster than the server answers. Each load aborts the
+  // one before it, so a slow older response can never overwrite the list for
+  // the filters now on screen.
   // ============================================
 
+  const eventsControllerRef = useRef(null);
+
+  useEffect(() => () => eventsControllerRef.current?.abort(), []);
+
   const loadEvents = async (date = "", eventType = "") => {
+    eventsControllerRef.current?.abort();
+    const controller = new AbortController();
+    eventsControllerRef.current = controller;
+
     try {
       setLoadingEvents(true);
       setError("");
@@ -222,31 +164,23 @@ export default function DeanDashboard() {
 
       const queryString = params.toString();
 
-      const url = queryString
-        ? `${API_BASE_URL}/dean/events?${queryString}`
-        : `${API_BASE_URL}/dean/events`;
+      const data = await apiJson(
+        queryString ? `/dean/events?${queryString}` : "/dean/events",
+        { signal: controller.signal }
+      );
 
-      const response = await authorizedFetch(url, { method: "GET" });
-
-      if (!response) {
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Events API failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      setEvents(data.events || []);
+      if (controller.signal.aborted) return;
+      setEvents(data?.events || []);
     } catch (err) {
+      if (controller.signal.aborted || isAbortError(err)) return;
       console.error("Events error:", err);
+      if (isSignedOut(err)) return;
 
       setEvents([]);
 
-      setError("Unable to load events.");
+      setError(err?.message || "Unable to load events.");
     } finally {
-      setLoadingEvents(false);
+      if (eventsControllerRef.current === controller) setLoadingEvents(false);
     }
   };
 
@@ -527,36 +461,25 @@ export default function DeanDashboard() {
         {/* ==================================================== OVERVIEW === */}
         {activeView === "overview" && (
           <>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {/* The shared KPI card, identical on the Teacher and Super
+                Admin dashboards; the 1.5rem gaps match theirs too. */}
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
               {statCards.map((card, i) => (
-                <div
+                <StatCard
                   key={card.key}
-                  style={{ "--track": card.track, "--i": i + 1 }}
-                  className="stat-card reveal"
-                >
-                  <span className="stat-watermark" aria-hidden="true">{i + 1}</span>
-
-                  <div className="relative flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-muted">{card.label}</p>
-                      <p className="stat-num mt-1.5" style={{ color: card.track }}>
-                        {loadingStats ? "—" : card.value}
-                      </p>
-                    </div>
-                    <span className="icon-tile icon-tile-track">
-                      <card.Icon />
-                    </span>
-                  </div>
-
-                  <p className="mt-4 text-xs font-medium text-muted">{card.hint}</p>
-                </div>
+                  index={i}
+                  label={card.label}
+                  value={loadingStats ? "—" : card.value}
+                  Icon={card.Icon}
+                  track={card.track}
+                  hint={card.hint}
+                />
               ))}
             </div>
 
-            <RidgeDivider className="divider my-4" />
 
             {/* ---------------------------------------------- program mix */}
-            <section className="glass reveal overflow-hidden" style={{ "--i": 5 }}>
+            <section className="glass reveal mt-6 overflow-hidden" style={{ "--i": 5 }}>
               <div className="flex flex-col gap-3 border-b hairline px-6 py-5 md:flex-row md:items-center md:justify-between">
                 <div className="flex items-center gap-3">
                   <span className="icon-tile">

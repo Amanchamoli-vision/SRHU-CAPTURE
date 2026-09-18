@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/common/ProtectedRoute";
 
@@ -9,6 +9,7 @@ import Register from "./pages/auth/Register";
 import VerifyEmail from "./pages/auth/VerifyEmail";
 import ForgotPassword from "./pages/auth/ForgotPassword";
 import ResetPassword from "./pages/auth/ResetPassword";
+import NotFound from "./pages/NotFound";
 
 // Teacher
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
@@ -26,6 +27,19 @@ import DeanProfile from "./pages/dean/Profile";
 import SuperAdminDashboard from "./pages/superadmin/SuperAdminDashboard";
 import UserManagement from "./pages/superadmin/UserManagement";
 import CreateDean from "./pages/superadmin/CreateDean";
+import SuperAdminEvents from "./pages/superadmin/Events";
+import SuperAdminEventDetails from "./pages/superadmin/EventDetails";
+
+/**
+ * The create-event wizard keeps a lot of state in refs (the server event id,
+ * the local draft id, the step). Keying it by the query string remounts it
+ * whenever the target changes -- e.g. "Create Event" in the sidebar while
+ * editing an event -- so it can never PATCH or delete the previous record.
+ */
+function CreateEventRoute() {
+  const location = useLocation();
+  return <CreateEvent key={location.search} />;
+}
 
 function App() {
   return (
@@ -55,7 +69,7 @@ function App() {
             path="/teacher/create-event"
             element={
               <ProtectedRoute allowedRoles={["teacher"]}>
-                <CreateEvent />
+                <CreateEventRoute />
               </ProtectedRoute>
             }
           />
@@ -126,6 +140,24 @@ function App() {
           />
 
           <Route
+            path="/superadmin/events"
+            element={
+              <ProtectedRoute allowedRoles={["superadmin"]}>
+                <SuperAdminEvents />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/superadmin/events/:eventId"
+            element={
+              <ProtectedRoute allowedRoles={["superadmin"]}>
+                <SuperAdminEventDetails />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
             path="/superadmin/users"
             element={
               <ProtectedRoute allowedRoles={["superadmin"]}>
@@ -145,6 +177,9 @@ function App() {
 
           {/* Old /admin bookmarks from before the superadmin rename */}
           <Route path="/admin/*" element={<Navigate to="/superadmin/dashboard" replace />} />
+
+          {/* Anything else: a real 404 page instead of a blank screen */}
+          <Route path="*" element={<NotFound />} />
 
         </Routes>
       </AuthProvider>

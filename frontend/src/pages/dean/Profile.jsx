@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  changePassword,
   fetchCurrentUser,
   requestPasswordReset,
   resendVerification,
   signOut,
 } from "../../services/auth";
 import DeanShell from "../../components/dean/DeanShell";
-import { initialsOf, labelOfRole, trackOfRole } from "../../components/common/roles";
+import { useAuth } from "../../context/AuthContext";
+import {
+  initialsOf,
+  labelOfRole,
+  mustChangePassword as needsNewPassword,
+  trackOfRole,
+} from "../../components/common/roles";
 import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
@@ -21,6 +28,7 @@ import {
   IconInfo,
   IconKey,
   IconLogout,
+  IconMail,
   IconRefresh,
   IconShield,
   IconX,
@@ -60,6 +68,7 @@ const ACTION_CLASS =
  */
 function DeanProfile() {
   const navigate = useNavigate();
+  const { user: authUser } = useAuth();
 
   const [profile, setProfile] = useState(null);
   const [account, setAccount] = useState(null);
@@ -72,6 +81,18 @@ function DeanProfile() {
   const [busy, setBusy] = useState(""); // key of the action in flight
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef(null);
+
+  // A Dean created with a temporary password is held on this page (see
+  // ProtectedRoute) until they replace it. authUser is the source of truth:
+  // it updates as soon as the new session is stored.
+  const mustChange = needsNewPassword(authUser);
+
+  // In-page change-password form.
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
+  const [pwError, setPwError] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
+  const showPasswordForm = mustChange || pwOpen;
 
   // Also the Retry and Refresh handler, so a failed first load, a retry and a
   // manual refresh all take exactly the same path.
@@ -147,6 +168,46 @@ function DeanProfile() {
       });
     } finally {
       setBusy("");
+    }
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (pwSaving) return;
+    setPwError("");
+
+    if (!pwForm.current || !pwForm.next) {
+      setPwError("Enter your current password and a new one.");
+      return;
+    }
+    if (pwForm.next.length < 6) {
+      setPwError("The new password must be at least 6 characters.");
+      return;
+    }
+    if (pwForm.next !== pwForm.confirm) {
+      setPwError("The new passwords do not match.");
+      return;
+    }
+    if (pwForm.next === pwForm.current) {
+      setPwError("Choose a password different from the current one.");
+      return;
+    }
+
+    try {
+      setPwSaving(true);
+      const result = await changePassword(pwForm.current, pwForm.next);
+      if (result?.user) setProfile(result.user);
+      setPwForm({ current: "", next: "", confirm: "" });
+      setPwOpen(false);
+      setNotice({ kind: "ok", text: result?.message || "Password changed successfully." });
+    } catch (err) {
+      if (err?.status === 401) {
+        navigate("/login");
+        return;
+      }
+      setPwError(err?.message || "Unable to change your password right now.");
+    } finally {
+      setPwSaving(false);
     }
   };
 
@@ -247,9 +308,20 @@ function DeanProfile() {
   const accountActions = [
     {
       key: "password",
-      label: busy === "password" ? "Sending link…" : "Change password",
-      hint: "Emails you a reset link",
+      label: "Change password",
+      hint: "Set a new password now",
       Icon: IconKey,
+      onClick: () => {
+        setPwError("");
+        setPwOpen((value) => !value);
+      },
+      disabled: mustChange,
+    },
+    {
+      key: "reset-link",
+      label: busy === "password" ? "Sending link…" : "Email a reset link",
+      hint: "If you forgot your password",
+      Icon: IconMail,
       onClick: handlePasswordReset,
       disabled: !hasEmail || Boolean(busy),
     },
@@ -292,6 +364,105 @@ function DeanProfile() {
               Retry
             </button>
           </div>
+        )}
+
+        {mustChange && (
+          <div
+            className="mb-4 flex items-start gap-3 rounded-2xl border p-3.5"
+            data-tint=""
+            style={{ "--track": trackOf("pending") }}
+            role="alert"
+          >
+            <IconKey className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink">
+                Please set a new password to replace your temporary one.
+              </p>
+              <p className="prose-muted mt-0.5 text-sm">
+                The rest of the portal opens once your new password is saved.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {showPasswordForm && (
+          <section
+            className="glass mb-4 p-4 sm:p-5"
+            aria-labelledby="change-password-heading"
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 id="change-password-heading" className="text-sm font-semibold text-ink">
+                Change password
+              </h2>
+              {!mustChange && (
+                <button
+                  type="button"
+                  onClick={() => setPwOpen(false)}
+                  aria-label="Close change password"
+                  className="shrink-0 text-muted transition hover:text-ink"
+                >
+                  <IconX className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            <form onSubmit={handleChangePassword} className="grid gap-3 sm:grid-cols-3">
+              <div className="field">
+                <label htmlFor="pw-current">
+                  {mustChange ? "Temporary password" : "Current password"}
+                </label>
+                <input
+                  id="pw-current"
+                  type="password"
+                  className="input"
+                  autoComplete="current-password"
+                  value={pwForm.current}
+                  onChange={(e) => setPwForm((f) => ({ ...f, current: e.target.value }))}
+                  disabled={pwSaving}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="pw-next">New password</label>
+                <input
+                  id="pw-next"
+                  type="password"
+                  className="input"
+                  autoComplete="new-password"
+                  value={pwForm.next}
+                  onChange={(e) => setPwForm((f) => ({ ...f, next: e.target.value }))}
+                  disabled={pwSaving}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="pw-confirm">Confirm new password</label>
+                <input
+                  id="pw-confirm"
+                  type="password"
+                  className="input"
+                  autoComplete="new-password"
+                  value={pwForm.confirm}
+                  onChange={(e) => setPwForm((f) => ({ ...f, confirm: e.target.value }))}
+                  disabled={pwSaving}
+                />
+              </div>
+
+              {pwError && (
+                <p className="text-sm font-medium text-err sm:col-span-3" role="alert">
+                  {pwError}
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-3 sm:col-span-3">
+                <button type="submit" disabled={pwSaving} className="btn btn-primary">
+                  {pwSaving && <span className="spin h-4 w-4" />}
+                  {pwSaving ? "Saving…" : "Save new password"}
+                </button>
+                <span className="text-xs text-muted">
+                  Other devices signed in to this account will be signed out.
+                </span>
+              </div>
+            </form>
+          </section>
         )}
 
         {loading && !profile ? (

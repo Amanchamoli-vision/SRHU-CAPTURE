@@ -36,3 +36,47 @@ export const initialsOf = (name, email) => {
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return source.slice(0, 2).toUpperCase();
 };
+
+/** Where each role lands after signing in. */
+export const ROLE_HOME = {
+  teacher: "/teacher/dashboard",
+  dean: "/dean/dashboard",
+  superadmin: "/superadmin/dashboard",
+};
+
+/** The screen where a Dean with a temporary password must set a new one. */
+export const DEAN_PASSWORD_PATH = "/dean/profile";
+
+/** True when this user must replace a temporary password before anything else. */
+export const mustChangePassword = (user) =>
+  normalizeRole(user?.role) === "dean" && user?.must_change_password === true;
+
+/**
+ * Where to send a user after sign-in.
+ *
+ * `from` is the location ProtectedRoute stored when it bounced them to /login
+ * (a location object or a path string). It is honoured only for a same-app
+ * path ("/..." but not "//...") inside the user's own role area; anything
+ * else falls back to the role's dashboard.
+ */
+export const postLoginPath = (user, from) => {
+  const role = normalizeRole(user?.role);
+  if (mustChangePassword(user)) return DEAN_PASSWORD_PATH;
+  const home = ROLE_HOME[role] || null;
+  if (!home) return null;
+
+  const target =
+    typeof from === "string"
+      ? from
+      : from && typeof from.pathname === "string"
+        ? `${from.pathname}${from.search || ""}${from.hash || ""}`
+        : "";
+
+  const safe =
+    target.startsWith("/") &&
+    !target.startsWith("//") &&
+    !target.includes("\\") &&
+    target.startsWith(`/${role}/`);
+
+  return safe ? target : home;
+};

@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
-import srhuLogo from "../../assets/logo.png";
+// White crest: the side panel is the SRHU-blue band, like the app header.
+import srhuLogo from "../../assets/srhu-logo-dark.png";
+import RidgeCanvas from "../landing/RidgeCanvas";
 import useThemeToggle from "../theme/useThemeToggle";
 import {
-  ContourWash,
   IconArrowLeft,
   IconMoon,
   IconSun,
@@ -39,18 +40,19 @@ export default function AuthLayout({
     <div className="hv-root flex min-h-screen items-center justify-center px-5 py-10 sm:px-8">
       <div className="glass relative w-full max-w-4xl overflow-hidden md:grid md:grid-cols-2">
 
-        {/* ------------------------------------------------ the dark island */}
-        <aside className="theme-dark relative hidden flex-col justify-between overflow-hidden p-8 md:flex lg:p-10">
+        {/* ------------------------------------------------ the blue band
+            The same hero as the landing page and every PageHero: drifting
+            ridgelines under the grid, on the header's SRHU blue. */}
+        <aside className="hv-band-dark relative hidden flex-col justify-between overflow-hidden p-8 md:flex lg:p-10">
+          <RidgeCanvas />
           <div className="hero-grid" aria-hidden="true" />
-          <div className="hero-vignette" aria-hidden="true" />
-          <ContourWash className="contour-bg opacity-40" />
 
           <div className="relative">
             <Link to="/" className="flex items-center gap-3">
               <img
                 src={srhuLogo}
                 alt="Swami Rama Himalayan University"
-                className="h-11 w-auto shrink-0 rounded-lg bg-white/90 object-contain p-1"
+                className="h-11 w-auto shrink-0 object-contain"
               />
               <span className="min-w-0 leading-tight">
                 <span className="wordmark block truncate text-ink">Campus Capture</span>
@@ -68,12 +70,12 @@ export default function AuthLayout({
                 </span>
               )}
 
-              <h2 className="hero-title mt-4 text-[1.7rem] leading-[1.1] lg:text-[2rem] text-ink">
+              <h2 className="hero-title page-hero-title mt-4 uppercase text-ink">
                 {title}
                 {accent && (
                   <>
                     {" "}
-                    <span className="hero-accent">{accent}</span>
+                    <span className="hero-accent inline-block">{accent}</span>
                   </>
                 )}
               </h2>

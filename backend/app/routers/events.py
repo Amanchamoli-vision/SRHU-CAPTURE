@@ -4,6 +4,7 @@ from datetime import date
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     File,
     Header,
     HTTPException,
@@ -17,12 +18,14 @@ from pymongo import ASCENDING, DESCENDING
 from app.database import (
     event_documents,
     event_media,
+    event_reports,
     events,
     notifications,
     users,
 )
 from app.models.documents import (
     ALLOWED_EVENT_TYPES,
+    APPROVED_STAGES,
     DEAN_PROGRESS_STAGES,
     TEACHER_EDITABLE_STATUSES,
     new_document_document,
@@ -32,22 +35,27 @@ from app.models.documents import (
     new_notification_document,
 )
 from app.schemas.events import (
+    DeanDecisionBody,
     EventCreateRequest,
     EventUpdateRequest,
     NotificationCreateRequest,
 )
 from app.services import email_service
 from app.services.storage_service import (
+    MAX_EVENT_DOCUMENTS,
+    MAX_EVENT_PHOTOS,
+    MAX_EVENT_VIDEOS,
     absolutize,
+    check_file_signature,
     delete_event_cascade,
     delete_stored,
-    media_type_for,
+    inspect_document,
+    inspect_media,
     read_upload,
     safe_file_name,
     save_upload,
-    validate_document,
 )
-from app.utils.auth import check_dean, get_current_user, require_role
+from app.utils.auth import check_dean, check_event_viewer, get_current_user, require_role
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
 
@@ -112,25 +120,136 @@ def ensure_teacher_can_edit(event: dict) -> None:
         )
 
 
+# Statuses a Dean decision (approve / reject / request changes) may start
+# from. "pending" is what every submission is stored as; "submitted" and
+# "under_review" are reserved lifecycle values that mean the same thing to a
+# Dean (the dashboard counts all three as pending).
+DEAN_REVIEWABLE_STATUSES = ("pending", "submitted", "under_review")
+
+# Statuses from which /resubmit puts an event (back) in the review queue.
+RESUBMITTABLE_STATUSES = ("rejected", "draft")
+
+CHANGED_WHILE_EDITING = (
+    "This event was changed by someone else while you were working on it. "
+    "Please reload it and try again."
+)
+
+
+def conflict(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
 def update_event(
     event_id: str,
     changes: dict,
     *,
     history: dict | None = None,
+    expected_status: str | None = None,
 ) -> dict | None:
     """Apply `changes`, and append `history` to the audit trail in the same
     update, so a status change and its record can never exist one without
-    the other."""
+    the other.
+
+    With `expected_status` the write only happens if the event still has that
+    status, which makes check-then-write transitions atomic: a None result
+    then means the status moved underneath the caller (or the event is gone).
+    """
     update: dict = {"$set": {**changes, "updated_at": utc_now()}}
 
     if history is not None:
         update["$push"] = {"history": history}
 
+    query: dict = {"_id": to_object_id(event_id)}
+    if expected_status is not None:
+        query["status"] = expected_status
+
     return events.find_one_and_update(
-        {"_id": to_object_id(event_id)},
+        query,
         update,
         return_document=True,
     )
+
+
+def invalidate_report(event_id: str) -> None:
+    """Drop a generated report: the event it described has changed."""
+    event_reports.delete_many({"event_id": event_id})
+
+
+def page(cursor, skip: int | None, limit: int | None):
+    if skip:
+        cursor = cursor.skip(skip)
+    if limit:
+        cursor = cursor.limit(limit)
+    return cursor
+
+
+def find_dean_visible_event_or_404(event_id: str) -> dict:
+    """An event as a Dean may see it: drafts are reported as missing."""
+    event = find_event_or_404(event_id)
+    if event.get("status") == "draft":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found"
+        )
+    return event
+
+
+def dean_transition(
+    event_id: str,
+    *,
+    verb: str,
+    changes: dict,
+    history_action: str,
+    new_status: str,
+    user: dict,
+    note: str | None = None,
+) -> dict:
+    """Move a pending event to `new_status`, atomically.
+
+    Only an event awaiting review may be decided; anything else is a 409
+    (a double-click, a second Dean, or a stale page). The write is filtered
+    on the status that was checked, so two racing decisions cannot both win.
+    """
+    existing = find_dean_visible_event_or_404(event_id)
+    current = existing.get("status")
+
+    if current not in DEAN_REVIEWABLE_STATUSES:
+        if verb == "approve" and current in APPROVED_STAGES:
+            raise conflict("This event is already approved.")
+        if verb == "reject" and current == "rejected":
+            raise conflict("This event has already been rejected.")
+        raise conflict({
+            "approve": "Only pending events can be approved.",
+            "reject": "Only pending events can be rejected.",
+            "request changes": "Changes can only be requested on pending events.",
+        }[verb])
+
+    updated = update_event(
+        event_id,
+        changes,
+        history=new_history_entry(
+            action=history_action,
+            status=new_status,
+            from_status=current,
+            actor=user,
+            note=note,
+        ),
+        expected_status=current,
+    )
+
+    if not updated:
+        find_event_or_404(event_id)  # 404 if it was deleted meanwhile
+        raise conflict("This event was updated by someone else. Please reload it.")
+
+    return serialize(updated)
+
+
+def _decision_text(query_value: str | None, body: DeanDecisionBody | None, field: str) -> str:
+    """The reason/remarks from the query string, else from the JSON body."""
+    if query_value and query_value.strip():
+        return query_value.strip()
+    body_value = getattr(body, field, None) if body is not None else None
+    return (body_value or "").strip()
 
 
 def list_media(request: Request, event_id: str) -> list[dict]:
@@ -362,9 +481,14 @@ def get_all_events(
     event_type: str | None = Query(
         default=None
     ),
+
+    # Optional paging. No default cap: the Dean pages filter the whole list
+    # client-side, and a silent cap would hide events from them.
+    skip: int | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
 ):
     user = get_current_user(authorization)
-    check_dean(user)
+    check_event_viewer(user)
 
     # --------------------------------------------------------
     # VALIDATE DATE
@@ -426,13 +550,15 @@ def get_all_events(
     if normalized_event_type:
         query["event_type"] = normalized_event_type
 
-    cursor = events.find(query).sort("created_at", DESCENDING)
+    cursor = page(events.find(query).sort("created_at", DESCENDING), skip, limit)
     event_list = serialize_many(cursor)
 
     return {
         "success": True,
         "events": event_list,
         "total": len(event_list),
+        "skip": skip or 0,
+        "limit": limit,
 
         "filters": {
             "event_date": event_date,
@@ -455,15 +581,9 @@ def get_dean_event(
     )
 ):
     user = get_current_user(authorization)
-    check_dean(user)
+    check_event_viewer(user)
 
-    event = find_event_or_404(event_id)
-
-    if event.get("status") == "draft":
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found"
-        )
+    event = find_dean_visible_event_or_404(event_id)
 
     return {
         "success": True,
@@ -486,9 +606,9 @@ def get_event_media(
     )
 ):
     user = get_current_user(authorization)
-    check_dean(user)
+    check_event_viewer(user)
 
-    event = find_event_or_404(event_id)
+    event = find_dean_visible_event_or_404(event_id)
 
     media = list_media(request, str(event["_id"]))
 
@@ -517,30 +637,18 @@ def approve_event(
     user = get_current_user(authorization)
     check_dean(user)
 
-    existing = find_event_or_404(event_id)
-
-    approved_event = serialize(
-        update_event(
-            event_id,
-            {
-                "status": "approved",
-                "rejection_reason": None,
-                "reviewed_at": utc_now(),
-            },
-            history=new_history_entry(
-                action="approved",
-                status="approved",
-                from_status=existing.get("status"),
-                actor=user,
-            ),
-        )
+    approved_event = dean_transition(
+        event_id,
+        verb="approve",
+        changes={
+            "status": "approved",
+            "rejection_reason": None,
+            "reviewed_at": utc_now(),
+        },
+        history_action="approved",
+        new_status="approved",
+        user=user,
     )
-
-    if not approved_event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found"
-        )
 
     # --- Notification Trigger ---
     notify_teacher(
@@ -574,46 +682,42 @@ def approve_event(
 )
 def reject_event(
     event_id: str,
-    rejection_reason: str,
     background_tasks: BackgroundTasks,
+    rejection_reason: str | None = Query(default=None),
+    body: DeanDecisionBody | None = Body(default=None),
     authorization: str | None = Header(
         default=None
     )
 ):
+    """Reject a pending event. The reason may come as the
+    `rejection_reason` query parameter or as a JSON body
+    `{"rejection_reason": "..."}` (preferred: no URL length limit, and it
+    stays out of access logs)."""
     user = get_current_user(authorization)
     check_dean(user)
 
-    if not rejection_reason.strip():
+    rejection_reason = _decision_text(rejection_reason, body, "rejection_reason")
+
+    if not rejection_reason:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Rejection reason is required"
         )
 
-    existing = find_event_or_404(event_id)
-
-    rejected_event = serialize(
-        update_event(
-            event_id,
-            {
-                "status": "rejected",
-                "rejection_reason": rejection_reason.strip(),
-                "reviewed_at": utc_now(),
-            },
-            history=new_history_entry(
-                action="rejected",
-                status="rejected",
-                from_status=existing.get("status"),
-                actor=user,
-                note=rejection_reason,
-            ),
-        )
+    rejected_event = dean_transition(
+        event_id,
+        verb="reject",
+        changes={
+            "status": "rejected",
+            "rejection_reason": rejection_reason,
+            "reviewed_at": utc_now(),
+        },
+        history_action="rejected",
+        new_status="rejected",
+        user=user,
+        note=rejection_reason,
     )
-
-    if not rejected_event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found"
-        )
+    invalidate_report(rejected_event["id"])
 
     # --- Notification Trigger ---
     notify_teacher(
@@ -694,13 +798,12 @@ def update_event_stage(
             from_status=existing.get("status"),
             actor=user,
         ),
+        expected_status=existing.get("status"),
     )
 
     if not updated:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found"
-        )
+        find_event_or_404(event_id)
+        raise conflict("This event was updated by someone else. Please reload it.")
 
     staged_event = serialize(updated)
 
@@ -747,44 +850,40 @@ def request_changes_event(
     event_id: str,
     background_tasks: BackgroundTasks,
     remarks: str = Query(default=""),
+    body: DeanDecisionBody | None = Body(default=None),
     authorization: str | None = Header(
         default=None
     ),
 ):
+    """Send a pending event back to the teacher. Stored as "rejected" (the
+    status in which the teacher can edit and resubmit) with a
+    "changes_requested" history entry. `remarks` may come from the query
+    string or a JSON body `{"remarks": "..."}`."""
     user = get_current_user(authorization)
     check_dean(user)
 
-    if not remarks.strip():
+    remarks = _decision_text(remarks, body, "remarks")
+
+    if not remarks:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Remarks are required"
         )
 
-    existing = find_event_or_404(event_id)
-
-    changed_event = serialize(
-        update_event(
-            event_id,
-            {
-                "status": "rejected",
-                "rejection_reason": remarks.strip(),
-                "reviewed_at": utc_now(),
-            },
-            history=new_history_entry(
-                action="changes_requested",
-                status="rejected",
-                from_status=existing.get("status"),
-                actor=user,
-                note=remarks,
-            ),
-        )
+    changed_event = dean_transition(
+        event_id,
+        verb="request changes",
+        changes={
+            "status": "rejected",
+            "rejection_reason": remarks,
+            "reviewed_at": utc_now(),
+        },
+        history_action="changes_requested",
+        new_status="rejected",
+        user=user,
+        note=remarks,
     )
-
-    if not changed_event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found"
-        )
+    invalidate_report(changed_event["id"])
 
     notify_teacher(
         background_tasks,
@@ -821,11 +920,15 @@ def get_teacher_events(
     authorization: str | None = Header(
         default=None
     ),
+    skip: int | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
 ):
     user = get_current_user(authorization)
     require_role(user, "teacher")
 
-    cursor = events.find({"teacher_id": user["id"]}).sort("created_at", DESCENDING)
+    cursor = page(
+        events.find({"teacher_id": user["id"]}).sort("created_at", DESCENDING), skip, limit
+    )
     event_list = serialize_many(cursor)
 
     return {
@@ -954,6 +1057,7 @@ def update_teacher_event(
 
     history = None
     previous_status = event.get("status")
+    already_queued = previous_status in DEAN_REVIEWABLE_STATUSES
 
     if payload.save_as_draft:
         changes["status"] = "draft"
@@ -962,7 +1066,9 @@ def update_teacher_event(
         # are not steps anyone needs to see in the trail.
     else:
         changes["status"] = "pending"
-        changes["submitted_at"] = utc_now()
+        # An edit while waiting keeps the event's place in the queue.
+        if not already_queued or not event.get("submitted_at"):
+            changes["submitted_at"] = utc_now()
 
         if previous_status == "draft":
             action = "submitted"
@@ -978,9 +1084,21 @@ def update_teacher_event(
             actor=user,
         )
 
-    updated = update_event(event_id, changes, history=history)
+    # Filtered on the status just checked: if a Dean decided in between, the
+    # edit must not silently undo the decision.
+    updated = update_event(
+        event_id, changes, history=history, expected_status=previous_status
+    )
 
-    if history is not None and updated:
+    if not updated:
+        find_teacher_event_or_404(event_id, user["id"])
+        raise conflict(CHANGED_WHILE_EDITING)
+
+    invalidate_report(str(event["_id"]))
+
+    # Deans hear about an event when it enters their queue, not on every
+    # save of an event already in it.
+    if history is not None and not already_queued:
         announce_to_deans(serialize(updated), history["action"], user)
 
     return {
@@ -1014,6 +1132,15 @@ def delete_teacher_event(
             detail="An approved event can no longer be deleted."
         )
 
+    # Remove the event itself first, and only if it still has the status just
+    # checked, so a Dean's approval in between cannot be deleted away.
+    result = events.delete_one(
+        {"_id": event["_id"], "teacher_id": user["id"], "status": event.get("status")}
+    )
+    if result.deleted_count == 0:
+        find_teacher_event_or_404(event_id, user["id"])
+        raise conflict(CHANGED_WHILE_EDITING)
+
     delete_event_cascade(str(event["_id"]))
 
     return {
@@ -1041,6 +1168,15 @@ def teacher_resubmit_event(
     event = find_teacher_event_or_404(event_id, user["id"])
     ensure_teacher_can_edit(event)
 
+    previous_status = event.get("status")
+
+    # Only an event that is out of the queue can be (re)submitted; resubmitting
+    # one that is already waiting would just notify every Dean again.
+    if previous_status not in RESUBMITTABLE_STATUSES:
+        raise conflict("This event is already waiting for the Dean's review.")
+
+    action = "resubmitted" if previous_status == "rejected" else "submitted"
+
     updated = update_event(
         event_id,
         {
@@ -1049,25 +1185,118 @@ def teacher_resubmit_event(
             "submitted_at": utc_now(),
         },
         history=new_history_entry(
-            action="resubmitted" if event.get("status") == "rejected" else "submitted",
+            action=action,
             status="pending",
-            from_status=event.get("status"),
+            from_status=previous_status,
             actor=user,
         ),
+        expected_status=previous_status,
     )
 
-    if updated:
-        announce_to_deans(
-            serialize(updated),
-            "resubmitted" if event.get("status") == "rejected" else "submitted",
-            user,
-        )
+    if not updated:
+        find_teacher_event_or_404(event_id, user["id"])
+        raise conflict(CHANGED_WHILE_EDITING)
+
+    invalidate_report(str(event["_id"]))
+    announce_to_deans(serialize(updated), action, user)
 
     return {
         "success": True,
         "message": "Event resubmitted for approval",
-        "event": serialize(updated or event),
+        "event": serialize(updated),
     }
+
+
+# ============================================================
+# UPLOAD BOOKKEEPING
+# ============================================================
+
+_CAP_LABELS = {"image": "photos", "video": "videos", "document": "documents"}
+
+
+def _cap_error(cap: int, kind: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"An event can have at most {cap} {_CAP_LABELS.get(kind, 'files')}.",
+    )
+
+
+def _ensure_under_cap(collection, cap_query: dict, cap: int, kind: str) -> None:
+    """Refuse an upload up front when the event already has `cap` of them."""
+    if collection.count_documents(cap_query) >= cap:
+        raise _cap_error(cap, kind)
+
+
+def _event_still_editable(event: dict) -> bool:
+    return bool(events.find_one(
+        {"_id": event["_id"], "status": {"$in": list(TEACHER_EDITABLE_STATUSES)}},
+        {"_id": 1},
+    ))
+
+
+def _record_upload(
+    collection,
+    document: dict,
+    stored: dict,
+    event: dict,
+    cap_query: dict,
+    cap: int,
+    kind: str,
+) -> None:
+    """Insert the metadata record for bytes that were just stored, keeping
+    the two consistent.
+
+    - If the insert fails, the stored object is deleted (no orphan).
+    - If the event was deleted or approved while the file was uploading, the
+      record and object are removed again and the request is a 409.
+    - If concurrent uploads pushed the event past its cap, the later ones
+      (by insertion order) are removed and get a 400.
+    """
+    try:
+        result = collection.insert_one(document)
+    except Exception:
+        delete_stored(stored)
+        raise
+    document["_id"] = result.inserted_id
+
+    def roll_back() -> None:
+        collection.delete_one({"_id": result.inserted_id})
+        delete_stored(stored)
+
+    if not _event_still_editable(event):
+        roll_back()
+        raise conflict(
+            "This event was approved or deleted while the file was uploading, "
+            "so the file was not added."
+        )
+
+    past_cap = [
+        item["_id"]
+        for item in collection.find(cap_query, {"_id": 1}).sort("_id", ASCENDING)
+    ][cap:]
+    if result.inserted_id in past_cap:
+        roll_back()
+        raise _cap_error(cap, kind)
+
+
+def _delete_attachment(collection, record_id: str, event: dict, not_found: str) -> None:
+    """Delete one media/document record and its bytes, unless the event left
+    the editable statuses in the meantime (then the record is restored)."""
+    record = collection.find_one_and_delete(
+        {"_id": to_object_id(record_id), "event_id": str(event["_id"])}
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=not_found
+        )
+
+    if not _event_still_editable(event):
+        collection.insert_one(record)
+        raise conflict(CHANGED_WHILE_EDITING)
+
+    delete_stored(record)
 
 
 # ============================================================
@@ -1115,34 +1344,40 @@ def upload_teacher_event_media(
 
     event = find_teacher_event_or_404(event_id, user["id"])
     ensure_teacher_can_edit(event)
+    event_key = str(event["_id"])
 
-    media_type = media_type_for(file)
+    info = inspect_media(file)
+    media_type = info["kind"]
+    cap = MAX_EVENT_PHOTOS if media_type == "image" else MAX_EVENT_VIDEOS
+    cap_query = {"event_id": event_key, "media_type": media_type}
+    _ensure_under_cap(event_media, cap_query, cap, media_type)
+
     data = read_upload(file)
+    check_file_signature(info["extension"], data)
     file_name = safe_file_name(file.filename)
 
     stored = save_upload(
         data,
         file_name=file_name,
-        content_type=file.content_type,
+        content_type=info["content_type"],
         kind="media",
-        event_id=str(event["_id"]),
+        event_id=event_key,
         teacher_id=user["id"],
     )
 
     document = new_media_document(
-        event_id=str(event["_id"]),
+        event_id=event_key,
         storage=stored["storage"],
         object_key=stored["object_key"],
         file_id=stored["file_id"],
         file_name=file_name,
         media_url=stored["url"],
         media_type=media_type,
-        content_type=file.content_type,
+        content_type=info["content_type"],
         file_size=len(data),
     )
 
-    result = event_media.insert_one(document)
-    document["_id"] = result.inserted_id
+    _record_upload(event_media, document, stored, event, cap_query, cap, media_type)
 
     return {
         "success": True,
@@ -1167,17 +1402,7 @@ def delete_teacher_event_media(
     event = find_teacher_event_or_404(event_id, user["id"])
     ensure_teacher_can_edit(event)
 
-    media = event_media.find_one_and_delete(
-        {"_id": to_object_id(media_id), "event_id": str(event["_id"])}
-    )
-
-    if not media:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Media not found"
-        )
-
-    delete_stored(media)
+    _delete_attachment(event_media, media_id, event, "Media not found")
 
     return {
         "success": True,
@@ -1230,33 +1455,39 @@ def upload_teacher_event_document(
 
     event = find_teacher_event_or_404(event_id, user["id"])
     ensure_teacher_can_edit(event)
+    event_key = str(event["_id"])
 
-    validate_document(file)
+    info = inspect_document(file)
+    cap_query = {"event_id": event_key}
+    _ensure_under_cap(event_documents, cap_query, MAX_EVENT_DOCUMENTS, "document")
+
     data = read_upload(file)
-    original_name = (file.filename or "document").strip() or "document"
+    check_file_signature(info["extension"], data)
+    original_name = (file.filename or "document").strip()[:255] or "document"
 
     stored = save_upload(
         data,
         file_name=original_name,
-        content_type=file.content_type,
+        content_type=info["content_type"],
         kind="documents",
-        event_id=str(event["_id"]),
+        event_id=event_key,
         teacher_id=user["id"],
     )
 
     document = new_document_document(
-        event_id=str(event["_id"]),
+        event_id=event_key,
         storage=stored["storage"],
         object_key=stored["object_key"],
         file_id=stored["file_id"],
         file_name=original_name,
         file_url=stored["url"],
-        file_type=file.content_type,
+        file_type=info["content_type"],
         file_size=len(data),
     )
 
-    result = event_documents.insert_one(document)
-    document["_id"] = result.inserted_id
+    _record_upload(
+        event_documents, document, stored, event, cap_query, MAX_EVENT_DOCUMENTS, "document"
+    )
 
     return {
         "success": True,
@@ -1281,17 +1512,7 @@ def delete_teacher_event_document(
     event = find_teacher_event_or_404(event_id, user["id"])
     ensure_teacher_can_edit(event)
 
-    document = event_documents.find_one_and_delete(
-        {"_id": to_object_id(document_id), "event_id": str(event["_id"])}
-    )
-
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
-
-    delete_stored(document)
+    _delete_attachment(event_documents, document_id, event, "Document not found")
 
     return {
         "success": True,
@@ -1317,10 +1538,16 @@ def get_teacher_notifications(
     authorization: str | None = Header(
         default=None
     ),
+    limit: int = Query(default=100, ge=1, le=500),
 ):
+    """The caller's notifications, newest first, at most `limit` of them."""
     user = get_current_user(authorization)
 
-    cursor = notifications.find({"user_id": user["id"]}).sort("created_at", DESCENDING)
+    cursor = (
+        notifications.find({"user_id": user["id"]})
+        .sort("created_at", DESCENDING)
+        .limit(limit)
+    )
     notification_list = serialize_many(cursor)
 
     return {
@@ -1341,8 +1568,21 @@ def create_teacher_notification(
         default=None
     ),
 ):
-    """Client-generated notifications, such as event-date reminders."""
+    """Client-generated notifications: only the event-date reminders the
+    frontend builds (type and `data` size are checked by the schema). A
+    reminder may only point at one of the caller's own events."""
     user = get_current_user(authorization)
+
+    if payload.event_id:
+        object_id = to_object_id(payload.event_id)
+        event = (
+            events.find_one({"_id": object_id}, {"teacher_id": 1}) if object_id else None
+        )
+        if not event or event.get("teacher_id") != user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A notification can only refer to one of your own events."
+            )
 
     notification = safe_create_notification(
         user_id=user["id"],

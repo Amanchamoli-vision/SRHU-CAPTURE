@@ -46,22 +46,31 @@ def upload_bytes(
     object_key: str,
     content_type: str | None,
     metadata: dict[str, str] | None = None,
+    content_disposition: str | None = None,
 ) -> None:
-    _client().put_object(
-        Bucket=settings.r2_bucket_name,
-        Key=object_key,
-        Body=data,
-        ContentType=content_type or "application/octet-stream",
-        Metadata={k: str(v) for k, v in (metadata or {}).items()},
-    )
+    params = {
+        "Bucket": settings.r2_bucket_name,
+        "Key": object_key,
+        "Body": data,
+        "ContentType": content_type or "application/octet-stream",
+        "Metadata": {k: str(v) for k, v in (metadata or {}).items()},
+    }
+    # Stored on the object too, so even a public-bucket URL (which cannot
+    # carry response overrides) downloads rather than renders risky types.
+    if content_disposition:
+        params["ContentDisposition"] = content_disposition
+    _client().put_object(**params)
 
 
-def delete_object(object_key: str) -> None:
+def delete_object(object_key: str) -> bool:
+    """Delete an object; returns False (and logs) when R2 refused."""
     try:
         _client().delete_object(Bucket=settings.r2_bucket_name, Key=object_key)
+        return True
     except (BotoCoreError, ClientError):
         # A leftover object only costs storage; never fail the request for it.
         logger.exception("Could not delete R2 object %s", object_key)
+        return False
 
 
 def object_url(
@@ -71,17 +80,29 @@ def object_url(
     content_type: str | None = None,
 ) -> str:
     """A browser-usable URL for the object: public if a public base URL is
-    configured, otherwise pre-signed for ``R2_SIGNED_URL_EXPIRY`` seconds."""
+    configured, otherwise pre-signed for ``R2_SIGNED_URL_EXPIRY`` seconds.
+
+    The pre-signed URL pins the response type and disposition: only the
+    accepted image, video and PDF types open inline, everything else (and any
+    legacy object stored with an unlisted type such as SVG or HTML) is served
+    as an ``application/octet-stream`` attachment. R2 cannot add
+    ``X-Content-Type-Options`` through a pre-signed URL, which is why the type
+    itself is forced instead.
+    """
     if settings.r2_public_url:
         return f"{settings.r2_public_url.rstrip('/')}/{quote(object_key)}"
 
-    params = {"Bucket": settings.r2_bucket_name, "Key": object_key}
-    if file_name:
-        params["ResponseContentDisposition"] = (
-            f"inline; filename*=UTF-8''{quote(file_name)}"
-        )
-    if content_type:
-        params["ResponseContentType"] = content_type
+    # Imported here: storage_service imports this module.
+    from app.services.storage_service import content_disposition, serving_policy
+
+    served_type, disposition = serving_policy(content_type)
+    name = file_name or object_key.rsplit("/", 1)[-1]
+    params = {
+        "Bucket": settings.r2_bucket_name,
+        "Key": object_key,
+        "ResponseContentType": served_type,
+        "ResponseContentDisposition": content_disposition(disposition, name),
+    }
 
     return _client().generate_presigned_url(
         "get_object",

@@ -13,6 +13,8 @@ import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
 import Lifecycle from "../../components/teacher/Lifecycle";
 import ProgressTimeline from "../../components/teacher/ProgressTimeline";
+import EventMediaSections from "../../components/common/EventMediaSections";
+import useMediaRefresh from "../../components/common/useMediaRefresh";
 import StatusChip from "../../components/teacher/StatusChip";
 import { isApprovedStatus, trackOf } from "../../components/teacher/status";
 import {
@@ -118,6 +120,14 @@ function EventDetails() {
   useEffect(() => {
     fetchEventDetails();
   }, [eventId]);
+
+  // Media and document links are signed and expire; when one fails to load,
+  // fetch fresh ones (quietly, without the full-page loading state).
+  const refreshMediaLinks = useMediaRefresh(async () => {
+    const { media: mediaData, documents: docData } = await apiJson(`/teacher/events/${eventId}`);
+    setMedia(mediaData || []);
+    setDocuments(docData || []);
+  });
 
   const handleLogout = async () => {
     await signOut();
@@ -513,57 +523,14 @@ function EventDetails() {
             </div>
           </section>
 
-          <section className="glass overflow-hidden">
-            <div className="flex items-center justify-between border-b hairline px-6 py-4">
-              <h2 className="h3 text-base text-ink">Media Files</h2>
-              <span className="chip chip-sm chip-solid num">{media.length}</span>
-            </div>
-
-            <div className="p-5">
-              {media.length === 0 ? (
-                <p className="prose-muted py-6 text-center text-xs">
-                  No photos or videos attached.
-                </p>
-              ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  {media.slice(0, 4).map((item) => (
-                    <div
-                      key={item.id}
-                      className="group relative overflow-hidden rounded-xl border hairline bg-raised/60"
-                    >
-                      {item.media_type === "video" ? (
-                        // Playable in place; no overlay link, which would
-                        // swallow clicks on the player controls.
-                        <video
-                          src={item.media_url}
-                          controls
-                          playsInline
-                          preload="metadata"
-                          className="h-24 w-full bg-black object-contain"
-                        />
-                      ) : (
-                        <>
-                          <img
-                            src={item.media_url}
-                            alt={event.event_name}
-                            className="h-24 w-full object-cover transition duration-200 group-hover:scale-105"
-                          />
-                          <a
-                            href={item.media_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="absolute inset-0 flex items-center justify-center bg-ink/45 opacity-0 transition group-hover:opacity-100"
-                          >
-                            <span className="chip chip-sm chip-solid">Open</span>
-                          </a>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
+          {/* Photos and videos in their own cards, every item shown; each
+              opens the viewer, where images show full size and videos play. */}
+          <EventMediaSections
+            items={media}
+            eventName={event.event_name || "Event"}
+            columns="grid-cols-2"
+            onLoadError={refreshMediaLinks}
+          />
         </div>
       </div>
 

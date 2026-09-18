@@ -24,6 +24,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import (
+    FrameBG,
     Image,
     KeepTogether,
     Paragraph,
@@ -74,10 +75,26 @@ def split_description(raw: str | None) -> tuple[str, dict]:
         try:
             parsed = json.loads(match.group(1))
             if isinstance(parsed, dict):
-                meta = parsed
-        except ValueError:
+                meta = _clean_metadata(parsed)
+        except (ValueError, RecursionError):
             pass
     return METADATA_PATTERN.sub("", raw).strip(), meta
+
+
+def _clean_metadata(parsed: dict) -> dict[str, str]:
+    """Keep only scalar metadata values, as strings.
+
+    The metadata is teacher-controlled JSON, so a value may be a number
+    (``{"startTime": 930}``), a list or null. Numbers become strings;
+    anything that is not a plain scalar is ignored.
+    """
+    cleaned: dict[str, str] = {}
+    for key, value in parsed.items():
+        if isinstance(value, bool) or value is None:
+            continue
+        if isinstance(value, (str, int, float)):
+            cleaned[str(key)] = str(value)
+    return cleaned
 
 
 def verbatim_markup(text: str) -> str:
@@ -108,14 +125,17 @@ def format_date(value) -> str:
     return f"{parsed.day} {parsed:%B %Y}"
 
 
-def format_time_range(start: str, end: str) -> str:
+def format_time_range(start, end) -> str:
     def to_12h(value: str) -> str:
         try:
             return datetime.strptime(value, "%H:%M").strftime("%I:%M %p").lstrip("0")
         except ValueError:
             return value
 
-    start, end = (start or "").strip(), (end or "").strip()
+    def text(value) -> str:
+        return "" if value is None else str(value).strip()
+
+    start, end = text(start), text(end)
     if start and end:
         return f"{to_12h(start)} to {to_12h(end)}"
     return to_12h(start or end)
@@ -241,16 +261,32 @@ def _key_value_table(rows, styles) -> Table:
     return table
 
 
-def _boxed(flowable) -> Table:
-    table = Table([[flowable]], colWidths=[CONTENT_WIDTH])
-    table.setStyle(TableStyle([
-        ("BOX", (0, 0), (-1, -1), 0.6, RULE),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
-    ]))
-    return table
+def _boxed_text(text: str, style: ParagraphStyle) -> list:
+    """The description in a ruled box that can run over as many pages as it
+    needs.
+
+    The text is plain Paragraph flowables (one per line of the teacher's
+    text), which ReportLab splits across pages natively; the box is drawn by
+    a FrameBG pair, which follows the flow onto every page. A table cell
+    cannot do this: a one-cell table holding a long description raised
+    LayoutError, and splitInRow tables can loop on long rows.
+    """
+    boxed_style = ParagraphStyle(
+        f"{style.name}Boxed", parent=style, leftIndent=10, rightIndent=10
+    )
+    if text:
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        paragraphs = [Paragraph(verbatim_markup(line) or "&nbsp;", boxed_style) for line in lines]
+    else:
+        paragraphs = [Paragraph("<i>No description provided.</i>", boxed_style)]
+
+    return [
+        FrameBG(color=colors.white, strokeColor=RULE, strokeWidth=0.6, start=True),
+        Spacer(1, 8),
+        *paragraphs,
+        Spacer(1, 9),
+        FrameBG(start=False),
+    ]
 
 
 def _signature_block(styles) -> KeepTogether:
@@ -359,18 +395,21 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
     # 2. Description, exactly as the teacher entered it
     story += [
         Paragraph("2. Event Description", styles["section"]),
-        _boxed(Paragraph(
-            verbatim_markup(description) if description else "<i>No description provided.</i>",
-            styles["body"],
-        )),
+        *_boxed_text(description, styles["body"]),
     ]
 
     # 3. Supporting material
-    social_url = str(event.get("social_network_url") or "")
-    link = (
-        f"<link href='{escape(social_url, {chr(39): '&#39;'})}' color='#1D3F7A'>{escape(social_url)}</link>"
-        if social_url else "Not provided"
-    )
+    social_url = str(event.get("social_network_url") or "").strip()
+    if not social_url:
+        link = "Not provided"
+    elif social_url.lower().startswith(("http://", "https://")):
+        link = (
+            f"<link href='{escape(social_url, {chr(39): '&#39;'})}' color='#1D3F7A'>"
+            f"{escape(social_url)}</link>"
+        )
+    else:
+        # Never make a javascript:, data: or other scheme clickable.
+        link = escape(social_url)
     story += [
         Paragraph("3. Supporting Material", styles["section"]),
         _key_value_table([

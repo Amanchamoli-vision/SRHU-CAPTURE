@@ -74,6 +74,31 @@ class SuperadminRouterTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("superadmin", response.json()["detail"])
 
+    def test_upper_case_self_id_is_still_self(self) -> None:
+        from bson import ObjectId
+
+        own_id = str(ObjectId())
+        me = {**user_with_role("superadmin"), "id": own_id}
+        with patch("app.utils.auth.get_current_user", return_value=me):
+            response = self.client.delete(
+                f"/superadmin/users/{own_id.upper()}", headers={"Authorization": "Bearer t"}
+            )
+        self.assertEqual(response.status_code, 400)
+
+    def test_delete_cascades_with_the_canonical_id(self) -> None:
+        """An upper-case hex id used to delete the user but orphan their events."""
+        from bson import ObjectId
+
+        target = ObjectId()
+        self.users.find_one.return_value = {"_id": target, "name": "T", "role": "teacher"}
+        with patch("app.utils.auth.get_current_user", return_value=user_with_role("superadmin")), \
+                patch("app.routers.superadmin.delete_user_cascade") as cascade:
+            response = self.client.delete(
+                f"/superadmin/users/{str(target).upper()}", headers={"Authorization": "Bearer t"}
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        cascade.assert_called_once_with(str(target))
+
 
 if __name__ == "__main__":
     unittest.main()

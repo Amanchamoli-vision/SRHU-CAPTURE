@@ -43,6 +43,8 @@ export default function UploadPanel({
   onRemove,
   onRetry,
   onDismiss,
+  // Called when a saved file's (signed, expiring) link fails to load.
+  onLoadError,
 }) {
   const inputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
@@ -230,6 +232,7 @@ export default function UploadPanel({
                     muted
                     playsInline
                     controls
+                    onError={() => onLoadError?.()}
                   />
                 ) : (
                   <a href={item.media_url} target="_blank" rel="noreferrer">
@@ -238,6 +241,7 @@ export default function UploadPanel({
                       alt={item.file_name}
                       loading="lazy"
                       className="media-thumb"
+                      onError={() => onLoadError?.()}
                     />
                   </a>
                 )}

@@ -194,6 +194,11 @@ export function canRejectEvent(event) {
   return getStatusBucket(event?.status) !== "rejected";
 }
 
+/** Changes can only be asked for while the event still awaits a first decision. */
+export function canRequestChanges(event) {
+  return getStatusBucket(event?.status) === "pending";
+}
+
 /** Action labels that read correctly when a previous decision is being revised. */
 export function getApproveLabel(event) {
   return getStatusBucket(event?.status) === "rejected" ? "Re-approve" : "Approve";
@@ -320,8 +325,8 @@ export function getPreviousStage(status) {
 // TEACHER EDIT WINDOW
 //
 // A teacher may edit their own event until the Dean approves it. Keep this in
-// step with the RLS policy in migrations/005_teacher_edit_window.sql -- the
-// database is the real boundary, this only decides what the UI offers.
+// step with TEACHER_EDITABLE_STATUSES in backend/app/models/documents.py --
+// the API enforces it, this only decides what the UI offers.
 // ============================================================
 
 export const TEACHER_EDITABLE_STATUSES = [

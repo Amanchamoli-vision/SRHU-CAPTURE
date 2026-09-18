@@ -5,6 +5,7 @@ import {
   onAuthStateChange,
   signOut as apiSignOut,
 } from "../services/auth";
+import { startSessionKeepAlive } from "../services/api";
 
 const AuthContext = createContext(null);
 
@@ -104,6 +105,10 @@ export function AuthProvider({ children }) {
       unsubscribe();
     };
   }, [applyUser, clearState, fetchUserProfile]);
+
+  // Renew the token ahead of expiry while the app is open (interval + when the
+  // tab becomes visible again).
+  useEffect(() => startSessionKeepAlive(), []);
 
   const signOut = useCallback(async () => {
     try {

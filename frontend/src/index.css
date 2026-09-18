@@ -31,7 +31,32 @@
   --hero-tint: rgb(13 54 104 / .10);
   --hero-grad: linear-gradient(100deg, #0D3668 0%, #0369A1 50%, #D97706 100%);
   --header-h: 4.25rem;
+
+  /* App chrome, shared by the Teacher, Dean and Super Admin shells: a deep
+     SRHU-blue header, and a rail one step darker than the page so the three
+     layers read as header / navigation / content instead of one white sheet. */
+  --header-bg: linear-gradient(100deg, #0A2A52 0%, #0D3668 55%, #0E4378 100%);
+  --header-edge: rgb(255 255 255 / .08);
+  --c-rail: 233 239 248;    /* #E9EFF8 brand-tinted rail */
   color-scheme: light;
+
+  /* The page's own tokens, captured before the header overrides them, so a
+     popover opened from the header (see .hv-popover) can switch back. A var()
+     in a custom property resolves on this element, so these follow the
+     dark theme below without being redeclared there. */
+  --p-base: var(--c-base);
+  --p-surface: var(--c-surface);
+  --p-raised: var(--c-raised);
+  --p-ink: var(--c-ink);
+  --p-muted: var(--c-muted);
+  --p-line: var(--c-line);
+  --p-accent: var(--c-accent);
+  --p-ok: var(--c-ok);
+  --p-err: var(--c-err);
+  --p-card-bg: var(--card-bg);
+  --p-card-border: var(--card-border);
+  --p-card-shadow: var(--card-shadow);
+  --p-input-bg: var(--input-bg);
 }
 
 /* Dark: the navbar toggle sets data-theme on <html>; .theme-dark makes one
@@ -57,6 +82,9 @@
   --shadow-strong: rgb(0 0 0 / .8);
   --hero-tint: rgb(13 54 104 / .35);
   --hero-grad: linear-gradient(100deg, #38BDF8 0%, #7dd3fc 45%, #F5A524 100%);
+  --header-bg: linear-gradient(100deg, #071A36 0%, #0A2446 55%, #0C2D57 100%);
+  --header-edge: rgb(255 255 255 / .07);
+  --c-rail: 10 17 31;
   color-scheme: dark;
 }
 
@@ -222,6 +250,149 @@ input::-ms-clear {
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+  }
+
+  /* ------------------------------------------------------------ landing hero
+     The festival site's front page: a transparent header that only gains its
+     translucent blur once the page scrolls, an animated ridgeline canvas under
+     a faint grid, and the massive Sora title with one gradient-clipped word. */
+
+  .landing-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    height: var(--header-h);
+    border-bottom: 1px solid transparent;
+    transition: background-color .35s, border-color .35s, box-shadow .35s;
+  }
+
+  .landing-header.is-scrolled {
+    background: rgb(var(--c-base) / .78);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom-color: rgb(var(--c-line) / .07);
+    box-shadow: 0 10px 40px -20px var(--shadow-strong);
+  }
+
+  /* Capped below the festival site's 8rem: the hero is sized to its content
+     here, not the whole screen, and shares its width with a details column. */
+  .hero-title-xl {
+    font-size: clamp(2.6rem, 7vw, 5.5rem);
+    line-height: .92;
+    letter-spacing: -.035em;
+  }
+
+  /* The landing hero at working size: every in-app page opens on the same
+     ground, grid, vignette and drifting ridgelines, with the same uppercase
+     Sora title and gradient word -- one hero for Teacher, Dean and Super
+     Admin, just shorter than the front page's. */
+  .page-hero {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border-radius: 1.25rem;
+    border: 1px solid var(--card-border);
+    background: rgb(var(--c-base));
+    box-shadow: var(--card-shadow);
+  }
+
+  .page-hero-title {
+    font-size: clamp(1.9rem, 4.2vw, 3rem);
+    line-height: .95;
+    overflow-wrap: anywhere;
+  }
+
+  .ridge-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+  }
+
+  /* Fades the ridgeline into the page at the foot so the divider below reads
+     as the last ridge rather than a hard edge. */
+  .hero-vignette-page {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(70% 55% at 50% 40%, var(--hero-tint), transparent 70%),
+      radial-gradient(60% 40% at 50% 100%, rgb(var(--c-base) / .95), transparent 70%),
+      linear-gradient(to bottom, rgb(var(--c-base) / .55), rgb(var(--c-base) / .1) 30%, rgb(var(--c-base) / .85));
+  }
+
+  .cd-tile {
+    text-align: center;
+    padding: .8rem .5rem .7rem;
+    border-radius: .9rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow);
+  }
+
+  .cd-num {
+    display: block;
+    font-family: Sora, system-ui, sans-serif;
+    font-weight: 700;
+    font-size: clamp(1.6rem, 5vw, 2.4rem);
+    line-height: 1;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cd-label {
+    display: block;
+    margin-top: .35rem;
+    font-size: .65rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: rgb(var(--c-muted));
+  }
+
+  /* A track-coloured dot before a word: the festival's event list. */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+  }
+
+  .badge i {
+    width: .55rem;
+    height: .55rem;
+    border-radius: 999px;
+    background: var(--track, rgb(var(--c-accent)));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--track, #0369A1) 22%, transparent);
+  }
+
+  .scroll-cue {
+    position: relative;
+    width: 1.5rem;
+    height: 2.4rem;
+    border-radius: 999px;
+    border: 1px solid rgb(var(--c-line) / .25);
+  }
+
+  .scroll-cue::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: .5rem;
+    width: 3px;
+    height: .55rem;
+    margin-left: -1.5px;
+    border-radius: 2px;
+    background: rgb(var(--c-accent));
+    animation: hvCue 1.8s ease-in-out infinite;
+  }
+
+  @keyframes hvCue {
+    0% { transform: translateY(0); opacity: 1; }
+    70% { transform: translateY(.8rem); opacity: 0; }
+    100% { transform: translateY(0); opacity: 0; }
   }
 
   /* ---------------------------------------------------------------- buttons */
@@ -562,18 +733,13 @@ input::-ms-clear {
     opacity: 1;
   }
 
-  .stat-watermark {
-    position: absolute;
-    right: 1rem;
-    top: .4rem;
-    font-family: Sora, system-ui, sans-serif;
-    font-weight: 800;
-    font-size: 4rem;
-    line-height: 1;
-    color: rgb(var(--c-line) / .045);
-    letter-spacing: -.05em;
-    pointer-events: none;
+  /* A card that is not a link keeps its glow but does not lift: lifting is
+     what tells people a card can be clicked. */
+  .stat-card.is-static:hover,
+  .stat-card.is-static:focus-within {
+    transform: none;
   }
+
 
   /* ---------------------------------------------------------------- forms */
 
@@ -810,21 +976,67 @@ input::-ms-clear {
     pointer-events: none;
   }
 
+  /* The header -- and any .hv-band-dark, such as the landing page hero -- is
+     a dark island in both themes: it re-declares the colour tokens, so
+     everything inside it (wordmark, nav links, icon buttons, ghost buttons,
+     the hamburger, the account chip, eyebrows, chips) turns light-on-blue with
+     no per-component overrides. */
+  .hv-header,
+  .hv-band-dark {
+    --c-ink: 244 247 252;
+    --c-muted: 176 194 220;
+    --c-line: 255 255 255;
+    --c-raised: 30 64 110;
+    --c-accent: 125 211 252;
+    --card-bg: rgb(255 255 255 / .07);
+    --card-border: rgb(255 255 255 / .16);
+    --card-shadow: none;
+    --shadow-strong: rgb(2 8 23 / .55);
+    --hero-grad: linear-gradient(100deg, #7DD3FC 0%, #BAE6FD 45%, #F5A524 100%);
+
+    color: rgb(var(--c-ink));
+    color-scheme: dark;
+    background: var(--header-bg);
+  }
+
   .hv-header {
     position: sticky;
     top: 0;
     z-index: 50;
     height: var(--header-h);
-    border-bottom: 1px solid transparent;
-    background: rgb(var(--c-base) / .78);
+    border-bottom: 1px solid var(--header-edge);
+    /* Kept although the background is opaque: it makes the header the
+       containing block for the notification panel, which is position: fixed
+       with top: 100% on a phone and would otherwise open off-screen. */
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    transition: background-color .35s, border-color .35s, box-shadow .35s;
+    transition: box-shadow .35s;
   }
 
   .hv-header.is-scrolled {
-    border-bottom-color: rgb(var(--c-line) / .07);
-    box-shadow: 0 10px 40px -20px var(--shadow-strong);
+    box-shadow: 0 12px 32px -18px rgb(2 8 23 / .6);
+  }
+
+  /* A panel opened from the header (the notification list), or a card set on
+     a dark band, belongs to the page: restore the page's tokens inside it. */
+  .hv-header .hv-popover,
+  .hv-band-dark .hv-popover {
+    --c-base: var(--p-base);
+    --c-surface: var(--p-surface);
+    --c-raised: var(--p-raised);
+    --c-ink: var(--p-ink);
+    --c-muted: var(--p-muted);
+    --c-line: var(--p-line);
+    --c-accent: var(--p-accent);
+    --c-ok: var(--p-ok);
+    --c-err: var(--p-err);
+    --card-bg: var(--p-card-bg);
+    --card-border: var(--p-card-border);
+    --card-shadow: var(--p-card-shadow);
+    --input-bg: var(--p-input-bg);
+    color: rgb(var(--c-ink));
+    background: rgb(var(--c-surface));
+    color-scheme: normal;
   }
 
   .wordmark {
@@ -848,6 +1060,8 @@ input::-ms-clear {
     transition: color .2s;
   }
 
+  /* Amber, the same marker colour as the current rail item, so "you are
+     here" looks the same in the header and the sidebar. */
   .nav-link::after {
     content: "";
     position: absolute;
@@ -856,7 +1070,7 @@ input::-ms-clear {
     bottom: .1rem;
     height: 2px;
     border-radius: 2px;
-    background: rgb(var(--c-accent));
+    background: rgb(var(--c-ember));
     transform: scaleX(0);
     transform-origin: 0 50%;
     transition: transform .25s cubic-bezier(.2, .7, .2, 1);
@@ -874,12 +1088,12 @@ input::-ms-clear {
     transform: scaleX(1);
   }
 
-  /* The navigation rail reads as part of the page, not as a slab pasted beside
-     it: the same ground tone, a hairline instead of an edge, and the accent
-     only where it marks the current section. */
+  /* The navigation rail sits one tone below the page, so the layout reads as
+     header / navigation / content. The current item is lifted out of it as a
+     card, with the amber marker on its edge. */
   .hv-rail {
-    background: rgb(var(--c-base));
-    border-right: 1px solid rgb(var(--c-line) / .08);
+    background: rgb(var(--c-rail));
+    border-right: 1px solid rgb(var(--c-line) / .07);
   }
 
   .rail-label {
@@ -922,14 +1136,19 @@ input::-ms-clear {
   }
 
   .rail-link:hover {
-    background: rgb(var(--c-line) / .04);
+    background: rgb(var(--c-line) / .05);
     color: rgb(var(--c-ink));
   }
 
   .rail-link[aria-current="page"] {
-    background: rgb(var(--c-accent) / .08);
+    background: var(--card-bg);
+    box-shadow: var(--card-shadow);
     color: rgb(var(--c-ink));
     font-weight: 600;
+  }
+
+  :root[data-theme="dark"] .rail-link[aria-current="page"] {
+    background: rgb(255 255 255 / .07);
   }
 
   .rail-link[aria-current="page"]::before {
@@ -1385,9 +1604,14 @@ input::-ms-clear {
       transform: none;
     }
 
+    .scroll-cue::after {
+      animation: none;
+    }
+
     .btn,
     .stat-card,
     .nav-link::after,
+    .landing-header,
     .hv-menu,
     .hamburger span,
     .rail-link,

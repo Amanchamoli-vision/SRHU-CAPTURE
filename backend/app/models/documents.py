@@ -87,7 +87,13 @@ USER_PRIVATE_FIELDS = (
     "verification_expires_at",
     "reset_token_hash",
     "reset_expires_at",
+    # Session counter embedded in access tokens as `ver`; bumping it signs the
+    # user out everywhere. Not secret, but of no use to the client.
+    "token_version",
 )
+# `must_change_password` is deliberately NOT private: the frontend reads it from
+# the login / me response to send a Dean with a temporary password straight to
+# the change-password screen.
 
 
 def new_user_document(
@@ -97,6 +103,7 @@ def new_user_document(
     password_hash: str,
     role: str = "teacher",
     email_verified: bool = False,
+    must_change_password: bool = False,
 ) -> dict[str, Any]:
     now = utc_now()
     return {
@@ -106,6 +113,8 @@ def new_user_document(
         "role": role,
         "email_verified": email_verified,
         "email_verified_at": now if email_verified else None,
+        "must_change_password": must_change_password,
+        "token_version": 0,
         "verification_token_hash": None,
         "verification_expires_at": None,
         "reset_token_hash": None,

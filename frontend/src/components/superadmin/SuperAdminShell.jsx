@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import srhuLogo from "../../assets/logo.png";
+// The white crest: the shell header is SRHU blue in both themes.
+import srhuLogo from "../../assets/srhu-logo-dark.png";
 import useThemeToggle from "../theme/useThemeToggle";
 import {
   IconArrowUp,
+  IconCalendar,
   IconGrid,
   IconLogout,
   IconMoon,
@@ -18,6 +20,7 @@ import { initialsOf } from "../common/roles";
 // count badge. The header row and the overlay menu have room for the long one.
 const NAV = [
   { key: "dashboard", to: "/superadmin/dashboard", label: "Dashboard", Icon: IconGrid },
+  { key: "events", to: "/superadmin/events", label: "Events", Icon: IconCalendar },
   { key: "users", to: "/superadmin/users", label: "User Management", short: "Users", Icon: IconUsers },
   { key: "create-dean", to: "/superadmin/create-dean", label: "Create Dean", Icon: IconUserPlus },
 ];
@@ -102,7 +105,7 @@ export default function SuperAdminShell({
             <div className="min-w-0 leading-tight">
               <p className="wordmark truncate">Campus Capture</p>
               <p className="truncate text-[11px] font-medium text-muted">
-                Super Admin Console
+                Super Admin Panel
                 <span className="hidden sm:inline"> · Swami Rama Himalayan University</span>
               </p>
             </div>
@@ -197,7 +200,7 @@ export default function SuperAdminShell({
       {/* ------------------------------------------------- rail + page body */}
       <div className="flex">
         <aside className="hv-rail sticky top-(--header-h) hidden h-[calc(100vh-var(--header-h))] w-60 shrink-0 flex-col overflow-y-auto px-3 py-6 lg:flex">
-          <p className="rail-label px-3 pb-2.5">Super Admin</p>
+          <p className="rail-label px-3 pb-2.5">Navigation</p>
 
           <nav className="space-y-1" aria-label="Super Admin navigation">
             {NAV.map((item) => (

@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { DEAN_PASSWORD_PATH, mustChangePassword } from "./roles";
 
 export default function ProtectedRoute({ children, allowedRoles = [] }) {
   const { user, role, loading } = useAuth();
@@ -26,6 +27,12 @@ export default function ProtectedRoute({ children, allowedRoles = [] }) {
   // Default-deny: If allowedRoles is specified and the user's role is not included, redirect to /login
   if (allowedRoles.length > 0 && !allowedRoles.includes(role)) {
     return <Navigate to="/login" replace />;
+  }
+
+  // A Dean still on a temporary password is kept on the change-password
+  // screen until they set a new one.
+  if (mustChangePassword(user) && location.pathname !== DEAN_PASSWORD_PATH) {
+    return <Navigate to={DEAN_PASSWORD_PATH} state={{ mustChangePassword: true }} replace />;
   }
 
   return children;

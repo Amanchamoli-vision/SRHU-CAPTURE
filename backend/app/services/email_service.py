@@ -1,9 +1,7 @@
-"""Outbound email, over SMTP or an HTTPS email API.
+"""Outbound email over SMTP.
 
-Every message the application sends goes through ``send_email``. The transport
-is chosen by EMAIL_PROVIDER: "smtp" (the default), or "brevo" / "resend" for
-hosts such as Railway's Free, Trial and Hobby plans that block outbound SMTP.
-The templates below are plain functions so they are easy to test and to adjust.
+Every message the application sends goes through ``send_email``. The templates
+below are plain functions so they are easy to test and to adjust.
 """
 
 from __future__ import annotations
@@ -16,37 +14,32 @@ from email.message import EmailMessage
 from email.utils import formataddr
 from html import escape
 
-import httpx
-
 from app.config import settings
 
 
 logger = logging.getLogger(__name__)
 
-BREVO_URL = "https://api.brevo.com/v3/smtp/email"
-RESEND_URL = "https://api.resend.com/emails"
-HTTP_TIMEOUT_SECONDS = 15
-
 
 class EmailDeliveryError(RuntimeError):
-    """Raised when an email could not be handed to the mail provider."""
-
-
-class _ProviderRejected(Exception):
-    """The email API refused the message (bad key, unverified sender, ...)."""
-
-
-class _ProviderUnavailable(Exception):
-    """The email API failed in a way that may succeed on a retry."""
+    """Raised when an email could not be handed to the SMTP server."""
 
 
 def is_configured() -> bool:
-    return settings.email_configured
+    return settings.smtp_configured
+
+
+def _clean_header(value: str) -> str:
+    """Collapse CR/LF (and other line breaks) that would make a header invalid.
+
+    Subjects include user-controlled text such as an event name; the email
+    package refuses a header containing a newline.
+    """
+    return " ".join(str(value).split()) if value else ""
 
 
 def _build_message(to_email: str, subject: str, text: str, html: str | None) -> EmailMessage:
     message = EmailMessage()
-    message["Subject"] = subject
+    message["Subject"] = _clean_header(subject)
     message["From"] = formataddr((settings.smtp_from_name, settings.smtp_from_email))
     message["To"] = to_email
     message.set_content(text)
@@ -55,16 +48,11 @@ def _build_message(to_email: str, subject: str, text: str, html: str | None) -> 
     return message
 
 
-# Failures worth a second attempt: dropped connections, timeouts, 4xx SMTP
-# "try again later" replies and 5xx / 429 from an email API. Bad credentials,
-# a rejected recipient or an unverified sender fail the same way twice, so
-# those are reported straight away.
-_PERMANENT_ERRORS = (
-    smtplib.SMTPAuthenticationError,
-    smtplib.SMTPRecipientsRefused,
-    _ProviderRejected,
-)
-_TRANSIENT_ERRORS = (OSError, smtplib.SMTPException, httpx.TransportError, _ProviderUnavailable)
+# Failures worth a second attempt: dropped connections, timeouts and 4xx
+# "try again later" replies. Bad credentials or a rejected recipient will fail
+# the same way twice, so those are reported straight away.
+_PERMANENT_ERRORS = (smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused)
+_TRANSIENT_ERRORS = (OSError, smtplib.SMTPException)
 SEND_ATTEMPTS = 2
 RETRY_DELAY_SECONDS = 2
 
@@ -73,15 +61,23 @@ def send_email(to_email: str, subject: str, text: str, html: str | None = None) 
     """Deliver one message. Raises ``EmailDeliveryError`` on any failure."""
     if not is_configured():
         raise EmailDeliveryError(
-            f"Email is not configured for provider {settings.email_provider}: missing "
-            + ", ".join(settings.email_missing_variables)
+            "SMTP is not configured: missing " + ", ".join(settings.smtp_missing_variables)
         )
 
+    # Inside the error handling so a malformed header surfaces as the usual
+    # EmailDeliveryError (which background callers catch and log) instead of an
+    # uncaught exception that silently kills the background task.
+    try:
+        message = _build_message(to_email, subject, text, html)
+    except (ValueError, TypeError) as error:
+        _log_failure(to_email, error, 0)
+        raise EmailDeliveryError(f"Could not build the message: {error}") from error
+    subject = message["Subject"]
     started = time.perf_counter()
 
     for attempt in range(1, SEND_ATTEMPTS + 1):
         try:
-            _deliver(to_email, subject, text, html)
+            _deliver(message)
             break
         except _PERMANENT_ERRORS as error:
             _log_failure(to_email, error, attempt)
@@ -93,8 +89,7 @@ def send_email(to_email: str, subject: str, text: str, html: str | None = None) 
             time.sleep(RETRY_DELAY_SECONDS)
 
     logger.info(
-        "email_sent provider=%s recipient_domain=%s subject=%s elapsed_ms=%d",
-        settings.email_provider,
+        "email_sent recipient_domain=%s subject=%s elapsed_ms=%d",
         to_email.rsplit("@", 1)[-1],
         subject,
         (time.perf_counter() - started) * 1000,
@@ -103,8 +98,7 @@ def send_email(to_email: str, subject: str, text: str, html: str | None = None) 
 
 def _log_failure(to_email: str, error: Exception, attempt: int) -> None:
     logger.error(
-        "email_send_failed provider=%s recipient_domain=%s error_type=%s attempt=%d/%d detail=%s",
-        settings.email_provider,
+        "email_send_failed recipient_domain=%s error_type=%s attempt=%d/%d detail=%s",
         to_email.rsplit("@", 1)[-1],
         type(error).__name__,
         attempt,
@@ -113,47 +107,7 @@ def _log_failure(to_email: str, error: Exception, attempt: int) -> None:
     )
 
 
-def _deliver(to_email: str, subject: str, text: str, html: str | None) -> None:
-    """Hand one message to the configured provider."""
-    if settings.email_provider == "brevo":
-        _post_json(
-            BREVO_URL,
-            {"api-key": settings.brevo_api_key or ""},
-            {
-                "sender": {"name": settings.smtp_from_name, "email": settings.smtp_from_email},
-                "to": [{"email": to_email}],
-                "subject": subject,
-                "textContent": text,
-                **({"htmlContent": html} if html else {}),
-            },
-        )
-    elif settings.email_provider == "resend":
-        _post_json(
-            RESEND_URL,
-            {"Authorization": f"Bearer {settings.resend_api_key or ''}"},
-            {
-                "from": formataddr((settings.smtp_from_name, settings.smtp_from_email)),
-                "to": [to_email],
-                "subject": subject,
-                "text": text,
-                **({"html": html} if html else {}),
-            },
-        )
-    else:
-        _deliver_smtp(_build_message(to_email, subject, text, html))
-
-
-def _post_json(url: str, headers: dict, payload: dict) -> None:
-    response = httpx.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SECONDS)
-    if response.is_success:
-        return
-    detail = f"HTTP {response.status_code}: {response.text[:200]}"
-    if response.status_code == 429 or response.status_code >= 500:
-        raise _ProviderUnavailable(detail)
-    raise _ProviderRejected(detail)
-
-
-def _deliver_smtp(message: EmailMessage) -> None:
+def _deliver(message: EmailMessage) -> None:
     """One SMTP session: connect, secure, authenticate, send."""
     context = ssl.create_default_context()
     if settings.smtp_use_ssl:
@@ -273,6 +227,36 @@ def send_password_reset_email(to_email: str, name: str, token: str) -> None:
             url,
             f"The link is valid for {minutes} minutes. If you did not request a reset, ignore this email.",
         ),
+    )
+    send_email(to_email, subject, text, html)
+
+
+def send_registration_attempt_email(to_email: str, name: str) -> None:
+    """Tell a verified account holder that someone tried to register their address.
+
+    /auth/register answers exactly as for a new account, so the attempt cannot
+    be used to discover who has an account; the real owner learns of it here.
+    """
+    login_url = settings.login_url
+    reset_url = settings.frontend_route("/forgot-password")
+    subject = "Someone tried to register with your email"
+    text = (
+        f"Hello {name},\n\n"
+        "Someone just tried to create a new Campus Capture account with this email "
+        "address, but you already have one.\n\n"
+        f"If it was you, sign in here: {login_url}\n"
+        f"Forgot your password? Reset it here: {reset_url}\n\n"
+        "If it wasn't you, you can ignore this email. Your account has not changed.\n"
+    )
+    html = _layout(
+        "You already have an account",
+        f"<p>Hello {escape(name)},</p>"
+        "<p>Someone just tried to create a new Campus Capture account with this email "
+        "address, but you already have one.</p>"
+        + _button(login_url, "Sign in")
+        + "<p style=\"font-size:13px;color:#64748b;\">Forgot your password? "
+        f"<a href=\"{escape(reset_url, quote=True)}\">Reset it here</a>. "
+        "If it wasn't you, you can ignore this email. Your account has not changed.</p>",
     )
     send_email(to_email, subject, text, html)
 

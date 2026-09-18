@@ -4,13 +4,15 @@
  * This module replaces the former Supabase Auth client. Pages use:
  *   getSession()         -> { access_token, user } | null   (synchronous)
  *   fetchCurrentUser()   -> latest profile from the API, or null
- *   signIn / signOut / refreshSession
+ *   signIn / signOut / refreshSession / changePassword
  *   onAuthStateChange(cb) -> unsubscribe function
  */
 
-import { apiFetch, apiJson, refreshAccessToken } from "./api";
+import { apiFetch, apiJson, refreshAccessToken, sessionFromTokenResponse } from "./api";
 import {
   clearSession,
+  clearUserCaches,
+  getAccessToken,
   readSession,
   subscribe,
   updateSessionUser,
@@ -34,28 +36,49 @@ export async function signIn(email, password) {
     body: { email, password },
   });
 
-  const session = writeSession(
-    {
-      access_token: data.access_token,
-      expires_at: Date.now() + (data.expires_in || 0) * 1000,
-      user: data.user,
-    },
-    "SIGNED_IN"
-  );
+  const session = writeSession(sessionFromTokenResponse(data), "SIGNED_IN");
 
   return { user: data.user, session };
 }
 
+/**
+ * Sign out: ask the server to invalidate the token (best effort), then forget
+ * it locally along with cached per-user data. Drafts are kept on purpose.
+ */
 export async function signOut() {
   try {
-    if (readSession()) {
-      await apiFetch("/auth/logout", { method: "POST", retryOn401: false });
+    if (getAccessToken()) {
+      // refresh: false -- no point renewing a token we are about to revoke.
+      await apiFetch("/auth/logout", { method: "POST", refresh: false });
     }
   } catch {
-    /* the server side is stateless; clearing locally is what matters */
+    /* offline or already invalid: clearing locally is what matters here */
   } finally {
+    clearUserCaches();
     clearSession();
   }
+}
+
+/**
+ * Change the signed-in user's password. The server revokes every existing
+ * token (including this one) and hands back a fresh session for this device,
+ * which is stored here; the returned user has must_change_password: false.
+ */
+export async function changePassword(currentPassword, newPassword) {
+  const data = await apiJson("/users/me/change-password", {
+    method: "POST",
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+
+  if (data?.access_token) {
+    writeSession(sessionFromTokenResponse(data, data.user || null), "TOKEN_REFRESHED");
+  } else if (data?.user) {
+    updateSessionUser(data.user);
+  } else {
+    const current = readSession()?.user;
+    if (current) updateSessionUser({ ...current, must_change_password: false });
+  }
+  return data;
 }
 
 export async function refreshSession() {
@@ -95,8 +118,12 @@ export async function register({ name, email, password }) {
   });
 }
 
-export async function verifyEmail(token) {
-  return apiJson("/auth/verify-email", { method: "POST", auth: false, body: { token } });
+export async function verifyEmail(token, password) {
+  return apiJson("/auth/verify-email", {
+    method: "POST",
+    auth: false,
+    body: { token, password },
+  });
 }
 
 export async function resendVerification(email) {

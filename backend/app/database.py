@@ -16,7 +16,7 @@ import logging
 import certifi
 from gridfs import GridFS
 from pymongo import ASCENDING, DESCENDING, MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import ConfigurationError, PyMongoError
 
 from app.config import settings
 
@@ -32,8 +32,15 @@ def _uses_tls(uri: str) -> bool:
 # TLS connections (MongoDB Atlas is always mongodb+srv://) verify against
 # certifi's CA bundle, because slim container images such as Railway's often
 # ship without a current system bundle and the handshake then fails.
+#
+# connect=False defers everything network-related -- including the SRV DNS
+# lookup of a mongodb+srv:// URI -- to the first operation. Without it an
+# unreachable DNS server or Atlas cluster made importing this module (and so
+# the whole app and every test module) raise ConfigurationError, instead of
+# starting degraded and reporting it on /health.
 client: MongoClient = MongoClient(
     settings.mongodb_uri,
+    connect=False,
     serverSelectionTimeoutMS=5000,
     tz_aware=True,
     **({"tlsCAFile": certifi.where()} if _uses_tls(settings.mongodb_uri) else {}),
@@ -98,6 +105,6 @@ def ping() -> bool:
     try:
         client.admin.command("ping")
         return True
-    except PyMongoError as error:
+    except (PyMongoError, ConfigurationError) as error:
         logger.error("mongodb_ping_failed error=%s", error)
         return False

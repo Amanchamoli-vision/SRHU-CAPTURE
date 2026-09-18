@@ -5,32 +5,51 @@ import {
   writeSession,
 } from "./session";
 
-const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
 
-if (!configuredApiBaseUrl) {
-  throw new Error(
-    "VITE_API_BASE_URL must be set to the public FastAPI API URL."
-  );
-}
+/**
+ * Set when the build has no usable API URL. main.jsx shows this on a readable
+ * error screen instead of letting the import throw (a blank white page).
+ */
+export const API_CONFIG_ERROR = configuredApiBaseUrl
+  ? null
+  : "This build of Campus Capture has no server address configured. " +
+    "Set VITE_API_BASE_URL to the public FastAPI API URL and rebuild the site.";
+
+const isLoopbackHost = (hostname) => hostname === "localhost" || hostname === "127.0.0.1";
+
 const resolveApiBaseUrl = () => {
   const url = configuredApiBaseUrl.replace(/\/+$/, "");
-  if (typeof window !== "undefined" && window.location?.hostname) {
-    const currentHost = window.location.hostname;
-    // When accessed from another device on the same local network (e.g. 192.168.x.x, 172.16.x.x, 10.x.x.x),
-    // map localhost/127.0.0.1 to the current host so other devices can reach the backend.
-    // The backend must then listen on 0.0.0.0 (python run.py does), not only on 127.0.0.1.
-    if (currentHost !== "localhost" && currentHost !== "127.0.0.1") {
-      try {
-        const parsed = new URL(url);
-        if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
-          parsed.hostname = currentHost;
-          return parsed.origin;
-        }
-      } catch {
-        // Fallback to configured URL if parsing fails
-      }
-    }
+  if (!url) return "";
+
+  let parsed = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
   }
+
+  const currentHost =
+    typeof window !== "undefined" && window.location?.hostname ? window.location.hostname : "";
+
+  if (!isLoopbackHost(parsed.hostname) || !currentHost || isLoopbackHost(currentHost)) {
+    return url;
+  }
+
+  if (import.meta.env.DEV) {
+    // Dev server opened from another device on the LAN (192.168.x.x etc.):
+    // map localhost/127.0.0.1 to this page's host so that device can reach the
+    // backend. The backend must then listen on 0.0.0.0 (python run.py does).
+    parsed.hostname = currentHost;
+    return parsed.origin;
+  }
+
+  // A production build baked in a loopback URL. Rewriting it would hide the
+  // misconfiguration; say so loudly and use it as configured.
+  console.error(
+    `VITE_API_BASE_URL points to ${url}, which only works on the developer's machine. ` +
+      "Set it to the public API URL in the hosting environment and rebuild."
+  );
   return url;
 };
 
@@ -51,8 +70,10 @@ export class ApiError extends Error {
 }
 
 export const UNREACHABLE_MESSAGE =
-  `Cannot reach the Campus Capture server at ${API_BASE_URL}. ` +
+  `Cannot reach the Campus Capture server at ${API_BASE_URL || "(not configured)"}. ` +
   "Make sure the backend is running and reachable from this device.";
+
+const SESSION_EXPIRED_MESSAGE = "Your session has expired. Please login again.";
 
 const toUrl = (path) =>
   /^https?:\/\//i.test(path) ? path : `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
@@ -60,11 +81,13 @@ const toUrl = (path) =>
 /**
  * fetch() that turns a network failure ("Failed to fetch", connection refused,
  * DNS, CORS block) into an ApiError with a message a user can act on.
+ * An aborted request is re-thrown as-is (err.name === "AbortError").
  */
 async function networkFetch(url, init) {
   try {
     return await fetch(url, init);
   } catch (err) {
+    if (err?.name === "AbortError") throw err;
     throw new ApiError(UNREACHABLE_MESSAGE, 0, err?.message || String(err));
   }
 }
@@ -72,10 +95,14 @@ async function networkFetch(url, init) {
 /** Pull a readable message out of a parsed FastAPI error body. */
 function detailFromBody(body, fallback) {
   if (typeof body?.detail === "string") return body.detail;
-  if (Array.isArray(body?.detail) && body.detail[0]?.msg) {
-    // FastAPI validation errors
-    return body.detail.map((item) => item.msg.replace(/^Value error, /, "")).join(" ");
+  if (Array.isArray(body?.detail) && body.detail.length > 0) {
+    // FastAPI validation errors (422): a list of {loc, msg, type}
+    const messages = body.detail
+      .map((item) => (typeof item?.msg === "string" ? item.msg.replace(/^Value error, /, "") : ""))
+      .filter(Boolean);
+    if (messages.length > 0) return messages.join(" ");
   }
+  if (typeof body?.message === "string") return body.message;
   return fallback;
 }
 
@@ -88,73 +115,193 @@ async function readErrorDetail(response, fallback) {
   return fallback;
 }
 
-/**
- * Ask the backend for a fresh token using the current one.
- * Returns the new session or null when the current session is no longer valid.
- */
-export async function refreshAccessToken() {
-  const token = getAccessToken();
-  if (!token) return null;
+/* ------------------------------------------------------------------ */
+/* Proactive token refresh                                             */
+/* ------------------------------------------------------------------ */
 
-  try {
-    const response = await fetch(toUrl("/auth/refresh"), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) return null;
+const REFRESH_WITHIN_MS = 24 * 60 * 60 * 1000; // refresh in the last 24h
+const REFRESH_RETRY_BACKOFF_MS = 60 * 1000; // after a failed (non-401) attempt
+const KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000;
 
-    const data = await response.json();
-    return writeSession(
-      {
-        access_token: data.access_token,
-        expires_at: Date.now() + (data.expires_in || 0) * 1000,
-        user: data.user || readSession()?.user || null,
-      },
-      "TOKEN_REFRESHED"
-    );
-  } catch {
-    return null;
+let refreshPromise = null;
+let lastRefreshFailureAt = 0;
+// A token the server declined to renew (e.g. the 30-day absolute session
+// limit). It stays usable until it expires or a request gets a 401.
+let refreshDeclinedFor = null;
+
+/** A session is due for refresh within 24h of expiry, or past half its lifetime. */
+function isRefreshDue(session) {
+  if (!session?.access_token || !session.expires_at) return false;
+  const now = Date.now();
+  const remaining = session.expires_at - now;
+  if (remaining <= REFRESH_WITHIN_MS) return true;
+  if (session.issued_at && session.expires_at > session.issued_at) {
+    const lifetime = session.expires_at - session.issued_at;
+    return now - session.issued_at >= lifetime / 2;
   }
+  return false;
+}
+
+/** Build the stored session from a login/refresh response. */
+export function sessionFromTokenResponse(data, fallbackUser = null) {
+  const now = Date.now();
+  return {
+    access_token: data.access_token,
+    issued_at: now,
+    expires_at: now + (data.expires_in || 0) * 1000,
+    user: data.user || fallbackUser,
+  };
+}
+
+/**
+ * Ask the backend for a fresh token using the current, still-valid one.
+ * Single-flight: concurrent callers share one request.
+ * Resolves to the new session, or null when it could not be refreshed.
+ * A 401 here does not sign the user out by itself: the server may refuse to
+ * renew a token that is still valid (absolute session limit). The next real
+ * request decides -- if the token is revoked it gets a 401 and is cleared.
+ */
+export function refreshAccessToken() {
+  if (refreshPromise) return refreshPromise;
+
+  const token = getAccessToken();
+  if (!token) return Promise.resolve(null);
+
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(toUrl("/auth/refresh"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.status === 401 || response.status === 403) {
+        refreshDeclinedFor = token;
+        return null;
+      }
+      if (!response.ok) {
+        lastRefreshFailureAt = Date.now();
+        return null;
+      }
+
+      const data = await response.json();
+      if (!data?.access_token) {
+        lastRefreshFailureAt = Date.now();
+        return null;
+      }
+      lastRefreshFailureAt = 0;
+      // Signed out (or signed in as someone else) while this was in flight:
+      // do not bring the old session back.
+      if (getAccessToken() !== token) return readSession();
+      return writeSession(
+        sessionFromTokenResponse(data, readSession()?.user || null),
+        "TOKEN_REFRESHED"
+      );
+    } catch {
+      lastRefreshFailureAt = Date.now();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+/**
+ * Refresh the token if it is close to expiry. Cheap when nothing is due, so it
+ * runs before every authenticated request. Never throws.
+ */
+export async function ensureFreshToken() {
+  const session = readSession();
+  if (!isRefreshDue(session)) return;
+  if (session.access_token === refreshDeclinedFor) return;
+  if (refreshPromise) {
+    await refreshPromise;
+    return;
+  }
+  if (Date.now() - lastRefreshFailureAt < REFRESH_RETRY_BACKOFF_MS) return;
+  await refreshAccessToken();
+}
+
+/**
+ * Keep the session fresh while the app is open: check on an interval and
+ * whenever the tab becomes visible again. Returns a stop function.
+ */
+export function startSessionKeepAlive() {
+  if (typeof window === "undefined") return () => {};
+  const check = () => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    ensureFreshToken();
+  };
+  const interval = setInterval(check, KEEPALIVE_INTERVAL_MS);
+  document.addEventListener("visibilitychange", check);
+  check();
+  return () => {
+    clearInterval(interval);
+    document.removeEventListener("visibilitychange", check);
+  };
+}
+
+/**
+ * A 401 on an authenticated request means the server no longer accepts the
+ * token (expired, signed out elsewhere, password changed). Drop the session;
+ * SIGNED_OUT makes the AuthContext forget the user and ProtectedRoute sends
+ * them to /login.
+ */
+function handleUnauthorized(tokenUsed) {
+  const current = getAccessToken();
+  // If another tab already put a different token in place, keep it.
+  if (!current || current === tokenUsed || !tokenUsed) clearSession();
 }
 
 /**
  * fetch() with the login token attached.
  *
  * - `body` may be a plain object (sent as JSON) or FormData (sent as-is).
- * - On a 401 the token is refreshed once and the request retried; if that
- *   fails the session is cleared so the app falls back to the login page.
+ * - The token is refreshed beforehand when it is close to expiry.
+ * - A 401 on an authenticated request clears the session (back to /login).
  * - Throws ApiError(status 0) when the server cannot be reached.
+ * - Pass `signal` (an AbortSignal) to cancel; an aborted call rejects with
+ *   an AbortError.
  */
 export async function apiFetch(path, options = {}) {
-  const { auth = true, body, headers = {}, retryOn401 = true, ...rest } = options;
+  const { auth = true, body, headers = {}, refresh = true, ...rest } = options;
 
-  const buildInit = (token) => {
-    const finalHeaders = { ...headers };
-    let finalBody = body;
+  if (auth && refresh) await ensureFreshToken();
 
-    if (body !== undefined && body !== null && !(body instanceof FormData)) {
-      if (typeof body !== "string") finalBody = JSON.stringify(body);
-      if (!finalHeaders["Content-Type"]) finalHeaders["Content-Type"] = "application/json";
-    }
-    if (token) finalHeaders.Authorization = `Bearer ${token}`;
+  const finalHeaders = { ...headers };
+  let finalBody = body;
 
-    return { ...rest, headers: finalHeaders, body: finalBody };
-  };
-
-  const token = auth ? getAccessToken() : null;
-  let response = await networkFetch(toUrl(path), buildInit(token));
-
-  if (auth && retryOn401 && response.status === 401 && token) {
-    const refreshed = await refreshAccessToken();
-    if (refreshed?.access_token) {
-      response = await networkFetch(toUrl(path), buildInit(refreshed.access_token));
-    }
-    if (response.status === 401) {
-      clearSession();
-    }
+  if (body !== undefined && body !== null && !(body instanceof FormData)) {
+    if (typeof body !== "string") finalBody = JSON.stringify(body);
+    if (!finalHeaders["Content-Type"]) finalHeaders["Content-Type"] = "application/json";
   }
 
+  const token = auth ? getAccessToken() : null;
+  if (token) finalHeaders.Authorization = `Bearer ${token}`;
+
+  const response = await networkFetch(toUrl(path), {
+    ...rest,
+    headers: finalHeaders,
+    body: finalBody,
+  });
+
+  if (auth && response.status === 401) handleUnauthorized(token);
+
   return response;
+}
+
+/**
+ * apiJson's error for a failed Response: ApiError with the backend's detail.
+ * Exported for pages that use apiFetch directly (e.g. file downloads).
+ */
+export async function errorFromResponse(response, fallback) {
+  const detail = await readErrorDetail(
+    response,
+    response.status === 401
+      ? SESSION_EXPIRED_MESSAGE
+      : fallback || `Request failed (${response.status})`
+  );
+  return new ApiError(detail, response.status, detail);
 }
 
 /**
@@ -164,19 +311,27 @@ export async function apiJson(path, options = {}) {
   const response = await apiFetch(path, options);
 
   if (!response.ok) {
-    const detail = await readErrorDetail(
-      response,
-      response.status === 401
-        ? "Your session has expired. Please login again."
-        : `Request failed (${response.status})`
-    );
-    throw new ApiError(detail, response.status, detail);
+    throw await errorFromResponse(response);
   }
 
   if (response.status === 204) return null;
 
   const text = await response.text();
-  return text ? JSON.parse(text) : null;
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiError(
+      `The server sent an unexpected response (${response.status}).`,
+      response.status,
+      null
+    );
+  }
+}
+
+/** True for the error an aborted apiFetch/apiJson/apiUpload call rejects with. */
+export function isAbortError(err) {
+  return err?.name === "AbortError" || (err instanceof ApiError && err.detail === "aborted");
 }
 
 /**
@@ -184,19 +339,20 @@ export async function apiJson(path, options = {}) {
  *
  * `fetch()` cannot report upload progress, so this one call uses
  * XMLHttpRequest. Everything else matches apiFetch: the login token is
- * attached, a 401 refreshes the token once and retries, and a failure throws
- * ApiError.
+ * attached (refreshed first when due), a 401 clears the session, and a
+ * failure throws ApiError.
  *
  * `onProgress` receives a fraction between 0 and 1, or null while the browser
  * cannot measure the total size.
  *
- * Returns the parsed JSON body. Pass `signal` (an AbortSignal) to cancel.
+ * Returns the parsed JSON body. Pass `signal` (an AbortSignal) to cancel; a
+ * cancelled upload rejects with an ApiError for which isAbortError() is true.
  */
 export function apiUpload(path, { file, fieldName = "file", onProgress, signal } = {}) {
   const sendOnce = (token) =>
     new Promise((resolve, reject) => {
       if (signal?.aborted) {
-        reject(new ApiError("Upload cancelled", 0, null));
+        reject(new ApiError("Upload cancelled", 0, "aborted"));
         return;
       }
 
@@ -206,6 +362,7 @@ export function apiUpload(path, { file, fieldName = "file", onProgress, signal }
 
       if (onProgress) {
         xhr.upload.onprogress = (event) => {
+          if (signal?.aborted) return;
           onProgress(event.lengthComputable ? event.loaded / event.total : null);
         };
       }
@@ -233,7 +390,7 @@ export function apiUpload(path, { file, fieldName = "file", onProgress, signal }
 
       xhr.onabort = () => {
         cleanup();
-        reject(new ApiError("Upload cancelled", 0, null));
+        reject(new ApiError("Upload cancelled", 0, "aborted"));
       };
 
       const form = new FormData();
@@ -242,25 +399,16 @@ export function apiUpload(path, { file, fieldName = "file", onProgress, signal }
     });
 
   return (async () => {
+    await ensureFreshToken();
     const token = getAccessToken();
-    let { status, body } = await sendOnce(token);
+    const { status, body } = await sendOnce(token);
 
-    if (status === 401 && token) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed?.access_token) {
-        ({ status, body } = await sendOnce(refreshed.access_token));
-      }
-      if (status === 401) {
-        clearSession();
-      }
-    }
+    if (status === 401) handleUnauthorized(token);
 
     if (status < 200 || status >= 300) {
       const detail = detailFromBody(
         body,
-        status === 401
-          ? "Your session has expired. Please login again."
-          : `Upload failed (${status})`
+        status === 401 ? SESSION_EXPIRED_MESSAGE : `Upload failed (${status})`
       );
       throw new ApiError(detail, status, detail);
     }

@@ -59,6 +59,14 @@ const POLL_INTERVAL_MS = 30_000;
 const TOAST_MS = 6_000;
 
 /**
+ * Every page mounts its own bell, so without this the reminder check would
+ * re-run on each navigation. Once per user per interval is plenty; a check
+ * that was cut short (unmount) does not count.
+ */
+const REMINDER_RECHECK_MS = 10 * 60 * 1000;
+const lastReminderCheck = new Map(); // userId -> timestamp
+
+/**
  * The notification bell, for every role that has one.
  *
  * Polls the signed-in user's own feed. Anything that arrives after the first
@@ -123,16 +131,44 @@ export default function NotificationBell({ currentUser, onNew }) {
     }
   }, [userId]);
 
+  // Poll only while the tab is visible; a hidden tab (possibly one of many)
+  // stops, and catches up immediately when it is shown again.
   useEffect(() => {
     knownIds.current = null;
+    let interval = null;
+
+    const start = () => {
+      if (interval === null) interval = setInterval(loadNotifications, POLL_INTERVAL_MS);
+    };
+    const stop = () => {
+      if (interval !== null) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else {
+        loadNotifications();
+        start();
+      }
+    };
+
     loadNotifications();
-    const interval = setInterval(loadNotifications, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [loadNotifications]);
 
   /* ---- Teachers: event-day reminders, once per visit ---- */
   useEffect(() => {
     if (!userId || role !== "teacher") return undefined;
+    const last = lastReminderCheck.get(userId) || 0;
+    if (Date.now() - last < REMINDER_RECHECK_MS) return undefined;
     let cancelled = false;
 
     (async () => {
@@ -142,7 +178,10 @@ export default function NotificationBell({ currentUser, onNew }) {
           fetchNotifications(userId),
         ]);
         if (cancelled) return;
-        const created = await evaluateEventReminders(userId, events, existing);
+        const created = await evaluateEventReminders(userId, events, existing, {
+          isCancelled: () => cancelled,
+        });
+        if (!cancelled) lastReminderCheck.set(userId, Date.now());
         if (created && !cancelled) {
           // Reminders are generated on this device; they are not "news" to toast.
           const list = await fetchNotifications(userId);
@@ -336,7 +375,7 @@ export default function NotificationBell({ currentUser, onNew }) {
         <div
           role="dialog"
           aria-label="Notifications"
-          className="glass glass-blur fixed inset-x-3 top-full z-50 mt-2 flex max-h-[min(32rem,80vh)] flex-col overflow-hidden sm:absolute sm:inset-x-auto sm:right-0 sm:w-[min(23rem,calc(100vw-1.5rem))]"
+          className="hv-popover glass glass-blur fixed inset-x-3 top-full z-50 mt-2 flex max-h-[min(32rem,80vh)] flex-col overflow-hidden sm:absolute sm:inset-x-auto sm:right-0 sm:w-[min(23rem,calc(100vw-1.5rem))]"
         >
           <div className="flex items-center justify-between gap-3 border-b hairline px-4 py-3">
             <div className="flex items-center gap-2">

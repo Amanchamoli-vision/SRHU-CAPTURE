@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
+import StatCard from "../../components/common/StatCard";
 import PageHero from "../../components/teacher/PageHero";
 import { ROLE_TRACK } from "../../components/common/roles";
 import { trackOf } from "../../components/teacher/status";
@@ -16,7 +17,6 @@ import {
   IconUser,
   IconUserPlus,
   IconUsers,
-  RidgeDivider,
 } from "../../components/teacher/icons";
 
 const EMPTY_STATS = {
@@ -203,45 +203,26 @@ function SuperAdminDashboard() {
         )}
 
         {/* ------------------------------------------------ summary cards */}
-        <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {summaryCards.map((card, i) => {
-            const Tag = card.to ? Link : "div";
-            return (
-              <Tag
-                key={card.key}
-                to={card.to}
-                style={{ "--track": card.track, "--i": i + 1 }}
-                className="stat-card reveal group"
-              >
-                <span className="stat-watermark" aria-hidden="true">{i + 1}</span>
-
-                <div className="relative flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-muted">{card.label}</p>
-                    <p className="stat-num mt-1.5" style={{ color: card.track }}>
-                      {card.value}
-                    </p>
-                  </div>
-                  <span className="icon-tile icon-tile-track">
-                    <card.Icon />
-                  </span>
-                </div>
-
-                <p className="mt-4 flex items-center gap-1.5 text-xs font-medium text-muted">
-                  {card.hint}
-                  {card.to && (
-                    <IconArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                  )}
-                </p>
-              </Tag>
-            );
-          })}
+        {/* The shared KPI card, identical on the Teacher and Dean
+            dashboards. */}
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          {summaryCards.map((card, i) => (
+            <StatCard
+              key={card.key}
+              index={i}
+              to={card.to}
+              label={card.label}
+              value={card.value}
+              Icon={card.Icon}
+              track={card.track}
+              hint={card.hint}
+            />
+          ))}
         </div>
 
-        <RidgeDivider className="divider my-4" />
 
         {/* -------------------------------- role share + management cards */}
-        <div className="grid gap-4 lg:grid-cols-5">
+        <div className="mt-6 grid gap-4 lg:grid-cols-5">
 
           <section className="glass reveal p-6 lg:col-span-2" style={{ "--i": 5 }}>
             <div className="flex items-center gap-3">

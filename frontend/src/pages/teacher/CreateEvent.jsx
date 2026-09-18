@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { apiJson, apiUpload } from "../../services/api";
+import { apiJson, apiUpload, isAbortError } from "../../services/api";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { canTeacherEditEvent } from "../../utils/constants";
 import {
@@ -13,6 +13,7 @@ import {
 import TeacherShell from "../../components/teacher/TeacherShell";
 import Modal from "../../components/teacher/Modal";
 import UploadPanel from "../../components/teacher/UploadPanel";
+import useMediaRefresh from "../../components/common/useMediaRefresh";
 import StatusChip from "../../components/teacher/StatusChip";
 import { trackOf } from "../../components/teacher/status";
 import {
@@ -80,6 +81,48 @@ const REQUIRED_DETAILS = [
 
 let uploadKeySeed = 0;
 
+const EMPTY_FORM = {
+  eventName: "",
+  eventDate: "",
+  eventType: "",
+  startTime: "",
+  endTime: "",
+  location: "",
+  department: "",
+  organizer: "",
+  expectedParticipants: "",
+  contactInfo: "",
+  description: "",
+  socialNetworkUrl: "",
+};
+
+// How long typing must pause before step-1 edits are saved to the server draft.
+const AUTOSAVE_DELAY_MS = 1500;
+
+/** Field -> message for everything wrong with the step-1 details. */
+function detailsErrorsOf(data) {
+  const errors = {};
+
+  for (const [field, message] of REQUIRED_DETAILS) {
+    if (!String(data[field] ?? "").trim()) errors[field] = message;
+  }
+
+  if (data.socialNetworkUrl.trim()) {
+    try {
+      const url = new URL(data.socialNetworkUrl.trim());
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        errors.socialNetworkUrl = "The link must start with http:// or https://";
+      }
+    } catch {
+      errors.socialNetworkUrl = "Please enter a valid social network URL.";
+    }
+  }
+
+  return errors;
+}
+
+const snapshotOf = (data) => JSON.stringify(data);
+
 function CreateEvent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -90,20 +133,12 @@ function CreateEvent() {
   const [step, setStep] = useState(1);
   const [maxStepReached, setMaxStepReached] = useState(1);
 
-  const [formData, setFormData] = useState({
-    eventName: "",
-    eventDate: "",
-    eventType: "",
-    startTime: "",
-    endTime: "",
-    location: "",
-    department: "",
-    organizer: "",
-    expectedParticipants: "",
-    contactInfo: "",
-    description: "",
-    socialNetworkUrl: "",
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
+
+  // The form as last stored somewhere (server draft, browser draft, or the
+  // blank form it started as). Anything different is an unsaved change.
+  const [savedSnapshot, setSavedSnapshot] = useState(() => snapshotOf(EMPTY_FORM));
+  const [autoSave, setAutoSave] = useState("idle"); // idle | saving | error
 
   const [fieldErrors, setFieldErrors] = useState({});
 
@@ -150,6 +185,16 @@ function CreateEvent() {
   const userRef = useRef(null);
   const editingDraftRef = useRef(draftIdParam || null);
 
+  // Aborted when the page unmounts, so uploads and saves stop instead of
+  // running on (and setting state) after the teacher has left.
+  const abortRef = useRef(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    return () => controller.abort();
+  }, []);
+  const isGone = () => Boolean(abortRef.current?.signal.aborted);
+
   useEffect(() => {
     formDataRef.current = formData;
   }, [formData]);
@@ -163,6 +208,10 @@ function CreateEvent() {
 
   const uploading = uploads.some((u) => !u.error);
   const isDraftEvent = !serverEvent || serverEvent.status === "draft";
+
+  const formSnapshot = snapshotOf(formData);
+  const formDirty = formSnapshot !== savedSnapshot;
+  const detailsComplete = Object.keys(detailsErrorsOf(formData)).length === 0;
   // Only a rejected event that is being resubmitted; a draft is not one.
   const resubmitting = Boolean(serverEvent) && serverEvent.status !== "draft";
 
@@ -191,7 +240,7 @@ function CreateEvent() {
           if (draft && !cancelled) {
             setEditingDraftId(draft.id);
             editingDraftRef.current = draft.id;
-            setFormData({
+            const loaded = {
               eventName: draft.event_name || "",
               eventDate: draft.event_date || "",
               eventType: draft.event_type || "",
@@ -204,7 +253,9 @@ function CreateEvent() {
               contactInfo: draft.contact_info || "",
               description: draft.description || "",
               socialNetworkUrl: draft.social_network_url || "",
-            });
+            };
+            setFormData(loaded);
+            setSavedSnapshot(snapshotOf(loaded));
           }
         }
 
@@ -231,7 +282,7 @@ function CreateEvent() {
               eventIdRef.current = event.id;
               setMediaItems(result.media || []);
               setDocumentItems(result.documents || []);
-              setFormData({
+              const loaded = {
                 eventName: event.event_name || "",
                 eventDate: event.event_date || "",
                 eventType: event.event_type || "",
@@ -244,7 +295,9 @@ function CreateEvent() {
                 contactInfo: meta.contactInfo || "",
                 description: description || "",
                 socialNetworkUrl: event.social_network_url || "",
-              });
+              };
+              setFormData(loaded);
+              setSavedSnapshot(snapshotOf(loaded));
 
               // Everything is already filled in, so every step is reachable.
               setMaxStepReached(STEPS.length);
@@ -286,23 +339,7 @@ function CreateEvent() {
   // Step 1 validation
   // --------------------------------------------------
   const validateDetails = () => {
-    const errors = {};
-
-    for (const [field, message] of REQUIRED_DETAILS) {
-      if (!String(formData[field] ?? "").trim()) errors[field] = message;
-    }
-
-    if (formData.socialNetworkUrl.trim()) {
-      try {
-        const url = new URL(formData.socialNetworkUrl.trim());
-        if (url.protocol !== "http:" && url.protocol !== "https:") {
-          errors.socialNetworkUrl = "The link must start with http:// or https://";
-        }
-      } catch {
-        errors.socialNetworkUrl = "Please enter a valid social network URL.";
-      }
-    }
-
+    const errors = detailsErrorsOf(formData);
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -337,12 +374,15 @@ function CreateEvent() {
     if (creatingEventRef.current) return creatingEventRef.current;
 
     creatingEventRef.current = (async () => {
+      const sent = formDataRef.current;
       const { event } = await apiJson("/teacher/events", {
         method: "POST",
         body: buildEventBody(true),
+        signal: abortRef.current?.signal,
       });
 
       eventIdRef.current = event.id;
+      setSavedSnapshot(snapshotOf(sent));
       setServerEventId(event.id);
       setServerEvent(event);
 
@@ -367,6 +407,56 @@ function CreateEvent() {
   }, []);
 
   // --------------------------------------------------
+  // Auto-save step-1 edits once a server draft exists
+  //
+  // The draft is created on the first upload. Without this, edits made after
+  // that were kept only until the tab closed. Saved after a short pause in
+  // typing, and only when the details are complete (the API rejects partial
+  // ones). A rejected event being corrected is not a draft and cannot be
+  // saved as one, so it relies on the beforeunload warning below instead.
+  // --------------------------------------------------
+  useEffect(() => {
+    if (!serverEventId || !isDraftEvent || !formDirty || !detailsComplete) return undefined;
+    if (loading || savingDraft || submitted) return undefined;
+
+    const snapshot = formSnapshot;
+    const timer = setTimeout(async () => {
+      if (isGone()) return;
+      setAutoSave("saving");
+      try {
+        await apiJson(`/teacher/events/${serverEventId}`, {
+          method: "PATCH",
+          body: buildEventBody(true),
+          signal: abortRef.current?.signal,
+        });
+        if (isGone()) return;
+        setSavedSnapshot(snapshot);
+        setAutoSave("idle");
+      } catch (err) {
+        if (isGone() || isAbortError(err)) return;
+        console.error("Auto-save error:", err);
+        setAutoSave("error");
+      }
+    }, AUTOSAVE_DELAY_MS);
+
+    return () => clearTimeout(timer);
+    // buildEventBody reads through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formSnapshot, formDirty, serverEventId, isDraftEvent, detailsComplete, loading, savingDraft, submitted]);
+
+  // Warn before closing the tab while edits or uploads would be lost.
+  const hasUnsavedWork = !submitted && (formDirty || uploading);
+  useEffect(() => {
+    if (!hasUnsavedWork) return undefined;
+    const onBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasUnsavedWork]);
+
+  // --------------------------------------------------
   // Uploading
   // --------------------------------------------------
   const setUploadState = (key, changes) => {
@@ -376,10 +466,13 @@ function CreateEvent() {
   };
 
   const runUpload = useCallback(async (entry) => {
+    const signal = abortRef.current?.signal;
+    if (signal?.aborted) return;
     try {
       setUploadState(entry.key, { error: null, progress: 0 });
 
       const eventId = await ensureEventId();
+      if (signal?.aborted) return;
       const path =
         entry.kind === "document"
           ? `/teacher/events/${eventId}/documents`
@@ -387,8 +480,10 @@ function CreateEvent() {
 
       const result = await apiUpload(path, {
         file: entry.file,
+        signal,
         onProgress: (fraction) => setUploadState(entry.key, { progress: fraction }),
       });
+      if (signal?.aborted) return;
 
       if (entry.kind === "document") {
         if (result?.document) setDocumentItems((prev) => [...prev, result.document]);
@@ -398,6 +493,8 @@ function CreateEvent() {
 
       setUploads((prev) => prev.filter((item) => item.key !== entry.key));
     } catch (err) {
+      // Left the page: the upload was cancelled on purpose.
+      if (signal?.aborted || isAbortError(err)) return;
       console.error("Upload error:", err);
       setUploadState(entry.key, {
         error: err?.message || "Upload failed.",
@@ -482,6 +579,7 @@ function CreateEvent() {
     // easier to follow than four crawling together.
     (async () => {
       for (const entry of entries) {
+        if (isGone()) break;
         await runUpload(entry);
       }
     })();
@@ -527,6 +625,18 @@ function CreateEvent() {
     }
   };
 
+  // Saved files' links are signed and expire; refetch them when one fails.
+  const refreshMediaLinks = useMediaRefresh(async () => {
+    const eventId = eventIdRef.current;
+    if (!eventId || isGone()) return;
+    const result = await apiJson(`/teacher/events/${eventId}`, {
+      signal: abortRef.current?.signal,
+    });
+    if (isGone()) return;
+    setMediaItems(result?.media || []);
+    setDocumentItems(result?.documents || []);
+  });
+
   const dismissUpload = (entry) =>
     setUploads((prev) => prev.filter((item) => item.key !== entry.key));
 
@@ -567,12 +677,15 @@ function CreateEvent() {
     try {
       let where;
 
+      const sent = formDataRef.current;
+
       if (eventIdRef.current) {
         // Already on the server, with its files attached.
         await apiJson(`/teacher/events/${eventIdRef.current}`, {
           method: "PATCH",
           body: buildEventBody(true),
         });
+        setSavedSnapshot(snapshotOf(sent));
         where = "server";
       } else if (validateDetails()) {
         // Complete enough for the API to accept: promote it to a server draft
@@ -586,6 +699,16 @@ function CreateEvent() {
           id: editingDraftId || undefined,
           ...formData,
         });
+        if (!saved) {
+          // Storage full, private mode or blocked: say so rather than
+          // claiming a save that did not happen.
+          setError(
+            "The draft could not be saved in this browser (storage is full or blocked). " +
+              "Fill in the required details so it can be saved to your account instead."
+          );
+          return;
+        }
+        setSavedSnapshot(snapshotOf(sent));
         setEditingDraftId(saved.id);
         editingDraftRef.current = saved.id;
         setFieldErrors({});
@@ -674,6 +797,7 @@ function CreateEvent() {
         deleteTeacherDraft(user.id, editingDraftRef.current);
       }
 
+      setSavedSnapshot(snapshotOf(formDataRef.current));
       setConfirmOpen(false);
       setSubmitted(result?.event || { status: "pending" });
     } catch (err) {
@@ -1125,6 +1249,7 @@ function CreateEvent() {
                 onRemove={handleRemoveMedia}
                 onRetry={runUpload}
                 onDismiss={dismissUpload}
+                onLoadError={refreshMediaLinks}
               />
             </div>
           )}
@@ -1146,6 +1271,7 @@ function CreateEvent() {
                 onRemove={handleRemoveMedia}
                 onRetry={runUpload}
                 onDismiss={dismissUpload}
+                onLoadError={refreshMediaLinks}
               />
             </div>
           )}
@@ -1166,6 +1292,7 @@ function CreateEvent() {
                 onRemove={handleRemoveDocument}
                 onRetry={runUpload}
                 onDismiss={dismissUpload}
+                onLoadError={refreshMediaLinks}
               />
 
               <div className="mt-4 flex items-start gap-3 rounded-xl border border-accent/15 bg-accent/6 p-3.5">
@@ -1180,13 +1307,37 @@ function CreateEvent() {
           )}
 
           {/* ---------------------------------------------- saved-files note */}
-          {step > 1 && serverEventId && isDraftEvent && (
-            <div className="border-t hairline px-4 py-2.5 sm:px-6">
-              <p className="prose-muted flex items-center gap-2 text-xs">
-                <IconCheckCircle className="h-4 w-4 shrink-0 text-ok" />
-                Saved as a draft. Your files are stored, so you can close this page and
-                come back to it.
-              </p>
+          {serverEventId && isDraftEvent && (
+            <div className="border-t hairline px-4 py-2.5 sm:px-6" role="status">
+              {uploading ? (
+                <p className="prose-muted flex items-center gap-2 text-xs">
+                  <span className="spin h-4 w-4 shrink-0 text-accent" />
+                  Uploading. Keep this page open until the uploads finish.
+                </p>
+              ) : !formDirty ? (
+                <p className="prose-muted flex items-center gap-2 text-xs">
+                  <IconCheckCircle className="h-4 w-4 shrink-0 text-ok" />
+                  Saved as a draft with your files. You can close this page and come
+                  back to it.
+                </p>
+              ) : autoSave === "error" ? (
+                <p className="flex items-center gap-2 text-xs text-err">
+                  <IconAlertTriangle className="h-4 w-4 shrink-0" />
+                  Your latest changes could not be saved automatically. Use Save Draft
+                  before leaving this page.
+                </p>
+              ) : !detailsComplete ? (
+                <p className="prose-muted flex items-center gap-2 text-xs">
+                  <IconInfo className="h-4 w-4 shrink-0 text-accent" />
+                  Your files are saved, but your latest edits are not. Complete the
+                  required details so they can be saved.
+                </p>
+              ) : (
+                <p className="prose-muted flex items-center gap-2 text-xs">
+                  <span className="spin h-4 w-4 shrink-0 text-accent" />
+                  Saving your changes…
+                </p>
+              )}
             </div>
           )}
 

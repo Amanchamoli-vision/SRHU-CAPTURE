@@ -1,4 +1,5 @@
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -24,15 +25,63 @@ logger = logging.getLogger(__name__)
 # LIFESPAN
 # ============================================================
 
+INDEX_RETRY_INITIAL_SECONDS = 5
+INDEX_RETRY_MAX_SECONDS = 300
+
+
+def _retry_indexes_forever(stop: threading.Event) -> None:
+    """Keep trying ensure_indexes() with exponential backoff until it succeeds.
+
+    The unique email index is what stops two concurrent registrations creating
+    the same account, so a first boot against an unreachable or empty database
+    must not leave the app running without it for the life of the process.
+    """
+    delay = INDEX_RETRY_INITIAL_SECONDS
+    attempt = 1
+    while not stop.wait(delay):
+        attempt += 1
+        try:
+            ensure_indexes()
+            logger.info(
+                "mongodb_indexes_ready db=%s attempt=%d", settings.mongodb_db_name, attempt
+            )
+            return
+        except Exception as error:  # pragma: no cover - depends on the environment
+            logger.error("mongodb_index_setup_failed attempt=%d error=%s", attempt, error)
+            delay = min(delay * 2, INDEX_RETRY_MAX_SECONDS)
+
+
+def _warn_about_insecure_settings() -> None:
+    if settings.frontend_url_is_insecure:
+        logger.warning(
+            "frontend_url_insecure url=%s -- verification and password reset links "
+            "carry one-time tokens and will be sent as plain http. Set FRONTEND_URL "
+            "to the https address of the deployed frontend.",
+            settings.frontend_url,
+        )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Create MongoDB indexes on startup without blocking a misconfigured boot."""
+    _warn_about_insecure_settings()
+
+    stop_retrying = threading.Event()
     try:
         ensure_indexes()
         logger.info("mongodb_indexes_ready db=%s", settings.mongodb_db_name)
     except Exception as error:  # pragma: no cover - depends on the environment
-        logger.error("mongodb_index_setup_failed error=%s", error)
-    yield
+        logger.error("mongodb_index_setup_failed error=%s -- retrying in background", error)
+        threading.Thread(
+            target=_retry_indexes_forever,
+            args=(stop_retrying,),
+            name="mongodb-index-retry",
+            daemon=True,
+        ).start()
+    try:
+        yield
+    finally:
+        stop_retrying.set()
 
 
 # ============================================================
@@ -101,25 +150,25 @@ def root():
 
 @app.get("/health")
 def health_check():
-    """Report liveness plus which optional features are configured.
+    """Unauthenticated liveness probe (Railway's healthcheck path).
 
-    Only reports whether a variable is present, never its value. The same
-    information is already observable by calling the routes themselves, so this
-    exposes nothing new -- it just makes a misconfigured deployment obvious.
+    Returns only "ok" or "degraded" -- always with HTTP 200 so a database blip
+    does not make the platform restart the service. The reasons (database
+    unreachable, missing SMTP variables) go to the server log, not to anyone
+    who can reach the URL.
     """
-    missing_email = settings.email_missing_variables
+    problems = []
 
-    database_ok = ping()
+    if not ping():
+        problems.append("database=unreachable")
 
-    registration = "configured"
-    if settings.require_email_verification and missing_email:
-        registration = "unconfigured"
+    missing_email = settings.smtp_missing_variables
+    if missing_email:
+        problems.append("email=unconfigured missing=" + ",".join(missing_email))
+        if settings.require_email_verification:
+            problems.append("registration=unavailable")
 
-    return {
-        "status": "healthy" if database_ok else "degraded",
-        "database": "connected" if database_ok else "unreachable",
-        "email": "configured" if not missing_email else "unconfigured",
-        "email_provider": settings.email_provider,
-        "registration": registration,
-        "missing_variables": missing_email,
-    }
+    if problems:
+        logger.warning("health_degraded %s", " ".join(problems))
+        return {"status": "degraded"}
+    return {"status": "ok"}

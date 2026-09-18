@@ -1,5 +1,3 @@
-from urllib.parse import urlparse
-
 from fastapi import APIRouter, HTTPException, Header, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -7,9 +5,10 @@ from pymongo import ASCENDING
 
 from app.database import event_documents, event_media, event_reports, events, users
 from app.models.documents import APPROVED_STAGES, new_report_document
+from app.schemas.events import normalize_social_url
 from app.services.report_pdf import build_event_report_pdf, split_description
-from app.services.storage_service import absolutize
-from app.utils.auth import check_dean, get_current_user
+from app.services.storage_service import absolutize, content_disposition
+from app.utils.auth import check_dean, check_event_viewer, get_current_user
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
 
@@ -36,10 +35,12 @@ def is_approved(event) -> bool:
 
 
 def get_event(event_id: str):
+    """The event by id; a draft is reported as missing, exactly like
+    GET /dean/events/{id}, because drafts are never shown to a Dean."""
     object_id = to_object_id(event_id)
     event = events.find_one({"_id": object_id}) if object_id else None
 
-    if not event:
+    if not event or event.get("status") == "draft":
         raise HTTPException(
             status_code=404,
             detail="Event not found"
@@ -49,27 +50,15 @@ def get_event(event_id: str):
 
 
 def validate_social_url(url: str) -> str:
-    url = url.strip()
+    # One rule for teacher and Dean input; see schemas.events.
+    try:
+        return normalize_social_url(url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
 
-    if not url:
-        raise HTTPException(
-            status_code=400,
-            detail="Social Network Link is required"
-        )
 
-    # Allow user to enter www.example.com
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-
-    parsed = urlparse(url)
-
-    if not parsed.netloc:
-        raise HTTPException(
-            status_code=400,
-            detail="Please enter a valid Social Network Link"
-        )
-
-    return url
+def report_download_name(event_name: str | None) -> str:
+    return f"{(event_name or '').strip() or 'Event'}_Report.pdf"
 
 
 def get_event_media(event_id: str):
@@ -104,7 +93,7 @@ def get_report_status(
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user)
+    check_event_viewer(user)
 
     event = get_event(event_id)
     report = get_report(event["id"])
@@ -149,14 +138,14 @@ def save_social_link(
     )
 
     result = events.update_one(
-        {"_id": to_object_id(event_id)},
+        {"_id": to_object_id(event_id), "status": {"$in": list(APPROVED_STAGES)}},
         {"$set": {"social_network_url": social_url, "updated_at": utc_now()}},
     )
 
     if result.matched_count == 0:
         raise HTTPException(
-            status_code=404,
-            detail="Event not found"
+            status_code=409,
+            detail="This event is no longer approved."
         )
 
     # If the link changes, an old report should not remain valid.
@@ -180,7 +169,7 @@ def get_documents(
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user)
+    check_event_viewer(user)
 
     event = get_event(event_id)
 
@@ -354,7 +343,7 @@ def download_report(
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
-    check_dean(user)
+    check_event_viewer(user)
 
     event = get_event(event_id)
 
@@ -387,25 +376,18 @@ def download_report(
 
     pdf = build_event_report_pdf(event, teacher, media, documents)
 
-    safe_name = (
-        event.get("event_name")
-        or "event"
-    )
-
-    safe_name = "".join(
-        char
-        if char.isalnum()
-        else "_"
-        for char in safe_name
-    )
-
-    filename = f"{safe_name}_Report.pdf"
-
+    # ASCII fallback in filename=, the real (possibly Hindi) name in
+    # filename*=UTF-8''..., so the latin-1 header can always be encoded.
     return StreamingResponse(
         pdf,
         media_type="application/pdf",
         headers={
-            "Content-Disposition":
-                f'attachment; filename="{filename}"'
+            "Content-Disposition": content_disposition(
+                "attachment",
+                report_download_name(event.get("event_name")),
+                fallback="Event_Report",
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
         }
     )

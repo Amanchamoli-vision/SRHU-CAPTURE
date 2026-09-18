@@ -40,18 +40,54 @@ class FakeEvents:
         self.docs[_id] = copy.deepcopy(document)
         return MagicMock(inserted_id=_id)
 
-    def find_one(self, query: dict, *_args, **_kwargs):
+    @staticmethod
+    def _matches(doc: dict, query: dict) -> bool:
+        """Equality and `$in`, which is all the router's filters use."""
+        for key, expected in query.items():
+            value = doc.get(key)
+            if isinstance(expected, dict) and "$in" in expected:
+                if value not in expected["$in"]:
+                    return False
+            elif value != expected:
+                return False
+        return True
+
+    def _find(self, query: dict) -> dict | None:
         doc = self.docs.get(query.get("_id"))
+        return doc if doc is not None and self._matches(doc, query) else None
+
+    def find_one(self, query: dict, *_args, **_kwargs):
+        doc = self._find(query)
         return copy.deepcopy(doc) if doc else None
 
     def find_one_and_update(self, query: dict, update: dict, **_kwargs):
-        doc = self.docs.get(query.get("_id"))
+        doc = self._find(query)
         if doc is None:
             return None
         doc.update(update.get("$set", {}))
         for field, value in update.get("$push", {}).items():
             doc.setdefault(field, []).append(value)
         return copy.deepcopy(doc)
+
+    def delete_one(self, query: dict):
+        doc = self._find(query)
+        if doc is None:
+            return MagicMock(deleted_count=0)
+        del self.docs[doc["_id"]]
+        return MagicMock(deleted_count=1)
+
+    def set_status(self, event_id: str, status: str) -> None:
+        self.docs[ObjectId(event_id)]["status"] = status
+
+
+class NoUsers:
+    """No Dean accounts: keeps notify_deans off the real database."""
+
+    def find(self, *_args, **_kwargs):
+        return []
+
+    def find_one(self, *_args, **_kwargs):
+        return None
 
 
 def fake_current_user(authorization):
@@ -82,6 +118,8 @@ class EventHistoryTests(unittest.TestCase):
         self.patches = [
             patch("app.routers.events.events", self.events),
             patch("app.routers.events.notifications", MagicMock()),
+            patch("app.routers.events.users", NoUsers()),
+            patch("app.routers.events.event_reports", MagicMock()),
             patch("app.routers.events.get_current_user", fake_current_user),
             patch("app.routers.events.email_service.is_configured", return_value=False),
             # The teacher GET also lists media and documents; none here.
@@ -207,6 +245,159 @@ class EventHistoryTests(unittest.TestCase):
         self.assertEqual([entry["action"] for entry in tail], ["stage_changed", "stage_changed"])
         self.assertEqual([entry["status"] for entry in tail], ["in_progress", "completed"])
         self.assertEqual(tail[0]["from_status"], "approved")
+
+
+class DeanTransitionTests(EventHistoryTests):
+    """B-4 / B-13 / B-27: decisions only from pending, and every write is
+    filtered on the status that was checked."""
+
+    # Don't re-run the parent's tests under this class.
+    test_full_review_cycle_is_recorded_in_order = None
+    test_request_changes_records_the_remarks = None
+    test_draft_saves_stay_out_of_the_trail_until_submitted = None
+    test_delivery_stages_are_recorded = None
+
+    def submit(self, **extra) -> str:
+        response = self.client.post(
+            "/teacher/events", json={**EVENT_PAYLOAD, **extra}, headers=self.as_teacher()
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()["event"]["id"]
+
+    def test_approve_twice_is_409_and_records_one_entry(self) -> None:
+        event_id = self.submit()
+        first = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+        self.assertEqual(first.status_code, 200, first.text)
+
+        second = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json()["detail"], "This event is already approved.")
+        self.assertEqual(
+            [entry["action"] for entry in self.history_of(event_id)], ["submitted", "approved"]
+        )
+
+    def test_completed_event_cannot_be_rejected_or_sent_back(self) -> None:
+        event_id = self.submit()
+        self.events.set_status(event_id, "completed")
+
+        rejected = self.client.patch(
+            f"/dean/events/{event_id}/reject",
+            json={"rejection_reason": "Too late"},
+            headers=self.as_dean(),
+        )
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(rejected.json()["detail"], "Only pending events can be rejected.")
+
+        changes = self.client.patch(
+            f"/dean/events/{event_id}/request-changes",
+            params={"remarks": "More"},
+            headers=self.as_dean(),
+        )
+        self.assertEqual(changes.status_code, 409)
+
+        approved = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+        self.assertEqual(approved.status_code, 409)
+        self.assertEqual(self.events.docs[ObjectId(event_id)]["status"], "completed")
+
+    def test_rejected_event_cannot_be_approved_until_resubmitted(self) -> None:
+        event_id = self.submit()
+        self.client.patch(
+            f"/dean/events/{event_id}/reject", params={"rejection_reason": "No"}, headers=self.as_dean()
+        )
+        response = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"], "Only pending events can be approved.")
+
+    def test_drafts_are_invisible_to_dean_decisions(self) -> None:
+        event_id = self.submit(save_as_draft=True)
+        response = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+        self.assertEqual(response.status_code, 404)
+
+    def test_reject_accepts_a_json_body(self) -> None:
+        event_id = self.submit()
+        response = self.client.patch(
+            f"/dean/events/{event_id}/reject",
+            json={"rejection_reason": "  Venue clash.  "},
+            headers=self.as_dean(),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["event"]["rejection_reason"], "Venue clash.")
+        self.assertEqual(self.history_of(event_id)[-1]["note"], "Venue clash.")
+
+    def test_request_changes_accepts_a_json_body(self) -> None:
+        event_id = self.submit()
+        response = self.client.patch(
+            f"/dean/events/{event_id}/request-changes",
+            json={"remarks": "Add a budget."},
+            headers=self.as_dean(),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.history_of(event_id)[-1]["action"], "changes_requested")
+
+    def test_empty_reason_is_still_400(self) -> None:
+        event_id = self.submit()
+        for kwargs in ({"params": {"rejection_reason": "   "}}, {"json": {"rejection_reason": ""}}, {}):
+            with self.subTest(kwargs=kwargs):
+                response = self.client.patch(
+                    f"/dean/events/{event_id}/reject", headers=self.as_dean(), **kwargs
+                )
+                self.assertEqual(response.status_code, 400)
+
+    def test_teacher_edit_racing_an_approval_is_409(self) -> None:
+        event_id = self.submit()
+
+        from app.routers import events as events_router
+
+        real_find = events_router.find_teacher_event_or_404
+        calls = {"n": 0}
+
+        def stale_read(event_id_arg, teacher_id):
+            event = real_find(event_id_arg, teacher_id)
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # The Dean approves between the teacher's read and write.
+                self.events.set_status(event_id, "approved")
+            return event
+
+        with patch("app.routers.events.find_teacher_event_or_404", stale_read):
+            response = self.client.patch(
+                f"/teacher/events/{event_id}",
+                json={**EVENT_PAYLOAD, "event_name": "Changed"},
+                headers=self.as_teacher(),
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        stored = self.events.docs[ObjectId(event_id)]
+        self.assertEqual(stored["status"], "approved")
+        self.assertEqual(stored["event_name"], EVENT_PAYLOAD["event_name"])
+
+    def test_resubmit_is_only_for_events_out_of_the_queue(self) -> None:
+        event_id = self.submit()
+        pending = self.client.patch(f"/teacher/events/{event_id}/resubmit", headers=self.as_teacher())
+        self.assertEqual(pending.status_code, 409)
+
+        self.client.patch(
+            f"/dean/events/{event_id}/reject", params={"rejection_reason": "No"}, headers=self.as_dean()
+        )
+        resubmitted = self.client.patch(f"/teacher/events/{event_id}/resubmit", headers=self.as_teacher())
+        self.assertEqual(resubmitted.status_code, 200, resubmitted.text)
+        self.assertEqual(resubmitted.json()["event"]["status"], "pending")
+
+    def test_teacher_social_link_uses_the_dean_rules(self) -> None:
+        bad = self.client.post(
+            "/teacher/events",
+            json={**EVENT_PAYLOAD, "social_network_url": "javascript:alert(1)"},
+            headers=self.as_teacher(),
+        )
+        self.assertEqual(bad.status_code, 422)
+
+        good = self.client.post(
+            "/teacher/events",
+            json={**EVENT_PAYLOAD, "social_network_url": "www.instagram.com/p/abc"},
+            headers=self.as_teacher(),
+        )
+        self.assertEqual(good.status_code, 201, good.text)
+        self.assertEqual(good.json()["event"]["social_network_url"], "https://www.instagram.com/p/abc")
 
 
 if __name__ == "__main__":

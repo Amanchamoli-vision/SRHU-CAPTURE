@@ -6,6 +6,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.database import events, users
 from app.models.documents import USER_PRIVATE_FIELDS, new_user_document
+from app.routers.auth import find_user_by_email
 from app.schemas.superadmin import CreateDeanRequest
 from app.services import email_service
 from app.services.storage_service import delete_user_cascade
@@ -124,7 +125,9 @@ def create_dean(
 
     email = str(payload.email).casefold()
 
-    if users.find_one({"email": email}, {"_id": 1}):
+    # Same lookup as registration and login, so a Gmail dot variant of an
+    # existing account is caught too.
+    if find_user_by_email(email):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists."
@@ -132,12 +135,15 @@ def create_dean(
 
     temporary_password = generate_temporary_password()
 
+    # must_change_password makes the frontend send the Dean to the
+    # change-password screen on first sign-in; /users/me/change-password clears it.
     document = new_user_document(
         name=payload.name,
         email=email,
         password_hash=hash_password(temporary_password),
         role="dean",
         email_verified=True,
+        must_change_password=True,
     )
 
     try:
@@ -162,6 +168,10 @@ def create_dean(
 
     logger.info("dean_created email_queued=%s", email_queued)
 
+    # temporary_password stays in the response on purpose: it is the
+    # superadmin's fallback for handing over the credentials when SMTP is not
+    # configured or the email never arrives. It is single-use in practice --
+    # the account carries must_change_password until the Dean replaces it.
     return {
         "success": True,
         "message": (
@@ -254,13 +264,20 @@ def delete_user(
 ):
     superadmin_profile = get_superadmin_user(authorization)
 
-    if superadmin_profile.get("id") == user_id:
+    # Events and notifications reference their owner by the canonical
+    # lower-case hex string, so an upper-case (or otherwise non-canonical) id
+    # in the URL must be normalised before comparing or cascading -- otherwise
+    # the user row goes but everything they own is left behind.
+    object_id = to_object_id(user_id)
+    canonical_id = str(object_id) if object_id is not None else user_id
+
+    if superadmin_profile.get("id") == canonical_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You cannot delete your own superadmin account"
         )
 
-    user = find_user_or_404(user_id)
+    user = find_user_or_404(canonical_id)
 
     if user.get("role") == "superadmin":
         raise HTTPException(
@@ -269,7 +286,7 @@ def delete_user(
         )
 
     # Removes the user's events, media, documents, reports and notifications.
-    delete_user_cascade(user_id)
+    delete_user_cascade(str(user["_id"]))
 
     return {
         "success": True,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import srhuLogo from "../../assets/logo.png";
+// The white crest: the shell header is SRHU blue in both themes.
+import srhuLogo from "../../assets/srhu-logo-dark.png";
 import useThemeToggle from "../theme/useThemeToggle";
 import NotificationBell from "../NotificationBell";
 import { initialsOf } from "../common/roles";
@@ -218,7 +219,7 @@ export default function DeanShell({
             locked ? "" : "sticky top-(--header-h) h-[calc(100vh-var(--header-h))]"
           }`}
         >
-          <p className="rail-label px-3 pb-2.5">Review</p>
+          <p className="rail-label px-3 pb-2.5">Navigation</p>
 
           <nav className="space-y-1" aria-label="Dean navigation">
             {NAV.map((item) => (

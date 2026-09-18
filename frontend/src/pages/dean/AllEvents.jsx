@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { fetchCurrentUser, getSession as getStoredSession, signOut } from "../../services/auth";
-import { API_BASE_URL } from "../../services/api";
+import { fetchCurrentUser, signOut } from "../../services/auth";
+import { apiJson, isAbortError } from "../../services/api";
 import DeanShell from "../../components/dean/DeanShell";
 import Modal from "../../components/teacher/Modal";
 import StatusChip from "../../components/teacher/StatusChip";
@@ -124,65 +124,52 @@ function AllEvents() {
   const [reasonError, setReasonError] = useState("");
 
   // ============================================================
-  // GET SESSION
+  // ERRORS
+  // A 401 means the session is gone (apiJson already cleared it): go to the
+  // login page. Anything else, including a 409 when the event moved on
+  // meanwhile, is shown with the backend's message.
   // ============================================================
 
-  const getSession = async () => {
-    const session = getStoredSession();
-
-    if (!session?.access_token) {
-      navigate("/login");
-      return null;
+  const handleApiError = (err, fallback, context) => {
+    console.error(`${context}:`, err);
+    if (err?.status === 401) {
+      navigate("/login", { replace: true });
+      return;
     }
-
-    return session;
+    setError(err?.message || fallback);
   };
 
   // ============================================================
   // LOAD EVENTS
+  //
+  // Only the newest request may update the list: changing the date quickly
+  // must not let a slow, older response overwrite the newer one.
   // ============================================================
 
+  const loadControllerRef = useRef(null);
+
+  useEffect(() => () => loadControllerRef.current?.abort(), []);
+
   const loadEvents = async (date = selectedDate) => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+
     try {
       setLoading(true);
       setError("");
 
-      const session = await getSession();
+      const query = date ? `?event_date=${encodeURIComponent(date)}` : "";
+      const data = await apiJson(`/dean/events${query}`, { signal: controller.signal });
 
-      if (!session) {
-        return;
-      }
-
-      let url = `${API_BASE_URL}/dean/events`;
-
-      // Date filter
-      if (date) {
-        url += `?event_date=${encodeURIComponent(date)}`;
-      }
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to load events");
-      }
-
-      setEvents(data.events || []);
+      if (controller.signal.aborted) return;
+      setEvents(data?.events || []);
     } catch (err) {
-      console.error("Load events error:", err);
-
-      setError(err.message || "Failed to load events");
-
+      if (controller.signal.aborted || isAbortError(err)) return;
+      handleApiError(err, "Failed to load events", "Load events error");
       setEvents([]);
     } finally {
-      setLoading(false);
+      if (loadControllerRef.current === controller) setLoading(false);
     }
   };
 
@@ -310,37 +297,14 @@ function AllEvents() {
       setError("");
       setSuccess("");
 
-      const session = await getSession();
-
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/approve`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to approve event");
-      }
+      const data = await apiJson(`/dean/events/${event.id}/approve`, { method: "PATCH" });
 
       applyUpdatedEvent(data.event);
 
       setSuccess(data.message || "Event approved successfully.");
       setDecision(null);
     } catch (err) {
-      console.error("Approve event error:", err);
-
-      setError(err.message || "Failed to approve event");
+      handleApiError(err, "Failed to approve event", "Approve event error");
       setDecision(null);
     } finally {
       setProcessingId(null);
@@ -371,39 +335,19 @@ function AllEvents() {
       setSuccess("");
       setReasonError("");
 
-      const session = await getSession();
-
-      if (!session) {
-        return;
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/reject?rejection_reason=${encodeURIComponent(
-          reason
-        )}`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to reject event");
-      }
+      // In the body, not the query string: long reasons would hit URL
+      // limits and end up in access logs.
+      const data = await apiJson(`/dean/events/${event.id}/reject`, {
+        method: "PATCH",
+        body: { rejection_reason: reason },
+      });
 
       applyUpdatedEvent(data.event);
 
       setSuccess(data.message || "Event rejected successfully.");
       setDecision(null);
     } catch (err) {
-      console.error("Reject event error:", err);
-
-      setError(err.message || "Failed to reject event");
+      handleApiError(err, "Failed to reject event", "Reject event error");
       setDecision(null);
     } finally {
       setProcessingId(null);

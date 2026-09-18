@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { fetchCurrentUser, getSession as getStoredSession, signOut } from "../../services/auth";
-import { API_BASE_URL } from "../../services/api";
+import { fetchCurrentUser, signOut } from "../../services/auth";
+import { apiFetch, apiJson, errorFromResponse } from "../../services/api";
+import useMediaRefresh from "../../components/common/useMediaRefresh";
 import DeanShell from "../../components/dean/DeanShell";
 import Modal from "../../components/teacher/Modal";
 import PageHero from "../../components/teacher/PageHero";
 import ProgressTimeline from "../../components/teacher/ProgressTimeline";
+import EventMediaSections from "../../components/common/EventMediaSections";
 import StatusChip from "../../components/teacher/StatusChip";
 import { trackOf } from "../../components/teacher/status";
 import {
@@ -18,9 +20,9 @@ import {
   IconCheckCircle,
   IconClock,
   IconDownload,
+  IconEdit,
   IconExternalLink,
   IconFileText,
-  IconImagePlus,
   IconMapPin,
   IconPhone,
   IconRefresh,
@@ -34,6 +36,7 @@ import {
 import {
   canApproveEvent,
   canRejectEvent,
+  canRequestChanges,
   getApproveLabel,
   getNextStage,
   getPreviousStage,
@@ -67,9 +70,6 @@ function EventDetails() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // Media / documents share one panel so they cost one card, not two.
-  const [activeTab, setActiveTab] = useState("media");
-
   // Advancing through the post-approval delivery stages.
   const [stageSaving, setStageSaving] = useState(false);
 
@@ -80,19 +80,65 @@ function EventDetails() {
   const [reasonError, setReasonError] = useState("");
 
   // ============================================================
-  // GET SESSION
+  // ERRORS
+  // A 401 means the session is gone: apiJson has already cleared it, and the
+  // login page is where the Dean can recover. Anything else is shown.
   // ============================================================
 
-  const getSession = async () => {
-    const session = getStoredSession();
-
-    if (!session?.access_token) {
-      navigate("/login");
-      return null;
+  const handleApiError = (err, fallback, context) => {
+    console.error(`${context}:`, err);
+    if (err?.status === 401) {
+      navigate("/login", { replace: true });
+      return true;
     }
-
-    return session;
+    setError(err?.message || fallback);
+    return false;
   };
+
+  // ============================================================
+  // LOAD MEDIA / DOCUMENTS / REPORT STATUS
+  // ============================================================
+
+  // Media links are signed and time-limited, so this also serves as the
+  // refresh when a thumbnail or player reports a load error.
+  const loadMedia = async (id) => {
+    try {
+      const data = await apiJson(`/dean/events/${id}/media`);
+      setMedia(data?.media || []);
+    } catch (err) {
+      console.error("Load media error:", err);
+      setMedia([]);
+    }
+  };
+
+  const loadDocuments = async (id) => {
+    try {
+      const data = await apiJson(`/dean/events/${id}/documents`);
+      setDocuments(data?.documents || []);
+    } catch (err) {
+      console.error("Load documents error:", err);
+      setDocuments([]);
+    }
+  };
+
+  const loadReportStatus = async (id) => {
+    try {
+      const data = await apiJson(`/dean/events/${id}/report-status`);
+
+      setReportGenerated(Boolean(data?.report_generated));
+      setGeneratedAt(data?.generated_at || null);
+
+      if (data?.social_network_url) {
+        setSocialNetworkUrl(data.social_network_url);
+      }
+    } catch (err) {
+      console.error("Load report status error:", err);
+    }
+  };
+
+  const refreshMediaLinks = useMediaRefresh(() =>
+    Promise.all([loadMedia(eventId), loadDocuments(eventId)])
+  );
 
   // ============================================================
   // LOAD EVENT
@@ -103,136 +149,28 @@ function EventDetails() {
       setLoading(true);
       setError("");
 
-      const session = await getSession();
+      // One event, not the whole list; the files and report state are
+      // independent of each other, so fetch them side by side.
+      const [data] = await Promise.all([
+        apiJson(`/dean/events/${eventId}`),
+        loadMedia(eventId),
+        loadDocuments(eventId),
+      ]);
 
-      if (!session) return;
-
-      const response = await fetch(`${API_BASE_URL}/dean/events`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to load event");
-      }
-
-      const foundEvent = (data.events || []).find((item) => item.id === eventId);
+      const foundEvent = data?.event;
 
       if (!foundEvent) {
         throw new Error("Event not found");
       }
 
       setEvent(foundEvent);
-
       setSocialNetworkUrl(foundEvent.social_network_url || "");
 
-      await loadMedia(eventId, session.access_token);
-
-      await loadDocuments(eventId, session.access_token);
-
-      await loadReportStatus(eventId, session.access_token);
+      await loadReportStatus(eventId);
     } catch (err) {
-      console.error("Load event error:", err);
-
-      setError(err.message || "Failed to load event details");
+      handleApiError(err, "Failed to load event details", "Load event error");
     } finally {
       setLoading(false);
-    }
-  };
-
-  // ============================================================
-  // LOAD MEDIA
-  // ============================================================
-
-  const loadMedia = async (id, accessToken) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/dean/events/${id}/media`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        setMedia([]);
-        return;
-      }
-
-      const data = await response.json();
-
-      setMedia(data.media || []);
-    } catch (err) {
-      console.error("Load media error:", err);
-      setMedia([]);
-    }
-  };
-
-  // ============================================================
-  // LOAD DOCUMENTS
-  // ============================================================
-
-  const loadDocuments = async (id, accessToken) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/dean/events/${id}/documents`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        setDocuments([]);
-        return;
-      }
-
-      const data = await response.json();
-
-      setDocuments(data.documents || []);
-    } catch (err) {
-      console.error("Load documents error:", err);
-      setDocuments([]);
-    }
-  };
-
-  // ============================================================
-  // LOAD REPORT STATUS
-  // ============================================================
-
-  const loadReportStatus = async (id, accessToken) => {
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${id}/report-status`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      if (!response.ok) {
-        return;
-      }
-
-      const data = await response.json();
-
-      setReportGenerated(Boolean(data.report_generated));
-
-      setGeneratedAt(data.generated_at || null);
-
-      if (data.social_network_url) {
-        setSocialNetworkUrl(data.social_network_url);
-      }
-    } catch (err) {
-      console.error("Load report status error:", err);
     }
   };
 
@@ -293,26 +231,7 @@ function EventDetails() {
       setError("");
       setSuccess("");
 
-      const session = await getSession();
-
-      if (!session) return;
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/approve`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to approve event");
-      }
+      const data = await apiJson(`/dean/events/${event.id}/approve`, { method: "PATCH" });
 
       setEvent(data.event);
 
@@ -320,11 +239,10 @@ function EventDetails() {
       setDecisionKind(null);
 
       // Refresh report status after approval
-      await loadReportStatus(event.id, session.access_token);
+      await loadReportStatus(event.id);
     } catch (err) {
-      console.error("Approve event error:", err);
-
-      setError(err.message || "Failed to approve event");
+      // A 409 (the event moved on meanwhile) carries a readable detail.
+      handleApiError(err, "Failed to approve event", "Approve event error");
       setDecisionKind(null);
     } finally {
       setProcessing(false);
@@ -345,34 +263,23 @@ function EventDetails() {
       return;
     }
 
+    if (decisionKind === "changes") {
+      await confirmRequestChanges(reason);
+      return;
+    }
+
     try {
       setProcessing(true);
       setError("");
       setSuccess("");
       setReasonError("");
 
-      const session = await getSession();
-
-      if (!session) return;
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/reject?rejection_reason=${encodeURIComponent(
-          reason
-        )}`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to reject event");
-      }
+      // In the body, not the query string: long reasons would hit URL
+      // limits and end up in access logs.
+      const data = await apiJson(`/dean/events/${event.id}/reject`, {
+        method: "PATCH",
+        body: { rejection_reason: reason },
+      });
 
       setEvent(data.event);
 
@@ -381,11 +288,39 @@ function EventDetails() {
 
       // Mirrors confirmApprove: keep report state in sync when the decision
       // is revised without a page reload. report-status has no status gate.
-      await loadReportStatus(event.id, session.access_token);
+      await loadReportStatus(event.id);
     } catch (err) {
-      console.error("Reject event error:", err);
+      handleApiError(err, "Failed to reject event", "Reject event error");
+      setDecisionKind(null);
+    } finally {
+      setProcessing(false);
+    }
+  };
 
-      setError(err.message || "Failed to reject event");
+  // ============================================================
+  // REQUEST CHANGES
+  // The backend sends the event back to the teacher (status "rejected", logged
+  // as "changes_requested" in the history) so they can edit and resubmit.
+  // ============================================================
+
+  const confirmRequestChanges = async (remarks) => {
+    try {
+      setProcessing(true);
+      setError("");
+      setSuccess("");
+      setReasonError("");
+
+      const data = await apiJson(`/dean/events/${event.id}/request-changes`, {
+        method: "PATCH",
+        body: { remarks },
+      });
+
+      setEvent(data.event);
+
+      setSuccess("Changes requested. The teacher has been notified.");
+      setDecisionKind(null);
+    } catch (err) {
+      handleApiError(err, "Failed to request changes", "Request changes error");
       setDecisionKind(null);
     } finally {
       setProcessing(false);
@@ -404,36 +339,16 @@ function EventDetails() {
       setError("");
       setSuccess("");
 
-      const session = await getSession();
-
-      if (!session) return;
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/stage?stage=${encodeURIComponent(
-          stageKey
-        )}`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
+      const data = await apiJson(
+        `/dean/events/${event.id}/stage?stage=${encodeURIComponent(stageKey)}`,
+        { method: "PATCH" }
       );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to update the event stage");
-      }
 
       setEvent(data.event);
 
       setSuccess(data.message || "Event stage updated successfully.");
     } catch (err) {
-      console.error("Change stage error:", err);
-
-      setError(err.message || "Failed to update the event stage");
+      handleApiError(err, "Failed to update the event stage", "Change stage error");
     } finally {
       setStageSaving(false);
     }
@@ -456,29 +371,10 @@ function EventDetails() {
       setError("");
       setSuccess("");
 
-      const session = await getSession();
-
-      if (!session) return;
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/social-link`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            social_network_url: socialNetworkUrl.trim(),
-          }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to save Social Network Link");
-      }
+      const data = await apiJson(`/dean/events/${event.id}/social-link`, {
+        method: "PATCH",
+        body: { social_network_url: socialNetworkUrl.trim() },
+      });
 
       setSocialNetworkUrl(data.social_network_url);
 
@@ -494,9 +390,7 @@ function EventDetails() {
 
       setSuccess("Social Network Link saved successfully.");
     } catch (err) {
-      console.error("Save social link error:", err);
-
-      setError(err.message || "Failed to save Social Network Link");
+      handleApiError(err, "Failed to save Social Network Link", "Save social link error");
     } finally {
       setSavingSocialLink(false);
     }
@@ -509,7 +403,9 @@ function EventDetails() {
   const handleGenerateReport = async () => {
     if (!event) return;
 
-    if (event.status !== "approved") {
+    // The whole approved group -- approved, in progress, completed -- matches
+    // the backend's is_approved() and the report panel's own visibility.
+    if (getStatusBucket(event.status) !== "approved") {
       setError("Report can only be generated for an approved event.");
       return;
     }
@@ -524,36 +420,17 @@ function EventDetails() {
       setError("");
       setSuccess("");
 
-      const session = await getSession();
-
-      if (!session) return;
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/generate-report`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to generate report");
-      }
+      const data = await apiJson(`/dean/events/${event.id}/generate-report`, {
+        method: "POST",
+      });
 
       setReportGenerated(true);
 
-      setGeneratedAt(data.generated_at || null);
+      setGeneratedAt(data?.generated_at || null);
 
-      setSuccess(data.message || "Report generated successfully.");
+      setSuccess(data?.message || "Report generated successfully.");
     } catch (err) {
-      console.error("Generate report error:", err);
-
-      setError(err.message || "Failed to generate report");
+      handleApiError(err, "Failed to generate report", "Generate report error");
     } finally {
       setReportLoading(false);
     }
@@ -571,32 +448,10 @@ function EventDetails() {
       setError("");
       setSuccess("");
 
-      const session = await getSession();
-
-      if (!session) return;
-
-      const response = await fetch(
-        `${API_BASE_URL}/dean/events/${event.id}/report/download`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        }
-      );
+      const response = await apiFetch(`/dean/events/${event.id}/report/download`);
 
       if (!response.ok) {
-        let message = "Failed to download report";
-
-        try {
-          const data = await response.json();
-
-          message = data.detail || message;
-        } catch {
-          // Ignore JSON parsing error
-        }
-
-        throw new Error(message);
+        throw await errorFromResponse(response, "Failed to download report");
       }
 
       const blob = await response.blob();
@@ -621,9 +476,7 @@ function EventDetails() {
 
       setSuccess("Report downloaded successfully.");
     } catch (err) {
-      console.error("Download report error:", err);
-
-      setError(err.message || "Failed to download report");
+      handleApiError(err, "Failed to download report", "Download report error");
     } finally {
       setReportLoading(false);
     }
@@ -900,77 +753,29 @@ function EventDetails() {
               </p>
             </section>
 
-            {/* ------------------------------------- media and documents */}
-            <section className="glass overflow-hidden">
-              <div className="flex flex-wrap items-center gap-1.5 border-b hairline px-4 py-3 sm:px-5">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "media"}
-                  onClick={() => setActiveTab("media")}
-                  className="tab"
-                >
-                  <IconImagePlus className="h-4 w-4" />
-                  Photos &amp; videos
-                  <span className="tab-count">{media.length}</span>
-                </button>
+            {/* ------------------------------------------ photos and videos */}
+            {/* Two dedicated cards showing every item. They used to share one
+                height-capped tab, where videos hid below a few photos. */}
+            <EventMediaSections
+              items={media}
+              eventName={event.event_name || "Event"}
+              onLoadError={refreshMediaLinks}
+            />
 
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "documents"}
-                  onClick={() => setActiveTab("documents")}
-                  className="tab"
-                >
-                  <IconFileText className="h-4 w-4" />
-                  Documents
-                  <span className="tab-count">{documents.length}</span>
-                </button>
+            {/* ---------------------------------------------------- documents */}
+            <section className="glass overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b hairline px-6 py-4">
+                <div className="flex items-center gap-2.5">
+                  <span className="icon-tile h-9 w-9 rounded-lg">
+                    <IconFileText className="h-4 w-4" />
+                  </span>
+                  <h2 className="h3 text-base text-ink">Documents</h2>
+                </div>
+                <span className="chip chip-sm chip-solid num">{documents.length}</span>
               </div>
 
               <div className="p-5">
-                {activeTab === "media" ? (
-                  media.length === 0 ? (
-                    <p className="prose-muted rounded-xl border border-dashed border-line/20 p-6 text-center text-sm">
-                      No media uploaded for this event.
-                    </p>
-                  ) : (
-                    <div className="grid max-h-85 gap-3 overflow-y-auto sm:grid-cols-3">
-                      {media.map((item) =>
-                        item.media_type === "video" ? (
-                          // Not wrapped in a link: a click on the player
-                          // controls would otherwise open a new tab.
-                          <div
-                            key={item.id}
-                            className="overflow-hidden rounded-xl border hairline bg-black sm:col-span-3"
-                          >
-                            <video
-                              src={item.media_url}
-                              controls
-                              playsInline
-                              preload="metadata"
-                              className="aspect-video w-full object-contain"
-                            />
-                          </div>
-                        ) : (
-                          <a
-                            key={item.id}
-                            href={item.media_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="group overflow-hidden rounded-xl border hairline bg-raised/60"
-                          >
-                            <img
-                              src={item.media_url}
-                              alt={event.event_name}
-                              className="h-28 w-full object-cover transition group-hover:opacity-90"
-                            />
-                          </a>
-                        )
-                      )}
-                    </div>
-                  )
-                ) : documents.length === 0 ? (
+                {documents.length === 0 ? (
                   <p className="prose-muted rounded-xl border border-dashed border-line/20 p-6 text-center text-sm">
                     No supporting documents uploaded.
                   </p>
@@ -1243,6 +1048,18 @@ function EventDetails() {
                     {getRejectLabel(event)}
                   </button>
                 )}
+
+                {canRequestChanges(event) && (
+                  <button
+                    type="button"
+                    onClick={() => openDecision("changes")}
+                    disabled={processing}
+                    className="btn btn-ghost btn-sm w-full"
+                  >
+                    <IconEdit />
+                    Request changes
+                  </button>
+                )}
               </div>
             </section>
           </aside>
@@ -1263,6 +1080,8 @@ function EventDetails() {
             ? isReapproving
               ? "Re-approve event"
               : "Approve event"
+            : decisionKind === "changes"
+            ? "Request changes"
             : isRevoking
             ? "Revoke approval & reject"
             : "Reject event"
@@ -1270,6 +1089,8 @@ function EventDetails() {
         subtitle={
           decisionKind === "approve"
             ? "The teacher is notified of the decision."
+            : decisionKind === "changes"
+            ? "The event goes back to the teacher to edit and resubmit."
             : "The teacher sees the reason you give."
         }
         footer={
@@ -1292,6 +1113,16 @@ function EventDetails() {
               >
                 {processing ? <span className="spin h-3.5 w-3.5" /> : <IconCheck />}
                 {processing ? "Approving…" : isReapproving ? "Re-approve" : "Approve"}
+              </button>
+            ) : decisionKind === "changes" ? (
+              <button
+                type="button"
+                onClick={confirmReject}
+                disabled={processing}
+                className="btn btn-primary btn-sm"
+              >
+                {processing ? <span className="spin h-3.5 w-3.5" /> : <IconEdit />}
+                {processing ? "Sending…" : "Send to teacher"}
               </button>
             ) : (
               <button
@@ -1345,10 +1176,10 @@ function EventDetails() {
           </div>
         )}
 
-        {decisionKind === "reject" && (
+        {(decisionKind === "reject" || decisionKind === "changes") && (
           <div className="field mt-5">
             <label htmlFor="deanRejectReason">
-              Reason for rejection
+              {decisionKind === "changes" ? "What should the teacher change?" : "Reason for rejection"}
               <span className="req">*</span>
             </label>
 

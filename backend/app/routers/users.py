@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Header, HTTPException, status
+from pymongo import ReturnDocument
 
 from app.database import users
 from app.schemas.auth import ChangePasswordRequest, UpdateProfileRequest
-from app.utils.auth import get_current_user, public_user
-from app.utils.security import hash_password, verify_password
+from app.utils.auth import get_current_user, public_user, stored_token_version
+from app.utils.security import create_access_token, hash_password, verify_password
 from app.utils.serializers import to_object_id, utc_now
 
 
@@ -62,14 +63,45 @@ def change_my_password(
             detail="Current password is incorrect",
         )
 
-    users.update_one(
-        {"_id": document["_id"]},
+    # Bumping token_version signs out every other session (a stolen token stops
+    # working); clearing the reset fields stops an older reset link from
+    # overriding the password just chosen; must_change_password is the flag a
+    # Dean created with a temporary password carries until this point.
+    updated = users.find_one_and_update(
+        {"_id": document["_id"], "password_hash": document.get("password_hash")},
         {
             "$set": {
                 "password_hash": hash_password(payload.new_password),
+                "must_change_password": False,
+                "reset_token_hash": None,
+                "reset_expires_at": None,
                 "updated_at": utc_now(),
-            }
+            },
+            "$inc": {"token_version": 1},
         },
+        return_document=ReturnDocument.AFTER,
     )
 
-    return {"success": True, "message": "Password changed successfully"}
+    if not updated:
+        # The password changed between the check above and this write.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+
+    # The caller's own token was just invalidated along with every other one,
+    # so hand back a fresh session for this device. Clients that ignore these
+    # fields simply get sent to sign in again.
+    token, expires_in = create_access_token(
+        str(updated["_id"]),
+        updated["role"],
+        token_version=stored_token_version(updated),
+    )
+    return {
+        "success": True,
+        "message": "Password changed successfully",
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": expires_in,
+        "user": public_user(updated),
+    }

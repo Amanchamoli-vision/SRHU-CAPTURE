@@ -113,20 +113,18 @@ Railway's MongoDB template.
 | `JWT_SECRET_KEY` | a new long random string (not the local one) |
 | `FRONTEND_URL` | the Vercel URL, e.g. `https://srhu-capture.vercel.app` |
 | `CORS_ORIGIN_REGEX` | `^https://srhu-capture(-[a-z0-9-]+)?\.vercel\.app$` (admits preview deployments; replaces the LAN default) |
-| `EMAIL_PROVIDER` | `brevo` or `resend` on Free/Trial/Hobby plans; `smtp` works only on Pro |
-| `BREVO_API_KEY` or `RESEND_API_KEY` | key for the chosen provider |
-| `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | From address, verified with the provider |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | the same SMTP settings as your local `.env` |
+| `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | From address |
 | `REQUIRE_EMAIL_VERIFICATION` | `true` |
 | `R2_*` | optional, see `.env.example`; without them uploads go to GridFS |
 
 Do not set `PORT`: Railway provides it, and `run.py` uses it, turns auto-reload
 off and trusts Railway's proxy headers so file links come out as `https://`.
 
-**Email on Railway.** Outbound SMTP (ports 25/465/587) is blocked on the Free,
-Trial and Hobby plans, so Gmail SMTP will time out there. With Brevo, verify
-the sender address under *Senders & IPs* and create an API key under *SMTP &
-API → API keys*; no domain is needed. Resend needs a verified domain to send to
-anyone other than yourself.
+**Email on Railway.** Email is sent over SMTP only. Railway blocks outbound
+SMTP (ports 25/465/587) on the Free, Trial and Hobby plans, where sends fail
+with `[Errno 101] Network is unreachable`; they go through on the Pro plan.
+Locally, SMTP works with no restriction.
 
 Check the deployment at `https://<railway-domain>/health`: it should report
 `"database": "connected"` and `"email": "configured"`.
