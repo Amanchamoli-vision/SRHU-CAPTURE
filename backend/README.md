@@ -80,3 +80,75 @@ run more than once:
 | `event_media`, `event_documents` | Metadata for uploads; bytes live in the `uploads` GridFS bucket and are served from `/files/{id}` |
 | `notifications` | In-app notifications per `user_id` |
 | `event_reports` | One generated report per `event_id` |
+
+## Deploying: backend on Railway, frontend on Vercel
+
+The repository holds both apps, so each platform is pointed at its own folder.
+
+### 1. Database
+
+Railway has no data of its own, so use **MongoDB Atlas** (free M0 cluster) or
+Railway's MongoDB template.
+
+- Atlas: *Network Access* → allow `0.0.0.0/0` (Railway has no fixed outbound
+  IP), then copy the `mongodb+srv://...` connection string.
+- Railway MongoDB: use the `MONGO_URL` it provides.
+
+### 2. Backend on Railway
+
+1. *New Project* → *Deploy from GitHub repo* → this repository.
+2. Service → *Settings*:
+   - **Root Directory**: `backend`
+   - **Config file path**: `/backend/railway.json`. Railway does not look inside
+     the root directory for it. The file sets the start command
+     (`python run.py`) and the `/health` health check. `Procfile` gives the
+     same start command as a fallback.
+3. *Settings → Networking → Generate Domain*, e.g. `srhu-capture-api.up.railway.app`.
+4. *Variables*:
+
+| Variable | Value |
+| --- | --- |
+| `MONGODB_URI` | Atlas / Railway connection string |
+| `MONGODB_DB_NAME` | `campus_capture` |
+| `JWT_SECRET_KEY` | a new long random string (not the local one) |
+| `FRONTEND_URL` | the Vercel URL, e.g. `https://srhu-capture.vercel.app` |
+| `CORS_ORIGIN_REGEX` | `^https://srhu-capture(-[a-z0-9-]+)?\.vercel\.app$` (admits preview deployments; replaces the LAN default) |
+| `EMAIL_PROVIDER` | `brevo` or `resend` on Free/Trial/Hobby plans; `smtp` works only on Pro |
+| `BREVO_API_KEY` or `RESEND_API_KEY` | key for the chosen provider |
+| `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | From address, verified with the provider |
+| `REQUIRE_EMAIL_VERIFICATION` | `true` |
+| `R2_*` | optional, see `.env.example`; without them uploads go to GridFS |
+
+Do not set `PORT`: Railway provides it, and `run.py` uses it, turns auto-reload
+off and trusts Railway's proxy headers so file links come out as `https://`.
+
+**Email on Railway.** Outbound SMTP (ports 25/465/587) is blocked on the Free,
+Trial and Hobby plans, so Gmail SMTP will time out there. With Brevo, verify
+the sender address under *Senders & IPs* and create an API key under *SMTP &
+API → API keys*; no domain is needed. Resend needs a verified domain to send to
+anyone other than yourself.
+
+Check the deployment at `https://<railway-domain>/health`: it should report
+`"database": "connected"` and `"email": "configured"`.
+
+**First superadmin.** Run the scripts from your machine against the production
+database (PowerShell):
+
+```powershell
+$env:MONGODB_URI = "<production connection string>"
+.venv\Scripts\python scripts\migrate_admin_to_superadmin.py   # only if old data has "admin" users
+.venv\Scripts\python scripts\create_superadmin.py --email you@srhu.edu.in --name "Super Admin"
+Remove-Item Env:MONGODB_URI
+```
+
+### 3. Frontend on Vercel
+
+1. *Add New Project* → this repository.
+2. **Root Directory**: `frontend`. Vercel detects Vite (build `npm run build`,
+   output `dist`). `frontend/vercel.json` rewrites every path to `index.html`,
+   so links such as `/verify-email?token=...` open correctly.
+3. *Environment Variables*: `VITE_API_BASE_URL` = `https://<railway-domain>`
+   (no trailing slash). Vite bakes it in at build time, so **redeploy** after
+   changing it.
+4. Put the final Vercel URL back into Railway's `FRONTEND_URL`. Email links
+   and CORS both use it.

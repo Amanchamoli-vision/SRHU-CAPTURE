@@ -54,7 +54,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_cors_origins,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.\d+\.\d+\.\d+)(:\d+)?$",
+    allow_origin_regex=settings.cors_origin_regex or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,25 +107,19 @@ def health_check():
     information is already observable by calling the routes themselves, so this
     exposes nothing new -- it just makes a misconfigured deployment obvious.
     """
-    missing_smtp = [
-        name
-        for name, value in (
-            ("SMTP_HOST", settings.smtp_host),
-            ("SMTP_FROM_EMAIL", settings.smtp_from_email),
-        )
-        if not value
-    ]
+    missing_email = settings.email_missing_variables
 
     database_ok = ping()
 
     registration = "configured"
-    if settings.require_email_verification and missing_smtp:
+    if settings.require_email_verification and missing_email:
         registration = "unconfigured"
 
     return {
         "status": "healthy" if database_ok else "degraded",
         "database": "connected" if database_ok else "unreachable",
-        "email": "configured" if not missing_smtp else "unconfigured",
+        "email": "configured" if not missing_email else "unconfigured",
+        "email_provider": settings.email_provider,
         "registration": registration,
-        "missing_variables": missing_smtp,
+        "missing_variables": missing_email,
     }

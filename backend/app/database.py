@@ -13,6 +13,7 @@ Every piece of persistent state lives in one MongoDB database:
 
 import logging
 
+import certifi
 from gridfs import GridFS
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.errors import PyMongoError
@@ -22,11 +23,20 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+def _uses_tls(uri: str) -> bool:
+    lowered = uri.lower()
+    return lowered.startswith("mongodb+srv://") or "tls=true" in lowered or "ssl=true" in lowered
+
+
 # One client per process; pymongo manages the connection pool internally.
+# TLS connections (MongoDB Atlas is always mongodb+srv://) verify against
+# certifi's CA bundle, because slim container images such as Railway's often
+# ship without a current system bundle and the handshake then fails.
 client: MongoClient = MongoClient(
     settings.mongodb_uri,
     serverSelectionTimeoutMS=5000,
     tz_aware=True,
+    **({"tlsCAFile": certifi.where()} if _uses_tls(settings.mongodb_uri) else {}),
 )
 
 db = client[settings.mongodb_db_name]

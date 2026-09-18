@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: int = 20
 
     # ------------------------------------------------------------------
+    # Email transport
+    # ------------------------------------------------------------------
+    # "smtp" uses the SMTP_* settings above. Railway's Free, Trial and Hobby
+    # plans block outbound SMTP, so there use "brevo" or "resend", which send
+    # over HTTPS. The From address is still SMTP_FROM_EMAIL / SMTP_FROM_NAME and
+    # must be a sender verified with that provider.
+    email_provider: str = "smtp"
+    brevo_api_key: str | None = None
+    resend_api_key: str | None = None
+
+    # ------------------------------------------------------------------
     # Uploads (stored in MongoDB GridFS)
     # ------------------------------------------------------------------
     max_upload_size_mb: int = 25
@@ -72,6 +83,15 @@ class Settings(BaseSettings):
     frontend_url: str
     # Optional extra origins, for example an alternate local development address.
     cors_origins: str | None = None
+    # Origins matched by pattern. The default admits localhost and private LAN
+    # addresses for development; in production set it to something like
+    # ^https://srhu-capture(-[a-z0-9-]+)?\.vercel\.app$ to also admit Vercel
+    # preview deployments, or to an empty value to allow FRONTEND_URL and
+    # CORS_ORIGINS only.
+    cors_origin_regex: str | None = (
+        r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+"
+        r"|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|100\.\d+\.\d+\.\d+)(:\d+)?$"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -123,9 +143,35 @@ class Settings(BaseSettings):
             )
         )
 
+    @field_validator("email_provider")
+    @classmethod
+    def validate_email_provider(cls, value: str) -> str:
+        normalized = (value or "smtp").strip().lower()
+        if normalized not in {"smtp", "brevo", "resend"}:
+            raise ValueError("EMAIL_PROVIDER must be one of: smtp, brevo, resend")
+        return normalized
+
     @property
     def smtp_configured(self) -> bool:
         return bool(self.smtp_host and self.smtp_from_email)
+
+    @property
+    def email_missing_variables(self) -> list[str]:
+        """Names of the settings the chosen email provider still needs."""
+        required = {
+            "smtp": (("SMTP_HOST", self.smtp_host),),
+            "brevo": (("BREVO_API_KEY", self.brevo_api_key),),
+            "resend": (("RESEND_API_KEY", self.resend_api_key),),
+        }[self.email_provider]
+        return [
+            name
+            for name, value in (*required, ("SMTP_FROM_EMAIL", self.smtp_from_email))
+            if not value
+        ]
+
+    @property
+    def email_configured(self) -> bool:
+        return not self.email_missing_variables
 
     @property
     def r2_configured(self) -> bool:

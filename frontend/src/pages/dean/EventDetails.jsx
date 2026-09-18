@@ -936,29 +936,38 @@ function EventDetails() {
                     </p>
                   ) : (
                     <div className="grid max-h-85 gap-3 overflow-y-auto sm:grid-cols-3">
-                      {media.map((item) => (
-                        <a
-                          key={item.id}
-                          href={item.media_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="group overflow-hidden rounded-xl border hairline bg-raised/60"
-                        >
-                          {item.media_type === "image" ? (
+                      {media.map((item) =>
+                        item.media_type === "video" ? (
+                          // Not wrapped in a link: a click on the player
+                          // controls would otherwise open a new tab.
+                          <div
+                            key={item.id}
+                            className="overflow-hidden rounded-xl border hairline bg-black sm:col-span-3"
+                          >
+                            <video
+                              src={item.media_url}
+                              controls
+                              playsInline
+                              preload="metadata"
+                              className="aspect-video w-full object-contain"
+                            />
+                          </div>
+                        ) : (
+                          <a
+                            key={item.id}
+                            href={item.media_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="group overflow-hidden rounded-xl border hairline bg-raised/60"
+                          >
                             <img
                               src={item.media_url}
                               alt={event.event_name}
                               className="h-28 w-full object-cover transition group-hover:opacity-90"
                             />
-                          ) : (
-                            <video
-                              src={item.media_url}
-                              controls
-                              className="h-28 w-full object-cover"
-                            />
-                          )}
-                        </a>
-                      ))}
+                          </a>
+                        )
+                      )}
                     </div>
                   )
                 ) : documents.length === 0 ? (

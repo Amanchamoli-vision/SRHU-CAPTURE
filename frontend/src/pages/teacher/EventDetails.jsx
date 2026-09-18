@@ -26,7 +26,6 @@ import {
   IconCopy,
   IconDownload,
   IconEdit,
-  IconFilm,
   IconMapPin,
   IconPhone,
   IconRefresh,
@@ -533,24 +532,32 @@ function EventDetails() {
                       className="group relative overflow-hidden rounded-xl border hairline bg-raised/60"
                     >
                       {item.media_type === "video" ? (
-                        <div className="flex h-24 items-center justify-center bg-ink/80 text-surface">
-                          <IconFilm className="h-6 w-6" />
-                        </div>
-                      ) : (
-                        <img
+                        // Playable in place; no overlay link, which would
+                        // swallow clicks on the player controls.
+                        <video
                           src={item.media_url}
-                          alt={event.event_name}
-                          className="h-24 w-full object-cover transition duration-200 group-hover:scale-105"
+                          controls
+                          playsInline
+                          preload="metadata"
+                          className="h-24 w-full bg-black object-contain"
                         />
+                      ) : (
+                        <>
+                          <img
+                            src={item.media_url}
+                            alt={event.event_name}
+                            className="h-24 w-full object-cover transition duration-200 group-hover:scale-105"
+                          />
+                          <a
+                            href={item.media_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="absolute inset-0 flex items-center justify-center bg-ink/45 opacity-0 transition group-hover:opacity-100"
+                          >
+                            <span className="chip chip-sm chip-solid">Open</span>
+                          </a>
+                        </>
                       )}
-                      <a
-                        href={item.media_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="absolute inset-0 flex items-center justify-center bg-ink/45 opacity-0 transition group-hover:opacity-100"
-                      >
-                        <span className="chip chip-sm chip-solid">Open</span>
-                      </a>
                     </div>
                   ))}
                 </div>
