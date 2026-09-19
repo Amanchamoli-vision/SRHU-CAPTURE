@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import srhuLogo from "../../assets/srhu-logo-dark.png";
 import useThemeToggle from "../theme/useThemeToggle";
 import NotificationBell from "../NotificationBell";
+import LogoutConfirmModal from "../common/LogoutConfirmModal";
 import { initialsOf } from "../common/roles";
 import {
   IconArrowUp,
@@ -51,6 +52,7 @@ export default function DeanShell({
 }) {
   const [dark, toggleTheme] = useThemeToggle();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -159,7 +161,7 @@ export default function DeanShell({
 
             <button
               type="button"
-              onClick={onLogout}
+              onClick={() => setLogoutConfirmOpen(true)}
               className="btn btn-ghost btn-sm hidden sm:inline-flex"
             >
               <IconLogout />
@@ -201,7 +203,7 @@ export default function DeanShell({
 
           <button
             type="button"
-            onClick={() => { setMenuOpen(false); onLogout?.(); }}
+            onClick={() => { setMenuOpen(false); setLogoutConfirmOpen(true); }}
             className="btn btn-ghost btn-block mt-4"
           >
             <IconLogout />
@@ -275,6 +277,15 @@ export default function DeanShell({
           <IconArrowUp className="h-4 w-4" />
         </button>
       )}
+
+      <LogoutConfirmModal
+        open={logoutConfirmOpen}
+        onClose={() => setLogoutConfirmOpen(false)}
+        onConfirm={() => {
+          setLogoutConfirmOpen(false);
+          onLogout?.();
+        }}
+      />
     </div>
   );
 }

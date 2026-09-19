@@ -3,12 +3,14 @@ import { Link } from "react-router-dom";
 // The white crest: the shell header is SRHU blue in both themes.
 import srhuLogo from "../../assets/srhu-logo-dark.png";
 import useThemeToggle from "../theme/useThemeToggle";
+import LogoutConfirmModal from "../common/LogoutConfirmModal";
 import {
   IconArrowUp,
   IconCalendar,
   IconGrid,
   IconLogout,
   IconMoon,
+  IconSettings,
   IconSun,
   IconUserPlus,
   IconUsers,
@@ -23,6 +25,7 @@ const NAV = [
   { key: "events", to: "/superadmin/events", label: "Events", Icon: IconCalendar },
   { key: "users", to: "/superadmin/users", label: "User Management", short: "Users", Icon: IconUsers },
   { key: "create-dean", to: "/superadmin/create-dean", label: "Create Dean", Icon: IconUserPlus },
+  { key: "settings", to: "/superadmin/settings", label: "Settings", Icon: IconSettings },
 ];
 
 /**
@@ -44,6 +47,7 @@ export default function SuperAdminShell({
 }) {
   const [dark, toggleTheme] = useThemeToggle();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -146,7 +150,7 @@ export default function SuperAdminShell({
 
             <button
               type="button"
-              onClick={onLogout}
+              onClick={() => setLogoutConfirmOpen(true)}
               className="btn btn-ghost btn-sm hidden sm:inline-flex"
             >
               <IconLogout />
@@ -188,7 +192,7 @@ export default function SuperAdminShell({
 
           <button
             type="button"
-            onClick={() => { setMenuOpen(false); onLogout?.(); }}
+            onClick={() => { setMenuOpen(false); setLogoutConfirmOpen(true); }}
             className="btn btn-ghost btn-block mt-4"
           >
             <IconLogout />
@@ -248,6 +252,15 @@ export default function SuperAdminShell({
       >
         <IconArrowUp className="h-4 w-4" />
       </button>
+
+      <LogoutConfirmModal
+        open={logoutConfirmOpen}
+        onClose={() => setLogoutConfirmOpen(false)}
+        onConfirm={() => {
+          setLogoutConfirmOpen(false);
+          onLogout?.();
+        }}
+      />
     </div>
   );
 }

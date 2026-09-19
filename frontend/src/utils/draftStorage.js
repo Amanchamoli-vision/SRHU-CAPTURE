@@ -55,6 +55,7 @@ export function saveTeacherDraft(userId, draftData) {
     teacher_id: userId,
     event_name: draftData.eventName?.trim() || draftData.event_name?.trim() || "Untitled Draft",
     event_date: draftData.eventDate || draftData.event_date || "",
+    end_date: draftData.endDate || draftData.end_date || "",
     event_type: draftData.eventType || draftData.event_type || "",
     location: draftData.location?.trim() || "",
     start_time: draftData.startTime || draftData.start_time || "",

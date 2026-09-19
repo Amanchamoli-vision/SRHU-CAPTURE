@@ -5,7 +5,6 @@ import { fetchCurrentUser, signOut } from "../../services/auth";
 import { canTeacherEditEvent } from "../../utils/constants";
 import {
   compareHHmm,
-  formatTime12h,
   localDateKey,
   nowHHmm,
 } from "../../utils/dates";
@@ -16,22 +15,22 @@ import {
   encodeEventMetadata,
 } from "../../utils/draftStorage";
 import { readEventFields } from "../../utils/eventFields";
-import { normalizePhoneInput } from "../../utils/phone";
 import {
+  DEFAULT_UPLOAD_LIMITS,
   DOC_ACCEPT,
   IMAGE_ACCEPT,
   MAX_DOC_TOTAL,
-  MAX_IMAGE_COUNT,
-  MAX_IMAGE_SIZE,
-  MAX_VIDEO_TOTAL,
   formatMb,
   usedBytes,
   validatePick,
 } from "../../utils/uploadRules";
+import { fetchUploadLimits } from "../../services/settings";
 import { checkUploadNames } from "../../services/directory";
 import Combobox from "../../components/common/Combobox";
 import EventSummary from "../../components/common/EventSummary";
 import EventTypeSelect from "../../components/common/EventTypeSelect";
+import TimePicker12h from "../../components/common/TimePicker12h";
+import { normalizePhoneInput } from "../../utils/phone";
 import useEventTypes from "../../hooks/useEventTypes";
 import {
   createFacultyCoordinator,
@@ -67,7 +66,8 @@ const STEPS = [
 
 const REQUIRED_DETAILS = [
   ["eventName", "Please enter the event name."],
-  ["eventDate", "Please select the event date."],
+  ["eventDate", "Please select the event start date."],
+  ["endDate", "Please select the event end date."],
   ["eventType", "Please select the event type."],
   ["startTime", "Please specify the event start time."],
   ["endTime", "Please specify the event end time."],
@@ -82,8 +82,7 @@ let uploadKeySeed = 0;
 const EMPTY_FORM = {
   eventName: "",
   eventDate: "",
-  // Blank means the event starts and ends on eventDate. Set only when the
-  // teacher picks "Another day".
+  // Default matches eventDate for same-day events.
   endDate: "",
   eventType: "",
   // Only used when eventType is "Other" (PRD 4).
@@ -137,11 +136,9 @@ function detailsErrorsOf(data) {
     errors.startTime = "The start time has already passed today.";
   }
 
-  // A multi-day event must actually end on a later day.
+  // End date must be on or after start date.
   if (endDate && eventDate && endDate < eventDate) {
     errors.endDate = "The end date must be on or after the start date.";
-  } else if (endDate && endDate === eventDate) {
-    errors.endDate = "Pick a later date, or choose \u201cSame day\u201d.";
   }
 
   // The time order only constrains a single-day event: an event running from
@@ -254,6 +251,19 @@ function CreateEvent() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmError, setConfirmError] = useState("");
   const [submitted, setSubmitted] = useState(null); // the saved event
+  const [uploadLimits, setUploadLimits] = useState(DEFAULT_UPLOAD_LIMITS);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchUploadLimits().then((limits) => {
+      if (mounted && limits) {
+        setUploadLimits(limits);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // The event id is also held in a ref: several files picked at once each need
   // it, and React state would still be null for all of them.
@@ -292,6 +302,7 @@ function CreateEvent() {
   };
 
   // Running totals for the budget meters (PRD 9 / 11).
+  const photoBytesUsed = usedBytes(photos, photoUploads);
   const videoBytesUsed = usedBytes(videos, videoUploads);
   const documentBytesUsed = usedBytes(documentItems, documentUploads);
 
@@ -332,7 +343,7 @@ function CreateEvent() {
             const loaded = {
               eventName: draft.event_name || "",
               eventDate: draft.event_date || "",
-              endDate: draft.end_date || "",
+              endDate: draft.end_date || draft.event_date || "",
               eventType: draft.event_type || "",
               eventTypeOther: "",
               startTime: draft.start_time || "",
@@ -379,7 +390,7 @@ function CreateEvent() {
               const loaded = {
                 eventName: event.event_name || "",
                 eventDate: event.event_date || "",
-                endDate: event.end_date || "",
+                endDate: event.end_date || event.event_date || "",
                 eventType: event.event_type || "",
                 eventTypeOther: "",
                 startTime: fields.startTime,
@@ -388,12 +399,14 @@ function CreateEvent() {
                 department: fields.department,
                 organizer: fields.organizer,
                 expectedParticipants: fields.expectedParticipants,
-                contactInfo: fields.contactInfo,
+                contactInfo: fields.contactInfo || "",
                 description: fields.description,
                 socialNetworkUrl: event.social_network_url || "",
               };
               setFormData(loaded);
               setSavedSnapshot(snapshotOf(loaded));
+              autoFilledContactRef.current = fields.contactInfo || "";
+              contactTouchedRef.current = false;
 
               // Everything is already filled in, so every step is reachable.
               setMaxStepReached(STEPS.length);
@@ -438,6 +451,27 @@ function CreateEvent() {
   const setField = (name, value) => {
     setFormData((prev) => ({ ...prev, [name]: value }));
     clearFieldError(name);
+  };
+
+  /** Start date change: auto-syncs End Date for the common same-day event case. */
+  const handleStartDateChange = (e) => {
+    const newStartDate = e.target.value;
+    setFormData((prev) => {
+      const updated = { ...prev, eventDate: newStartDate };
+      if (!prev.endDate || prev.endDate === prev.eventDate) {
+        updated.endDate = newStartDate;
+      }
+      return updated;
+    });
+    clearFieldError("eventDate");
+    setFieldErrors((prev) => {
+      if (!prev.endDate) return prev;
+      const next = { ...prev };
+      if (!newStartDate || formData.endDate >= newStartDate) {
+        delete next.endDate;
+      }
+      return next;
+    });
   };
 
   // --------------------------------------------------
@@ -524,8 +558,8 @@ function CreateEvent() {
     return {
       event_name: data.eventName.trim(),
       event_date: data.eventDate,
-      // Blank means same day; the server stores null for both.
-      end_date: data.endDate || null,
+      // Blank or matching start date means same day; the server stores null for both.
+      end_date: data.endDate && data.endDate !== data.eventDate ? data.endDate : null,
       // "Other" stores what the teacher typed, so the event carries a real
       // category rather than the literal word "Other".
       event_type:
@@ -750,6 +784,7 @@ function CreateEvent() {
       savedItems: saved,
       pendingUploads: pending,
       existingNames,
+      limits: uploadLimits,
     });
 
     setError(rejections.join(" "));
@@ -1171,9 +1206,9 @@ function CreateEvent() {
                 </>
               )}
               {step === 2 &&
-                `Optional. Posters, banners and photographs — up to ${MAX_IMAGE_COUNT} images, ${formatMb(MAX_IMAGE_SIZE)} each.`}
+                `Optional. Posters, banners and photographs — up to ${uploadLimits.max_photos_per_event} images, ${formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each${uploadLimits.max_photo_total_mb ? ` (${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total)` : ""}.`}
               {step === 3 &&
-                `Optional. Teasers and recordings — ${formatMb(MAX_VIDEO_TOTAL)} in total, across any number of videos.`}
+                `Optional. Teasers and recordings — ${formatMb(uploadLimits.max_video_total_mb * 1024 * 1024)} in total${uploadLimits.max_videos_per_event ? `, up to ${uploadLimits.max_videos_per_event} videos` : ", across any number of videos"}.`}
               {step === 4 &&
                 `Optional. PDF, Word, Excel or presentation files — ${formatMb(MAX_DOC_TOTAL)} in total.`}
             </p>
@@ -1181,7 +1216,7 @@ function CreateEvent() {
 
           {/* ------------------------------------------------ step 1: details */}
           {step === 1 && (
-            <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 py-5 sm:gap-x-5 sm:px-6 lg:grid-cols-3">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-4 py-5 sm:gap-x-5 sm:px-6">
 
               <div className="field col-span-2">
                 <label htmlFor="eventName">
@@ -1201,7 +1236,7 @@ function CreateEvent() {
                 {fieldErrors.eventName && <p className="field-error">{fieldErrors.eventName}</p>}
               </div>
 
-              <div className="field">
+              <div className="field col-span-2">
                 <EventTypeSelect
                   value={formData.eventType}
                   customValue={formData.eventTypeOther}
@@ -1216,127 +1251,69 @@ function CreateEvent() {
                 />
               </div>
 
-              <div className="field">
+              <div className="field col-span-2 md:col-span-1">
                 <label htmlFor="eventDate">
-                  Event Date<span className="req">*</span>
+                  Event Start Date<span className="req">*</span>
                 </label>
                 <input
                   id="eventDate"
                   name="eventDate"
                   type="date"
                   value={formData.eventDate}
-                  onChange={handleChange}
+                  onChange={handleStartDateChange}
                   disabled={busy}
                   min={localDateKey()}
                   aria-invalid={fieldErrors.eventDate ? "true" : undefined}
                   className="input min-h-10 py-2"
                 />
                 {fieldErrors.eventDate && <p className="field-error">{fieldErrors.eventDate}</p>}
-
-                {/* Most events are one day, so that is the default and the
-                    second date only appears when it is actually needed. */}
-                <fieldset className="mt-2">
-                  <legend className="sr-only">Does the event end on the same day?</legend>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                    {[
-                      { key: "same", label: "Same day" },
-                      { key: "other", label: "Another day" },
-                    ].map((option) => (
-                      <label
-                        key={option.key}
-                        className="flex cursor-pointer items-center gap-1.5 text-xs text-muted"
-                      >
-                        <input
-                          type="radio"
-                          name="eventSpan"
-                          value={option.key}
-                          checked={
-                            option.key === "other"
-                              ? Boolean(formData.endDate)
-                              : !formData.endDate
-                          }
-                          onChange={() =>
-                            setField(
-                              "endDate",
-                              // Seed the day after the start, so the common
-                              // two-day case needs no further typing.
-                              option.key === "other"
-                                ? nextDayOf(formData.eventDate)
-                                : "",
-                            )
-                          }
-                          disabled={busy}
-                        />
-                        {option.label}
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-
-                {formData.endDate && (
-                  <div className="mt-2">
-                    <label htmlFor="endDate" className="text-xs font-medium text-muted">
-                      Ends on<span className="req">*</span>
-                    </label>
-                    <input
-                      id="endDate"
-                      name="endDate"
-                      type="date"
-                      value={formData.endDate}
-                      onChange={handleChange}
-                      disabled={busy}
-                      min={formData.eventDate || localDateKey()}
-                      aria-invalid={fieldErrors.endDate ? "true" : undefined}
-                      className="input mt-1 min-h-10 py-2"
-                    />
-                    {fieldErrors.endDate ? (
-                      <p className="field-error">{fieldErrors.endDate}</p>
-                    ) : (
-                      <p className="prose-muted text-xs">
-                        The end time below is the time on this day.
-                      </p>
-                    )}
-                  </div>
-                )}
               </div>
 
-              <div className="field">
+              <div className="field col-span-2 md:col-span-1">
                 <label htmlFor="startTime">
-                  Start Time<span className="req">*</span>
+                  Event Start Time<span className="req">*</span>
                 </label>
-                <input
+                <TimePicker12h
                   id="startTime"
-                  name="startTime"
-                  type="time"
                   value={formData.startTime}
-                  onChange={handleChange}
+                  onChange={(val) => setField("startTime", val)}
                   disabled={busy}
-                  aria-invalid={fieldErrors.startTime ? "true" : undefined}
-                  className="input min-h-10 py-2"
+                  hasError={Boolean(fieldErrors.startTime)}
+                  ariaLabel="Event Start Time"
                 />
-                {formData.startTime && !fieldErrors.startTime && (
-                  <p className="prose-muted text-xs">{formatTime12h(formData.startTime)}</p>
-                )}
                 {fieldErrors.startTime && <p className="field-error">{fieldErrors.startTime}</p>}
               </div>
 
-              <div className="field">
-                <label htmlFor="endTime">
-                  End Time<span className="req">*</span>
+              <div className="field col-span-2 md:col-span-1">
+                <label htmlFor="endDate">
+                  Event End Date<span className="req">*</span>
                 </label>
                 <input
-                  id="endTime"
-                  name="endTime"
-                  type="time"
-                  value={formData.endTime}
+                  id="endDate"
+                  name="endDate"
+                  type="date"
+                  value={formData.endDate}
                   onChange={handleChange}
                   disabled={busy}
-                  aria-invalid={fieldErrors.endTime ? "true" : undefined}
+                  min={formData.eventDate || localDateKey()}
+                  aria-invalid={fieldErrors.endDate ? "true" : undefined}
                   className="input min-h-10 py-2"
                 />
-                {formData.endTime && !fieldErrors.endTime && (
-                  <p className="prose-muted text-xs">{formatTime12h(formData.endTime)}</p>
-                )}
+                {fieldErrors.endDate && <p className="field-error">{fieldErrors.endDate}</p>}
+              </div>
+
+              <div className="field col-span-2 md:col-span-1">
+                <label htmlFor="endTime">
+                  Event End Time<span className="req">*</span>
+                </label>
+                <TimePicker12h
+                  id="endTime"
+                  value={formData.endTime}
+                  onChange={(val) => setField("endTime", val)}
+                  disabled={busy}
+                  hasError={Boolean(fieldErrors.endTime)}
+                  ariaLabel="Event End Time"
+                />
                 {fieldErrors.endTime && <p className="field-error">{fieldErrors.endTime}</p>}
               </div>
 
@@ -1517,8 +1494,14 @@ function CreateEvent() {
                 accept={IMAGE_ACCEPT}
                 items={photos}
                 uploads={photoUploads}
-                max={MAX_IMAGE_COUNT}
-                maxSizeLabel={`JPG, PNG, WebP or GIF up to ${formatMb(MAX_IMAGE_SIZE)} each`}
+                max={uploadLimits.max_photos_per_event}
+                totalLimitBytes={
+                  uploadLimits.max_photo_total_mb
+                    ? uploadLimits.max_photo_total_mb * 1024 * 1024
+                    : null
+                }
+                usedBytes={photoBytesUsed}
+                maxSizeLabel={`JPG, PNG, WebP or GIF up to ${formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each${uploadLimits.max_photo_total_mb ? ` · ${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total` : ""}`}
                 emptyLabel="Drag photos here"
                 hint="Posters, banners, and photographs of the event."
                 disabled={busy}
@@ -1539,9 +1522,10 @@ function CreateEvent() {
                 accept="video/*"
                 items={videos}
                 uploads={videoUploads}
-                totalLimitBytes={MAX_VIDEO_TOTAL}
+                max={uploadLimits.max_videos_per_event}
+                totalLimitBytes={uploadLimits.max_video_total_mb * 1024 * 1024}
                 usedBytes={videoBytesUsed}
-                maxSizeLabel={`MP4, WebM or MOV · ${formatMb(MAX_VIDEO_TOTAL)} total, any number of files`}
+                maxSizeLabel={`MP4, WebM or MOV · ${formatMb(uploadLimits.max_video_total_mb * 1024 * 1024)} total${uploadLimits.max_videos_per_event ? `, up to ${uploadLimits.max_videos_per_event} files` : ", any number of files"}${uploadLimits.max_video_size_mb ? ` (${formatMb(uploadLimits.max_video_size_mb * 1024 * 1024)} per file)` : ""}`}
                 emptyLabel="Drag videos here"
                 hint="Teasers, highlights, or a recording of the event."
                 disabled={busy}
