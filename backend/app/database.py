@@ -61,6 +61,10 @@ event_types = db["event_types"]
 faculty_coordinators = db["faculty_coordinators"]
 # Super Admin configurable upload limits
 upload_config = db["upload_config"]
+# Audit logs for sensitive system/admin actions
+audit_logs = db["audit_logs"]
+# Master registry for academic departments
+departments = db["departments"]
 
 # Uploaded file bytes are stored in GridFS so that MongoDB remains the single
 # store for the application, including media and documents.
@@ -181,6 +185,15 @@ def ensure_indexes() -> None:
         unique=True,
         name="name_unique",
     )
+
+    audit_logs.create_index([("created_at", DESCENDING)], name="created_at")
+    audit_logs.create_index([("action", ASCENDING)], name="action")
+    audit_logs.create_index([("actor_id", ASCENDING)], name="actor")
+    audit_logs.create_index([("target_id", ASCENDING)], name="target")
+
+    departments.create_index([("name", ASCENDING)], unique=True, name="name_unique")
+    departments.create_index([("code", ASCENDING)], unique=True, name="code_unique", sparse=True)
+    departments.create_index([("is_active", ASCENDING)], name="is_active")
 
     # Imported here rather than at module scope: the service imports this
     # module for its collection handle, so a top-level import would cycle.

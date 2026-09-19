@@ -124,6 +124,7 @@ def new_user_document(
     must_change_password: bool = False,
     phone: str | None = None,
     department: str | None = None,
+    is_active: bool = True,
 ) -> dict[str, Any]:
     now = utc_now()
     return {
@@ -135,6 +136,7 @@ def new_user_document(
         # into the faculty-coordinator directory teachers pick from (PRD 5).
         "phone": phone,
         "department": department,
+        "is_active": is_active,
         "email_verified": email_verified,
         "email_verified_at": now if email_verified else None,
         "must_change_password": must_change_password,
@@ -144,6 +146,46 @@ def new_user_document(
         "reset_token_hash": None,
         "reset_expires_at": None,
         "last_sign_in_at": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def new_audit_log_document(
+    *,
+    actor_id: str,
+    actor_name: str,
+    actor_email: str,
+    action: str,
+    target_type: str,
+    target_id: str | None = None,
+    details: dict | None = None,
+) -> dict[str, Any]:
+    return {
+        "actor_id": str(actor_id),
+        "actor_name": actor_name,
+        "actor_email": actor_email,
+        "action": action,
+        "target_type": target_type,
+        "target_id": str(target_id) if target_id else None,
+        "details": details or {},
+        "created_at": utc_now(),
+    }
+
+
+def new_department_document(
+    *,
+    name: str,
+    code: str,
+    school: str | None = None,
+    is_active: bool = True,
+) -> dict[str, Any]:
+    now = utc_now()
+    return {
+        "name": name.strip(),
+        "code": code.strip().upper(),
+        "school": school.strip() if school else None,
+        "is_active": is_active,
         "created_at": now,
         "updated_at": now,
     }

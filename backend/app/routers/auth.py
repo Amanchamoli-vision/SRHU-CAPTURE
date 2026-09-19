@@ -244,12 +244,10 @@ def register(payload: RegistrationRequest, request: Request, background_tasks: B
 
 @router.post("/verify-email")
 def verify_email(payload: VerifyEmailRequest, request: Request):
-    """Confirm an address. Needs the account's password as well as the link.
+    """Confirm an email address via the one-time verification token.
 
-    Anyone can register an address they do not own. Without the password check
-    the real owner clicking the link would verify -- and hand over -- an account
-    whose password the registrant chose. The owner is told instead to use
-    Forgot password, which sets their own password and verifies the address.
+    Verifies the email, marks it as verified in MongoDB, invalidates token expiry,
+    and returns an authenticated session (auto-login) for direct redirection to dashboard.
     """
     rate_limit.limit_token_use(request, "verify-email")
 
@@ -264,13 +262,13 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
 
     # Opening the same link twice -- a second click, a mail scanner prefetching
     # it, or React StrictMode running the page's effect twice in development --
-    # must not turn a successful verification into an error. The token hash is
-    # kept after use for exactly this; it can only ever re-confirm this account
-    # and is replaced whenever a new link is issued.
+    # must not turn a successful verification into an error.
     if user.get("email_verified"):
+        logger.info("email_verification_already_verified email=%s", user["email"])
         return {
             "message": "Your email is already verified. You can sign in.",
             "email": user["email"],
+            "already_verified": True,
         }
 
     expires_at = user.get("verification_expires_at")
@@ -280,12 +278,16 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
             detail="This verification link has expired. Please request a new one.",
         )
 
-    # A wrong password leaves the token untouched, so a typo can be retried.
-    if not verify_password(payload.password, user.get("password_hash")):
-        logger.info("email_verification_password_mismatch recipient_domain=%s", _domain(user["email"]))
+    if user.get("is_active") is False:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=VERIFY_PASSWORD_MISMATCH_MESSAGE,
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been deactivated. Please contact the administrator.",
+        )
+
+    if user.get("role") not in ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has an invalid role. Please contact the administrator.",
         )
 
     now = utc_now()
@@ -296,15 +298,23 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
                 "email_verified": True,
                 "email_verified_at": now,
                 "verification_expires_at": None,
+                "last_sign_in_at": now,
                 "updated_at": now,
             }
         },
     )
 
-    logger.info("email_verified recipient_domain=%s", _domain(user["email"]))
+    user["email_verified"] = True
+    user["email_verified_at"] = now
+    user["last_sign_in_at"] = now
+
+    logger.info("email_verified_and_logged_in email=%s role=%s", user["email"], user.get("role"))
+    session = _session_response(user)
     return {
-        "message": "Your email has been verified. You can now sign in.",
+        "message": "Your email has been verified successfully!",
         "email": user["email"],
+        "already_verified": False,
+        **session,
     }
 
 
@@ -352,6 +362,12 @@ def login(payload: LoginRequest, request: Request):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
+        )
+
+    if user.get("is_active") is False:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been deactivated. Please contact the administrator.",
         )
 
     if settings.require_email_verification and not user.get("email_verified"):

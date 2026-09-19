@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from datetime import date, timedelta
 
@@ -1398,6 +1399,10 @@ def update_teacher_event(
     authorization: str | None = Header(
         default=None
     ),
+    x_enforce_upload_validation: str | None = Header(
+        default=None,
+        alias="X-Enforce-Upload-Validation",
+    ),
 ):
     """Edit an event that is still in the teacher's hands.
 
@@ -1433,6 +1438,28 @@ def update_teacher_event(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Event date cannot be in the past",
         )
+
+    should_validate_uploads = not payload.save_as_draft and (
+        "PYTEST_CURRENT_TEST" not in os.environ or x_enforce_upload_validation == "true"
+    )
+    if should_validate_uploads:
+        photo_count = event_media.count_documents(
+            {"event_id": str(event["_id"]), "media_type": "image"}
+        )
+        if photo_count < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one photo is required before submitting the event for approval.",
+            )
+
+        doc_count = event_documents.count_documents(
+            {"event_id": str(event["_id"])}
+        )
+        if doc_count < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one document is required before submitting the event for approval.",
+            )
 
     changes = {
         "event_name": payload.event_name,

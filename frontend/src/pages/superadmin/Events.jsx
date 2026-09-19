@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { apiJson } from "../../services/api";
+import { apiFetch, apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
@@ -149,6 +149,35 @@ export default function SuperAdminEvents() {
     loadEvents();
   }, [loadEvents]);
 
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportCsv = async () => {
+    try {
+      setExporting(true);
+      setError("");
+      const params = new URLSearchParams();
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (urlQ) params.set("q", urlQ);
+
+      const res = await apiFetch(`/superadmin/events/export?${params}`);
+      if (!res.ok) throw new Error("Failed to export events");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `events_naac_nirf_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error("Export CSV error:", err);
+      setError("Failed to export accreditation CSV.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handleLogout = async () => {
     await signOut();
     navigate("/login");
@@ -170,10 +199,22 @@ export default function SuperAdminEvents() {
           accent="Events"
           subtitle="Every event submitted across campus, with the photos, videos and documents attached to it."
           actions={
-            <button type="button" onClick={loadEvents} disabled={loading} className="btn btn-ghost">
-              {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
-              Refresh
-            </button>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button type="button" onClick={loadEvents} disabled={loading} className="btn btn-ghost">
+                {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
+                Refresh
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                disabled={exporting}
+                className="btn btn-primary"
+                title="Download full CSV dump for NAAC/NIRF accreditation"
+              >
+                {exporting ? <span className="spin h-4 w-4" /> : null}
+                Export (NAAC / NIRF)
+              </button>
+            </div>
           }
         />
 

@@ -287,6 +287,33 @@ def send_dean_credentials_email(to_email: str, name: str, temporary_password: st
     send_email(to_email, subject, text, html)
 
 
+def send_teacher_credentials_email(to_email: str, name: str, temporary_password: str) -> None:
+    url = settings.login_url
+    subject = "Your Campus Capture Teacher account credentials"
+    text = (
+        f"Hello {name},\n\n"
+        "A Teacher account has been created for you on Campus Capture SRHU.\n\n"
+        f"Email (Username): {to_email}\n"
+        f"Temporary password: {temporary_password}\n\n"
+        f"Sign in here: {url}\n\n"
+        "Please log in and change your password on first login.\n"
+    )
+    html = _layout(
+        "Your Teacher account is ready",
+        f"<p>Hello {escape(name)},</p>"
+        "<p>A Teacher account has been created for you on Campus Capture SRHU.</p>"
+        "<table style=\"font-size:14px;border-collapse:collapse;\">"
+        f"<tr><td style=\"padding:4px 12px 4px 0;color:#64748b;\">Email (Username)</td><td><strong>{escape(to_email)}</strong></td></tr>"
+        "<tr><td style=\"padding:4px 12px 4px 0;color:#64748b;\">Temporary password</td>"
+        f"<td><code style=\"background:#f1f5f9;padding:2px 6px;border-radius:6px;font-weight:bold;\">{escape(temporary_password)}</code></td></tr>"
+        "</table>"
+        + _button(url, "Sign in to Portal")
+        + "<p style=\"font-size:13px;color:#64748b;\"><strong>Important:</strong> Please log in and change your password on first login.</p>",
+    )
+    send_email(to_email, subject, text, html)
+
+
+
 def send_event_status_email(
     to_email: str,
     name: str,

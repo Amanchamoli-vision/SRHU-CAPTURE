@@ -47,9 +47,7 @@ class LoginRequest(BaseModel):
 
 class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=10, max_length=256)
-    # The account's password, proving the person confirming the address is
-    # the person who registered it (see /auth/verify-email).
-    password: str = Field(min_length=1, max_length=128)
+    password: str | None = Field(default=None, max_length=128)
 
 
 class ResendVerificationRequest(BaseModel):

@@ -5,7 +5,9 @@ import srhuLogo from "../../assets/srhu-logo-dark.png";
 import useThemeToggle from "../theme/useThemeToggle";
 import LogoutConfirmModal from "../common/LogoutConfirmModal";
 import {
+  IconActivity,
   IconArrowUp,
+  IconBuilding,
   IconCalendar,
   IconGrid,
   IconLogout,
@@ -24,6 +26,8 @@ const NAV = [
   { key: "dashboard", to: "/superadmin/dashboard", label: "Dashboard", Icon: IconGrid },
   { key: "events", to: "/superadmin/events", label: "Events", Icon: IconCalendar },
   { key: "users", to: "/superadmin/users", label: "User Management", short: "Users", Icon: IconUsers },
+  { key: "departments", to: "/superadmin/departments", label: "Departments", Icon: IconBuilding },
+  { key: "audit-logs", to: "/superadmin/audit-logs", label: "Audit Logs", Icon: IconActivity },
   { key: "create-dean", to: "/superadmin/create-dean", label: "Create Dean", Icon: IconUserPlus },
   { key: "settings", to: "/superadmin/settings", label: "Settings", Icon: IconSettings },
 ];

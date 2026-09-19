@@ -49,3 +49,102 @@ class UploadLimitsUpdateRequest(BaseModel):
             )
         return self
 
+
+class UpdateUserProfileRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    phone: str | None = Field(default=None, max_length=24)
+    department: str | None = Field(default=None, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Name must not be empty")
+        return normalized
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone_field(cls, value: str | None) -> str | None:
+        from app.schemas.common import normalize_phone
+        return normalize_phone(value)
+
+
+class ResetUserPasswordRequest(BaseModel):
+    new_password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class CreateDepartmentRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    code: str = Field(min_length=1, max_length=20)
+    school: str | None = Field(default=None, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Department name must not be empty")
+        return normalized
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Department code must not be empty")
+        return normalized
+
+
+class UpdateDepartmentRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    code: str | None = Field(default=None, min_length=1, max_length=20)
+    school: str | None = Field(default=None, max_length=120)
+    is_active: bool | None = Field(default=None)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Department name must not be empty")
+        return normalized
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("Department code must not be empty")
+        return normalized
+
+
+class BulkOnboardTeacherItem(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    department: str | None = Field(default=None, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Name must not be empty")
+        return normalized
+
+
+class BulkOnboardTeachersRequest(BaseModel):
+    teachers: list[BulkOnboardTeacherItem] = Field(min_length=1, max_length=500)
+    send_email: bool = Field(default=True)
+
+
+class SendCredentialsRequest(BaseModel):
+    user_ids: list[str] = Field(min_length=1, max_length=500)
+
+

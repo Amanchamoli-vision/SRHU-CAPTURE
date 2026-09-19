@@ -5,6 +5,8 @@ import srhuLogo from "../../assets/srhu-logo-dark.png";
 import NotificationBell from "../NotificationBell";
 import useThemeToggle from "../theme/useThemeToggle";
 import LogoutConfirmModal from "../common/LogoutConfirmModal";
+import FirstLoginPasswordModal from "../common/FirstLoginPasswordModal";
+import { useAuth } from "../../context/AuthContext";
 import {
   IconArrowUp,
   IconGrid,
@@ -47,6 +49,7 @@ export default function TeacherShell({
   children,
 }) {
   const [dark, toggleTheme] = useThemeToggle();
+  const { user } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -308,6 +311,10 @@ export default function TeacherShell({
           onLogout?.();
         }}
       />
+
+      {user?.role === "teacher" && user?.must_change_password === true && (
+        <FirstLoginPasswordModal isOpen={true} />
+      )}
     </div>
   );
 }

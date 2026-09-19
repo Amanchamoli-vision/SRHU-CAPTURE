@@ -56,12 +56,11 @@ import {
   IconLayers,
 } from "../../components/teacher/icons";
 
-// Photos and videos are separate steps, so each carries its own cap.
 const STEPS = [
-  { key: "details", label: "Details", Icon: IconLayers },
-  { key: "photos", label: "Photos", Icon: IconImagePlus },
-  { key: "videos", label: "Videos", Icon: IconFilm },
-  { key: "documents", label: "Documents", Icon: IconFilePlus },
+  { key: "details", label: "Details", Icon: IconLayers, required: true },
+  { key: "photos", label: "Photos", Icon: IconImagePlus, required: true },
+  { key: "videos", label: "Videos", Icon: IconFilm, required: false },
+  { key: "documents", label: "Documents", Icon: IconFilePlus, required: true },
 ];
 
 const REQUIRED_DETAILS = [
@@ -193,6 +192,7 @@ function CreateEvent() {
   const [autoSave, setAutoSave] = useState("idle"); // idle | saving | error
 
   const [fieldErrors, setFieldErrors] = useState({});
+  const [uploadErrors, setUploadErrors] = useState({ photos: false, documents: false });
 
   // Files live on the server from the moment they are picked, so these hold
   // saved records rather than browser File objects.
@@ -709,9 +709,15 @@ function CreateEvent() {
       if (signal?.aborted) return;
 
       if (entry.kind === "document") {
-        if (result?.document) setDocumentItems((prev) => [...prev, result.document]);
+        if (result?.document) {
+          setDocumentItems((prev) => [...prev, result.document]);
+          setUploadErrors((prev) => ({ ...prev, documents: false }));
+        }
       } else if (result?.media) {
         setMediaItems((prev) => [...prev, result.media]);
+        if (result.media.media_type === "image") {
+          setUploadErrors((prev) => ({ ...prev, photos: false }));
+        }
       }
 
       setUploads((prev) => prev.filter((item) => item.key !== entry.key));
@@ -975,6 +981,35 @@ function CreateEvent() {
       return;
     }
 
+    const missingPhotos = photos.length === 0;
+    const missingDocs = documentItems.length === 0;
+
+    if (missingPhotos || missingDocs) {
+      setUploadErrors({
+        photos: missingPhotos,
+        documents: missingDocs,
+      });
+
+      if (missingPhotos && missingDocs) {
+        setError(
+          "Photo and Document uploads are both mandatory. Please upload at least one photo and at least one document before submitting."
+        );
+        setStep(2);
+      } else if (missingPhotos) {
+        setError(
+          "Photo upload is mandatory. Please upload at least one photo before submitting."
+        );
+        setStep(2);
+      } else {
+        setError(
+          "Document upload is mandatory. Please upload at least one document before submitting."
+        );
+        setStep(4);
+      }
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
     setConfirmError("");
     setConfirmOpen(true);
   };
@@ -1178,6 +1213,7 @@ function CreateEvent() {
                       <i>{done ? <IconCheck className="h-3 w-3" /> : number}</i>
                       <span className={number === step ? "" : "hidden sm:inline"}>
                         {item.label}
+                        {item.required && <span className="req ml-0.5">*</span>}
                       </span>
                     </button>
                   </div>
@@ -1191,9 +1227,17 @@ function CreateEvent() {
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b hairline bg-line/2 px-4 py-2.5 sm:px-6">
             <h2 className="text-sm font-semibold text-ink">
               {step === 1 && "Event Information"}
-              {step === 2 && "Photos"}
-              {step === 3 && "Videos"}
-              {step === 4 && "Supporting Documents"}
+              {step === 2 && (
+                <>
+                  Photo Upload <span className="req">*</span>
+                </>
+              )}
+              {step === 3 && "Video Upload"}
+              {step === 4 && (
+                <>
+                  Document Upload <span className="req">*</span>
+                </>
+              )}
               <span className="ml-2 text-[11px] font-semibold uppercase tracking-wider text-accent">
                 Step {step} of {STEPS.length}
               </span>
@@ -1205,12 +1249,18 @@ function CreateEvent() {
                   required before the event can be submitted.
                 </>
               )}
-              {step === 2 &&
-                `Optional. Posters, banners and photographs — up to ${uploadLimits.max_photos_per_event} images, ${formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each${uploadLimits.max_photo_total_mb ? ` (${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total)` : ""}.`}
+              {step === 2 && (
+                <>
+                  <span className="font-semibold text-ink">Required.</span> Posters, banners and photographs — upload at least 1 photo, up to {uploadLimits.max_photos_per_event} images, {formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each{uploadLimits.max_photo_total_mb ? ` (${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total)` : ""}.
+                </>
+              )}
               {step === 3 &&
                 `Optional. Teasers and recordings — ${formatMb(uploadLimits.max_video_total_mb * 1024 * 1024)} in total${uploadLimits.max_videos_per_event ? `, up to ${uploadLimits.max_videos_per_event} videos` : ", across any number of videos"}.`}
-              {step === 4 &&
-                `Optional. PDF, Word, Excel or presentation files — ${formatMb(MAX_DOC_TOTAL)} in total.`}
+              {step === 4 && (
+                <>
+                  <span className="font-semibold text-ink">Required.</span> PDF, Word, Excel, PowerPoint, Text or CSV — upload at least 1 document up to {formatMb(MAX_DOC_TOTAL)} total.
+                </>
+              )}
             </p>
           </div>
 
@@ -1489,6 +1539,40 @@ function CreateEvent() {
           {/* ------------------------------------------------- step 2: photos */}
           {step === 2 && (
             <div className="px-4 py-5 sm:px-6">
+              {photos.length === 0 ? (
+                <div
+                  className={`mb-4 flex items-start gap-2.5 rounded-xl border p-3 text-xs ${
+                    uploadErrors.photos
+                      ? "border-err/30 bg-err/10 text-err"
+                      : "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                  }`}
+                >
+                  <IconAlertTriangle
+                    className={`mt-0.5 h-4 w-4 shrink-0 ${
+                      uploadErrors.photos ? "text-err" : "text-amber-600 dark:text-amber-400"
+                    }`}
+                  />
+                  <div>
+                    <span className="font-semibold">
+                      {uploadErrors.photos ? "Photo upload is required before submission:" : "Mandatory Upload:"}
+                    </span>{" "}
+                    <span>
+                      At least one photo (e.g. event poster, banner, or photograph) must be uploaded before submitting this event for approval.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="mb-4 flex items-center justify-between rounded-xl border border-ok/20 bg-ok/10 px-3.5 py-2 text-xs text-ok">
+                  <span className="flex items-center gap-2 font-medium">
+                    <IconCheckCircle className="h-4 w-4" />
+                    Photo requirement met ({photos.length} {photos.length === 1 ? "photo" : "photos"} uploaded)
+                  </span>
+                  <span className="text-[11px] text-muted">
+                    Up to {uploadLimits.max_photos_per_event} photos allowed
+                  </span>
+                </div>
+              )}
+
               <UploadPanel
                 kind="image"
                 accept={IMAGE_ACCEPT}
@@ -1505,6 +1589,7 @@ function CreateEvent() {
                 emptyLabel="Drag photos here"
                 hint="Posters, banners, and photographs of the event."
                 disabled={busy}
+                required={true}
                 onPick={(files) => handlePick(files, "image")}
                 onRemove={handleRemoveMedia}
                 onRetry={runUpload}
@@ -1517,6 +1602,17 @@ function CreateEvent() {
           {/* ------------------------------------------------- step 3: videos */}
           {step === 3 && (
             <div className="px-4 py-5 sm:px-6">
+              <div className="mb-4 flex items-center justify-between rounded-xl border hairline bg-raised/40 px-3.5 py-2 text-xs text-muted">
+                <span>
+                  Video upload is <strong className="font-semibold text-ink">optional</strong>. You may submit your event with or without video recordings.
+                </span>
+                {videos.length > 0 && (
+                  <span className="font-medium text-ink">
+                    {videos.length} {videos.length === 1 ? "video" : "videos"} attached
+                  </span>
+                )}
+              </div>
+
               <UploadPanel
                 kind="video"
                 accept="video/*"
@@ -1541,6 +1637,40 @@ function CreateEvent() {
           {/* ---------------------------------------------- step 4: documents */}
           {step === 4 && (
             <div className="px-4 py-5 sm:px-6">
+              {documentItems.length === 0 ? (
+                <div
+                  className={`mb-4 flex items-start gap-2.5 rounded-xl border p-3 text-xs ${
+                    uploadErrors.documents
+                      ? "border-err/30 bg-err/10 text-err"
+                      : "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                  }`}
+                >
+                  <IconAlertTriangle
+                    className={`mt-0.5 h-4 w-4 shrink-0 ${
+                      uploadErrors.documents ? "text-err" : "text-amber-600 dark:text-amber-400"
+                    }`}
+                  />
+                  <div>
+                    <span className="font-semibold">
+                      {uploadErrors.documents ? "Document upload is required before submission:" : "Mandatory Upload:"}
+                    </span>{" "}
+                    <span>
+                      At least one supporting document (e.g. event proposal, agenda, circular, or approval letter) must be uploaded before submitting this event for approval.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="mb-4 flex items-center justify-between rounded-xl border border-ok/20 bg-ok/10 px-3.5 py-2 text-xs text-ok">
+                  <span className="flex items-center gap-2 font-medium">
+                    <IconCheckCircle className="h-4 w-4" />
+                    Document requirement met ({documentItems.length} {documentItems.length === 1 ? "document" : "documents"} uploaded)
+                  </span>
+                  <span className="text-[11px] text-muted">
+                    Total: {formatMb(documentBytesUsed)} / {formatMb(MAX_DOC_TOTAL)}
+                  </span>
+                </div>
+              )}
+
               <UploadPanel
                 kind="document"
                 accept={DOC_ACCEPT}
@@ -1552,6 +1682,7 @@ function CreateEvent() {
                 emptyLabel="Drag documents here"
                 hint="Agenda, budget, invitation letter, or approval paperwork."
                 disabled={busy}
+                required={true}
                 onPick={(files) => handlePick(files, "document")}
                 onRemove={handleRemoveDocument}
                 onRetry={runUpload}

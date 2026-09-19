@@ -526,6 +526,19 @@ input::-ms-clear {
     gap: .35rem;
   }
 
+  .btn-icon {
+    width: 2rem;
+    height: 2rem;
+    min-height: 2rem;
+    min-width: 2rem;
+    padding: 0 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: .55rem;
+    flex-shrink: 0;
+  }
+
   .btn-block {
     width: 100%;
   }

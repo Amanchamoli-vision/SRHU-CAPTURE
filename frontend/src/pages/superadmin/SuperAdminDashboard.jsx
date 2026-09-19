@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import {
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from "recharts";
 import { apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
@@ -8,9 +23,12 @@ import PageHero from "../../components/teacher/PageHero";
 import { ROLE_TRACK } from "../../components/common/roles";
 import { trackOf } from "../../components/teacher/status";
 import {
+  IconActivity,
   IconAlertTriangle,
   IconArrowRight,
   IconAward,
+  IconBuilding,
+  IconCalendar,
   IconClock,
   IconRefresh,
   IconShield,
@@ -29,11 +47,28 @@ const EMPTY_STATS = {
 
 const ALL_USERS_TRACK = "#10B981"; // emerald: the whole directory, no single role
 
+const CATEGORY_PALETTE = [
+  "#0EA5E9",
+  "#8B5CF6",
+  "#10B981",
+  "#F59E0B",
+  "#EC4899",
+  "#6366F1",
+  "#14B8A6",
+  "#F97316",
+];
+
 function SuperAdminDashboard() {
   const navigate = useNavigate();
   const { profile, signOut } = useAuth();
 
   const [stats, setStats] = useState(EMPTY_STATS);
+  const [analytics, setAnalytics] = useState({
+    kpis: {},
+    monthly_trends: [],
+    category_distribution: [],
+    department_leaderboard: [],
+  });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -42,12 +77,14 @@ function SuperAdminDashboard() {
     try {
       if (silent) setRefreshing(true);
 
-      const data = await apiJson("/superadmin/dashboard/stats");
+      const [statsData, analyticsData] = await Promise.all([
+        apiJson("/superadmin/dashboard/stats"),
+        apiJson("/superadmin/dashboard/analytics").catch(() => null),
+      ]);
       setError("");
-      setStats({ ...EMPTY_STATS, ...data });
+      setStats({ ...EMPTY_STATS, ...statsData });
+      if (analyticsData) setAnalytics(analyticsData);
     } catch (err) {
-      // 401 means the token is gone or rejected even after a refresh; apiJson
-      // has already cleared the stored session by then.
       if (err?.status === 401) {
         navigate("/login");
         return;
@@ -121,16 +158,34 @@ function SuperAdminDashboard() {
       track: ROLE_TRACK.teacher,
       Icon: IconUsers,
       title: "User Management",
-      body: "Browse every registered account, promote a teacher to Dean, step a Dean back to teacher, or remove an account.",
+      body: "Directory of all accounts with soft-deactivation, profile edit overrides, and password resets.",
       cta: "Manage users",
+    },
+    {
+      key: "departments",
+      to: "/superadmin/departments",
+      track: "#8B5CF6",
+      Icon: IconBuilding,
+      title: "Department Registry",
+      body: "Canonical academic departments and schools used for event tagging and faculty affiliation.",
+      cta: "Manage departments",
+    },
+    {
+      key: "audit-logs",
+      to: "/superadmin/audit-logs",
+      track: "#F59E0B",
+      Icon: IconActivity,
+      title: "System Audit Logs",
+      body: "Immutable chronological trail of role changes, activations, overrides, and security events.",
+      cta: "View audit trail",
     },
     {
       key: "create-dean",
       to: "/superadmin/create-dean",
-      track: ROLE_TRACK.dean,
+      track: "#10B981",
       Icon: IconUserPlus,
       title: "Create Dean",
-      body: "Open a new Dean account for the university. A temporary password is generated for you to hand over securely.",
+      body: "Register a verified Dean account with a temporary password to oversee events.",
       cta: "Create a Dean",
     },
   ];
@@ -160,7 +215,7 @@ function SuperAdminDashboard() {
           eyebrow="Super Admin"
           title="Super Admin"
           accent="Console"
-          subtitle={`Welcome back, ${profile?.name || "Super Admin"}. Manage accounts, roles and Dean access for Campus Capture.`}
+          subtitle={`Welcome back, ${profile?.name || "Super Admin"}. Manage accounts, roles, departments and accreditation data for Campus Capture.`}
           actions={
             <>
               <button
@@ -203,8 +258,6 @@ function SuperAdminDashboard() {
         )}
 
         {/* ------------------------------------------------ summary cards */}
-        {/* The shared KPI card, identical on the Teacher and Dean
-            dashboards. */}
         <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {summaryCards.map((card, i) => (
             <StatCard
@@ -219,7 +272,6 @@ function SuperAdminDashboard() {
             />
           ))}
         </div>
-
 
         {/* -------------------------------- role share + management cards */}
         <div className="mt-6 grid gap-4 lg:grid-cols-5">
@@ -293,6 +345,161 @@ function SuperAdminDashboard() {
               </Link>
             ))}
           </div>
+        </div>
+
+        {/* -------------------------------- EXECUTIVE ANALYTICS CHARTS */}
+        <div className="mt-8 space-y-6">
+          <div>
+            <p className="eyebrow">Executive Analytics</p>
+            <h2 className="h2 text-ink">Campus Event Insights</h2>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            {/* Monthly Trend Chart */}
+            <section className="glass reveal p-6" style={{ "--i": 7 }}>
+              <div className="mb-4">
+                <h3 className="h3 text-ink">Monthly Event Volume</h3>
+                <p className="prose-muted text-xs">Submissions and approval status over time</p>
+              </div>
+
+              {analytics.monthly_trends?.length === 0 ? (
+                <div className="flex h-64 items-center justify-center text-sm text-muted">
+                  No monthly trend data recorded yet.
+                </div>
+              ) : (
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={analytics.monthly_trends}>
+                      <defs>
+                        <linearGradient id="colorApproved" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10B981" stopOpacity={0.4}/>
+                          <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                        </linearGradient>
+                        <linearGradient id="colorPending" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.4}/>
+                          <stop offset="95%" stopColor="#F59E0B" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+                      <XAxis dataKey="month" stroke="currentColor" className="text-xs text-muted" />
+                      <YAxis stroke="currentColor" className="text-xs text-muted" allowDecimals={false} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "rgba(15, 23, 42, 0.85)",
+                          border: "1px solid rgba(255, 255, 255, 0.1)",
+                          borderRadius: "12px",
+                          color: "#fff",
+                        }}
+                      />
+                      <Legend verticalAlign="top" height={36} />
+                      <Area
+                        type="monotone"
+                        dataKey="approved"
+                        name="Approved"
+                        stroke="#10B981"
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill="url(#colorApproved)"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="pending"
+                        name="Pending"
+                        stroke="#F59E0B"
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill="url(#colorPending)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </section>
+
+            {/* Category Distribution Donut */}
+            <section className="glass reveal p-6" style={{ "--i": 8 }}>
+              <div className="mb-4">
+                <h3 className="h3 text-ink">Category Distribution</h3>
+                <p className="prose-muted text-xs">Breakdown of event types across university</p>
+              </div>
+
+              {analytics.category_distribution?.length === 0 ? (
+                <div className="flex h-64 items-center justify-center text-sm text-muted">
+                  No category data recorded yet.
+                </div>
+              ) : (
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={analytics.category_distribution}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={55}
+                        outerRadius={85}
+                        paddingAngle={4}
+                        dataKey="value"
+                      >
+                        {analytics.category_distribution.map((entry, index) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={CATEGORY_PALETTE[index % CATEGORY_PALETTE.length]}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "rgba(15, 23, 42, 0.85)",
+                          border: "1px solid rgba(255, 255, 255, 0.1)",
+                          borderRadius: "12px",
+                          color: "#fff",
+                        }}
+                      />
+                      <Legend layout="horizontal" verticalAlign="bottom" align="center" />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* Department Leaderboard */}
+          {analytics.department_leaderboard?.length > 0 && (
+            <section className="glass reveal p-6" style={{ "--i": 9 }}>
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h3 className="h3 text-ink">Department Participation Leaderboard</h3>
+                  <p className="prose-muted text-xs">Event activity ranked by academic department</p>
+                </div>
+                <Link to="/superadmin/departments" className="btn btn-ghost btn-xs">
+                  View Departments
+                </Link>
+              </div>
+
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={analytics.department_leaderboard}
+                    layout="vertical"
+                    margin={{ top: 5, right: 30, left: 40, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+                    <XAxis type="number" stroke="currentColor" className="text-xs text-muted" allowDecimals={false} />
+                    <YAxis dataKey="department" type="category" stroke="currentColor" className="text-xs text-muted" width={120} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "rgba(15, 23, 42, 0.85)",
+                        border: "1px solid rgba(255, 255, 255, 0.1)",
+                        borderRadius: "12px",
+                        color: "#fff",
+                      }}
+                    />
+                    <Bar dataKey="events" name="Total Events" fill="#0EA5E9" radius={[0, 8, 8, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </SuperAdminShell>
