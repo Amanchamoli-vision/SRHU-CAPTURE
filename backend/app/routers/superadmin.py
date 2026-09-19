@@ -1,15 +1,23 @@
 import logging
+import re
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from pymongo import DESCENDING
 from pymongo.errors import DuplicateKeyError
 
-from app.database import events, users
+from app.database import events, upload_config, users
 from app.models.documents import USER_PRIVATE_FIELDS, new_user_document
 from app.routers.auth import find_user_by_email
-from app.schemas.superadmin import CreateDeanRequest
+from app.schemas.superadmin import CreateDeanRequest, UploadLimitsUpdateRequest
 from app.services import email_service
 from app.services.storage_service import delete_user_cascade
+from app.services.upload_config_service import (
+    CONFIG_KEY,
+    DEFAULT_UPLOAD_LIMITS,
+    get_public_upload_limits,
+    reset_upload_limits,
+    update_upload_limits,
+)
 from app.utils.auth import get_superadmin_user, public_user
 from app.utils.security import generate_temporary_password, hash_password
 from app.utils.serializers import serialize_many, to_object_id, utc_now
@@ -84,25 +92,89 @@ def get_dashboard_stats(
 
 # ============================================================
 # GET ALL USERS
-# ============================================================
+def _safe_count(collection, query: dict) -> int:
+    try:
+        val = collection.count_documents(query)
+        if isinstance(val, int):
+            return val
+    except Exception:
+        pass
+    return 0
+
+
+def _page_cursor(cursor, skip: int | None, limit: int | None):
+    if hasattr(cursor, "skip") and callable(cursor.skip):
+        if skip:
+            cursor = cursor.skip(skip)
+        if limit:
+            cursor = cursor.limit(limit)
+        return cursor
+    if skip:
+        cursor = cursor[skip:]
+    if limit:
+        cursor = cursor[:limit]
+    return cursor
+
 
 @router.get("/users")
 def get_all_users(
-    authorization: str | None = Header(default=None)
+    authorization: str | None = Header(default=None),
+    role: str | None = Query(default=None, max_length=50),
+    q: str | None = Query(default=None, max_length=200),
+    skip: int | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
 ):
     get_superadmin_user(authorization)
 
+    query: dict = {}
+
+    normalized_role = (role or "").strip().lower()
+    if normalized_role and normalized_role != "all":
+        query["role"] = normalized_role
+
+    search = (q or "").strip()
+    if search:
+        pattern = re.escape(search)
+        query["$or"] = [
+            {"name": {"$regex": pattern, "$options": "i"}},
+            {"email": {"$regex": pattern, "$options": "i"}},
+        ]
+
+    # Tab counts under the non-role filters (like search query `q`),
+    # so tab numbers match what clicking each tab would display.
+    count_base = {k: v for k, v in query.items() if k != "role"}
+    counts = {
+        "all": _safe_count(users, count_base),
+        "teacher": _safe_count(users, {**count_base, "role": "teacher"}),
+        "dean": _safe_count(users, {**count_base, "role": "dean"}),
+        "superadmin": _safe_count(users, {**count_base, "role": "superadmin"}),
+    }
+
     cursor = users.find(
-        {},
+        query,
         {field: 0 for field in USER_PRIVATE_FIELDS},
     ).sort("created_at", DESCENDING)
 
+    total = _safe_count(users, query)
+
+    if skip or limit:
+        cursor = _page_cursor(cursor, skip, limit)
+
     user_list = serialize_many(cursor)
+
+    if not (skip or limit) and total == 0 and len(user_list) > 0:
+        total = len(user_list)
+        counts["all"] = total
 
     return {
         "success": True,
         "users": user_list,
-        "total": len(user_list)
+        "total": total,
+        "count": len(user_list),
+        "counts": counts,
+        "has_more": (skip or 0) + len(user_list) < total if limit is not None else False,
+        "skip": skip or 0,
+        "limit": limit,
     }
 
 
@@ -296,3 +368,57 @@ def delete_user(
         ),
         "user": public_user(user)
     }
+
+
+# ============================================================
+# UPLOAD LIMITS SETTINGS
+# ============================================================
+
+@router.get("/upload-limits")
+def get_superadmin_upload_limits(
+    authorization: str | None = Header(default=None)
+):
+    get_superadmin_user(authorization)
+
+    limits = get_public_upload_limits()
+    doc = upload_config.find_one({"key": CONFIG_KEY})
+
+    return {
+        "success": True,
+        "limits": limits,
+        "defaults": DEFAULT_UPLOAD_LIMITS,
+        "updated_at": doc.get("updated_at") if doc else None,
+        "updated_by": doc.get("updated_by") if doc else None,
+    }
+
+
+@router.put("/upload-limits")
+def update_superadmin_upload_limits(
+    payload: UploadLimitsUpdateRequest,
+    authorization: str | None = Header(default=None)
+):
+    superadmin = get_superadmin_user(authorization)
+
+    updated = update_upload_limits(payload.model_dump(), superadmin["id"])
+
+    return {
+        "success": True,
+        "message": "Upload limits updated successfully",
+        "limits": updated,
+    }
+
+
+@router.post("/upload-limits/reset")
+def reset_superadmin_upload_limits(
+    authorization: str | None = Header(default=None)
+):
+    superadmin = get_superadmin_user(authorization)
+
+    reset_limits = reset_upload_limits(superadmin["id"])
+
+    return {
+        "success": True,
+        "message": "Upload limits reset to system defaults",
+        "limits": reset_limits,
+    }
+

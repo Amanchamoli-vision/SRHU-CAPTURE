@@ -123,6 +123,7 @@ def new_user_document(
     email_verified: bool = False,
     must_change_password: bool = False,
     phone: str | None = None,
+    department: str | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
     return {
@@ -133,6 +134,7 @@ def new_user_document(
         # A 10-digit mobile, or None. Opting in is what puts a member of staff
         # into the faculty-coordinator directory teachers pick from (PRD 5).
         "phone": phone,
+        "department": department,
         "email_verified": email_verified,
         "email_verified_at": now if email_verified else None,
         "must_change_password": must_change_password,

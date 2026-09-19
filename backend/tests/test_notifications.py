@@ -109,6 +109,18 @@ class FakeNotifications:
                 return MagicMock(matched_count=1)
         return MagicMock(matched_count=0)
 
+    def delete_one(self, query: dict):
+        for i, doc in enumerate(self.docs):
+            if self._matches(doc, query):
+                del self.docs[i]
+                return MagicMock(deleted_count=1)
+        return MagicMock(deleted_count=0)
+
+    def delete_many(self, query: dict):
+        initial_len = len(self.docs)
+        self.docs = [doc for doc in self.docs if not self._matches(doc, query)]
+        return MagicMock(deleted_count=initial_len - len(self.docs))
+
     def for_user(self, user_id: str) -> list[dict]:
         return [d for d in self.docs if d["user_id"] == user_id]
 
@@ -234,6 +246,39 @@ class NotificationRoutingTests(unittest.TestCase):
         self.assertFalse(any(n["is_read"] for n in self.notifications.for_user(DEAN_B_ID)))
         self.assertFalse(self.notifications.for_user(TEACHER_ID)[0]["is_read"])
 
+    def test_single_notification_delete(self) -> None:
+        self.submit()
+        dean_notes = self.notifications.for_user(DEAN_A_ID)
+        self.assertEqual(len(dean_notes), 1)
+        note_id = str(dean_notes[0]["_id"])
+
+        # Another user cannot delete it
+        stolen = self.client.delete(
+            f"/notifications/{note_id}", headers={"Authorization": "Bearer teacher"}
+        )
+        self.assertEqual(stolen.status_code, 404)
+
+        # Owner can delete it
+        response = self.client.delete(
+            f"/notifications/{note_id}", headers={"Authorization": "Bearer dean-a"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.notifications.for_user(DEAN_A_ID)), 0)
+        # Dean B's copy remains
+        self.assertEqual(len(self.notifications.for_user(DEAN_B_ID)), 1)
+
+    def test_clear_all_notifications(self) -> None:
+        self.submit()
+        self.assertEqual(len(self.notifications.for_user(DEAN_A_ID)), 1)
+        self.assertEqual(len(self.notifications.for_user(DEAN_B_ID)), 1)
+
+        response = self.client.delete(
+            "/notifications", headers={"Authorization": "Bearer dean-a"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.notifications.for_user(DEAN_A_ID)), 0)
+        # Dean B's copy still untouched
+        self.assertEqual(len(self.notifications.for_user(DEAN_B_ID)), 1)
 
     def test_editing_a_pending_event_does_not_renotify_deans(self) -> None:
         event_id = self.submit()

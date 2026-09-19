@@ -64,6 +64,10 @@ from app.services.storage_service import (
     save_upload,
     stream_upload,
 )
+from app.services.upload_config_service import (
+    get_public_upload_limits,
+    get_upload_limits,
+)
 from app.utils.auth import check_dean, check_event_viewer, get_current_user, require_role
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
@@ -1624,7 +1628,7 @@ def _ensure_under_cap(collection, cap_query: dict, cap: int | None, kind: str) -
 def _size_cap_error(cap_bytes: int, kind: str) -> HTTPException:
     """The over-limit message, worded as PRD 11 specifies for videos."""
     megabytes = cap_bytes // (1024 * 1024)
-    noun = {"video": "video", "document": "document"}.get(kind, "file")
+    noun = {"video": "video", "document": "document", "image": "photo"}.get(kind, "file")
     return HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=(
@@ -1773,6 +1777,16 @@ def get_teacher_event_media(
     }
 
 
+@router.get("/upload-limits")
+@router.get("/teacher/upload-limits")
+def get_active_upload_limits():
+    """Returns the current configurable upload limits for photos and videos."""
+    return {
+        "success": True,
+        "limits": get_public_upload_limits(),
+    }
+
+
 @router.post(
     "/teacher/events/{event_id}/media",
     status_code=status.HTTP_201_CREATED,
@@ -1796,12 +1810,14 @@ def upload_teacher_event_media(
     media_type = info["kind"]
     is_image = media_type == "image"
 
-    # Photos: at most N, each under its own size cap. Videos: no count limit,
-    # but one combined budget for the event (PRD 7 / 11).
-    cap = MAX_EVENT_PHOTOS if is_image else None
-    cap_bytes = None if is_image else settings.max_video_total_bytes
+    limits = get_upload_limits()
+
+    # Photos: at most N, each under its own size cap (and optional total budget).
+    # Videos: optional count cap, per-file size cap, and combined total budget.
+    cap = limits["max_photos_per_event"] if is_image else limits.get("max_videos_per_event")
+    cap_bytes = limits["max_photo_total_bytes"] if is_image else limits["max_video_total_bytes"]
     per_file_limit = (
-        settings.max_photo_size_bytes if is_image else settings.max_video_total_bytes
+        limits["max_photo_size_bytes"] if is_image else limits["max_video_size_bytes"]
     )
     cap_query = {"event_id": event_key, "media_type": media_type}
     _ensure_under_cap(event_media, cap_query, cap, media_type)
@@ -2196,3 +2212,67 @@ def mark_notification_read(
         "success": True,
         "message": "Notification marked as read",
     }
+
+
+@router.delete("/notifications/{notification_id}")
+@router.delete(
+    "/teacher/notifications/{notification_id}"
+)
+def delete_notification(
+    notification_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Delete a single notification owned by the caller."""
+    user = get_current_user(authorization)
+
+    object_id = to_object_id(notification_id)
+    if not object_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found"
+        )
+
+    result = notifications.delete_one(
+        {"_id": object_id, "user_id": user["id"]}
+    )
+
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found"
+        )
+
+    return {
+        "success": True,
+        "message": "Notification deleted",
+    }
+
+
+@router.delete("/notifications")
+@router.delete(
+    "/teacher/notifications"
+)
+@router.delete("/notifications/clear-all")
+@router.delete(
+    "/teacher/notifications/clear-all"
+)
+def clear_all_notifications(
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Delete all notifications owned by the caller."""
+    user = get_current_user(authorization)
+
+    result = notifications.delete_many(
+        {"user_id": user["id"]}
+    )
+
+    return {
+        "success": True,
+        "message": "All notifications cleared",
+        "deleted_count": result.deleted_count,
+    }
+
