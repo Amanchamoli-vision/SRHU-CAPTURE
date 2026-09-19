@@ -36,14 +36,23 @@ export const IMAGE_ACCEPT = [
 
 export const DOC_ACCEPT = ALLOWED_DOC_EXTENSIONS.map((ext) => `.${ext}`).join(",");
 
+export const DEFAULT_UPLOAD_LIMITS = {
+  max_photos_per_event: 10,
+  max_photo_size_mb: 20,
+  max_photo_total_mb: null,
+  max_videos_per_event: null,
+  max_video_size_mb: 200,
+  max_video_total_mb: 200,
+};
+
 export const formatMb = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
 
 const extensionOf = (name) => (name || "").split(".").pop()?.toLowerCase() || "";
 
 /** The over-limit copy PRD 11 specifies, reused for documents. */
-export function overLimitMessage(kind) {
-  const noun = kind === "video" ? "video" : "document";
-  const limit = kind === "video" ? MAX_VIDEO_TOTAL : MAX_DOC_TOTAL;
+export function overLimitMessage(kind, limits = null) {
+  const noun = kind === "video" ? "video" : kind === "image" ? "photo" : "document";
+  const limit = limitFor(kind, limits);
   return `You have exceeded the limit. Maximum allowed ${noun} size is ${formatMb(limit)}.`;
 }
 
@@ -56,10 +65,17 @@ export function usedBytes(saved = [], pending = []) {
   return stored + inFlight;
 }
 
-export function limitFor(kind) {
-  if (kind === "video") return MAX_VIDEO_TOTAL;
+export function limitFor(kind, limits = null) {
+  if (kind === "video") {
+    const mb = limits?.max_video_total_mb;
+    return mb != null ? mb * 1024 * 1024 : MAX_VIDEO_TOTAL;
+  }
   if (kind === "document") return MAX_DOC_TOTAL;
-  return null; // photos are capped per file and by count, not by total
+  if (kind === "image") {
+    const mb = limits?.max_photo_total_mb;
+    return mb != null ? mb * 1024 * 1024 : null;
+  }
+  return null; // photos without total budget are capped per file and count
 }
 
 /**
@@ -78,6 +94,7 @@ export function validatePick({
   savedItems = [],
   pendingUploads = [],
   existingNames = [],
+  limits = null,
 }) {
   const accepted = [];
   const duplicates = [];
@@ -85,8 +102,21 @@ export function validatePick({
   let overLimit = null;
 
   const isImage = kind === "image";
+  const isVideo = kind === "video";
   const isDocument = kind === "document";
-  const totalLimit = limitFor(kind);
+
+  const maxImageCount = limits?.max_photos_per_event ?? MAX_IMAGE_COUNT;
+  const maxImageSize =
+    limits?.max_photo_size_mb != null
+      ? limits.max_photo_size_mb * 1024 * 1024
+      : MAX_IMAGE_SIZE;
+  const maxVideoCount = limits?.max_videos_per_event ?? null;
+  const maxVideoSize =
+    limits?.max_video_size_mb != null
+      ? limits.max_video_size_mb * 1024 * 1024
+      : null;
+
+  const totalLimit = limitFor(kind, limits);
 
   let runningBytes = usedBytes(savedItems, pendingUploads);
   let runningCount =
@@ -109,7 +139,7 @@ export function validatePick({
         rejections.push(`"${file.name}" is not a JPG, PNG, WEBP or GIF.`);
         continue;
       }
-    } else if (kind === "video") {
+    } else if (isVideo) {
       if (!file.type.startsWith("video/")) {
         rejections.push(`"${file.name}" is not a video.`);
         continue;
@@ -121,14 +151,26 @@ export function validatePick({
       }
     }
 
-    if (isImage && file.size > MAX_IMAGE_SIZE) {
-      rejections.push(`"${file.name}" is larger than ${formatMb(MAX_IMAGE_SIZE)}.`);
+    if (isImage && file.size > maxImageSize) {
+      rejections.push(`"${file.name}" is larger than ${formatMb(maxImageSize)}.`);
       continue;
     }
 
-    if (isImage && runningCount >= MAX_IMAGE_COUNT) {
+    if (isVideo && maxVideoSize != null && file.size > maxVideoSize) {
+      rejections.push(`"${file.name}" is larger than ${formatMb(maxVideoSize)}.`);
+      continue;
+    }
+
+    if (isImage && runningCount >= maxImageCount) {
       rejections.push(
-        `"${file.name}" was not added. The limit is ${MAX_IMAGE_COUNT} photos.`,
+        `"${file.name}" was not added. The limit is ${maxImageCount} photos.`,
+      );
+      continue;
+    }
+
+    if (isVideo && maxVideoCount != null && runningCount >= maxVideoCount) {
+      rejections.push(
+        `"${file.name}" was not added. The limit is ${maxVideoCount} videos.`,
       );
       continue;
     }
@@ -136,7 +178,7 @@ export function validatePick({
     if (totalLimit != null && runningBytes + file.size > totalLimit) {
       // Everything picked before this one is still accepted, which is what
       // "you have exceeded the limit" implies.
-      overLimit = overLimitMessage(kind);
+      overLimit = overLimitMessage(kind, limits);
       break;
     }
 

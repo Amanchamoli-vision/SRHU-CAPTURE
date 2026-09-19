@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
+import Pagination from "../../components/common/Pagination";
 import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
@@ -14,7 +15,6 @@ import {
   IconSearch,
   IconX,
 } from "../../components/teacher/icons";
-import { getStatusBucket } from "../../utils/constants";
 
 const STATUS_TABS = [
   { key: "all", label: "All" },
@@ -41,10 +41,39 @@ export default function SuperAdminEvents() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [events, setEvents] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState({ all: 0, pending: 0, approved: 0, rejected: 0 });
   const [teacherNames, setTeacherNames] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
+
+  const page = Math.max(1, Number(searchParams.get("page")) || 1);
+  const rawPer = Number(searchParams.get("per")) || 25;
+  const per = [25, 50, 100].includes(rawPer) ? rawPer : 25;
+  const skip = (page - 1) * per;
+
+  const urlQ = searchParams.get("q") || "";
+  const [searchDraft, setSearchDraft] = useState(urlQ);
+
+  // Sync draft when URL q changes (e.g. back button, clear filters)
+  useEffect(() => {
+    setSearchDraft(urlQ);
+  }, [urlQ]);
+
+  // Debounce searchDraft -> URL query string, resetting to page 1
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = searchDraft.trim();
+      if (trimmed !== urlQ) {
+        const next = new URLSearchParams(searchParams);
+        if (trimmed) next.set("q", trimmed);
+        else next.delete("q");
+        next.delete("page");
+        setSearchParams(next, { replace: true });
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchDraft, urlQ, searchParams, setSearchParams]);
 
   const statusFilter = STATUS_TABS.some((t) => t.key === searchParams.get("status"))
     ? searchParams.get("status")
@@ -54,6 +83,22 @@ export default function SuperAdminEvents() {
     const next = new URLSearchParams(searchParams);
     if (key === "all") next.delete("status");
     else next.set("status", key);
+    next.delete("page");
+    setSearchParams(next, { replace: true });
+  };
+
+  const setPage = (nextPage) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextPage > 1) next.set("page", String(nextPage));
+    else next.delete("page");
+    setSearchParams(next, { replace: true });
+  };
+
+  const setPerPage = (nextPer) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextPer !== 25) next.set("per", String(nextPer));
+    else next.delete("per");
+    next.delete("page");
     setSearchParams(next, { replace: true });
   };
 
@@ -62,15 +107,32 @@ export default function SuperAdminEvents() {
       setLoading(true);
       setError("");
 
+      const params = new URLSearchParams({
+        skip: String(skip),
+        limit: String(per),
+      });
+      if (statusFilter !== "all") {
+        params.set("status_bucket", statusFilter);
+      }
+      if (urlQ) {
+        params.set("q", urlQ);
+      }
+
       const [eventData, userData] = await Promise.all([
-        apiJson("/dean/events"),
-        apiJson("/superadmin/users"),
+        apiJson(`/dean/events?${params}`),
+        Object.keys(teacherNames).length === 0 ? apiJson("/superadmin/users") : Promise.resolve(null),
       ]);
 
       setEvents(eventData?.events || []);
-      setTeacherNames(
-        Object.fromEntries((userData?.users || []).map((u) => [u.id, u.name || u.email]))
-      );
+      setTotal(eventData?.total || 0);
+      if (eventData?.counts) {
+        setCounts(eventData.counts);
+      }
+      if (userData?.users) {
+        setTeacherNames(
+          Object.fromEntries(userData.users.map((u) => [u.id, u.name || u.email]))
+        );
+      }
     } catch (err) {
       if (err?.status === 401) {
         navigate("/login");
@@ -81,7 +143,7 @@ export default function SuperAdminEvents() {
     } finally {
       setLoading(false);
     }
-  }, [navigate]);
+  }, [skip, per, statusFilter, urlQ, teacherNames, navigate]);
 
   useEffect(() => {
     loadEvents();
@@ -92,25 +154,7 @@ export default function SuperAdminEvents() {
     navigate("/login");
   };
 
-  const counts = useMemo(() => {
-    const c = { all: events.length, pending: 0, approved: 0, rejected: 0 };
-    for (const e of events) {
-      const bucket = getStatusBucket(e.status);
-      if (bucket in c) c[bucket] += 1;
-    }
-    return c;
-  }, [events]);
-
-  const visibleEvents = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return events.filter((e) => {
-      if (statusFilter !== "all" && getStatusBucket(e.status) !== statusFilter) return false;
-      if (!term) return true;
-      return [e.event_name, e.location, e.event_type, teacherNames[e.teacher_id]].some((f) =>
-        String(f ?? "").toLowerCase().includes(term)
-      );
-    });
-  }, [events, statusFilter, query, teacherNames]);
+  const visibleEvents = events;
 
   return (
     <SuperAdminShell
@@ -171,8 +215,8 @@ export default function SuperAdminEvents() {
             <IconSearch className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
             <input
               type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
               placeholder="Search event, venue or teacher"
               className="input pl-10"
             />
@@ -190,12 +234,30 @@ export default function SuperAdminEvents() {
               <span className="icon-tile mx-auto">
                 <IconInbox />
               </span>
-              <p className="h3 mt-4 text-ink">{events.length === 0 ? "No events yet" : "No matches"}</p>
+              <p className="h3 mt-4 text-ink">
+                {total === 0 && !urlQ && statusFilter === "all" ? "No events yet" : "No matches"}
+              </p>
               <p className="prose-muted mt-1 text-sm">
-                {events.length === 0
+                {total === 0 && !urlQ && statusFilter === "all"
                   ? "Nothing has been submitted for review."
                   : "Try a different search or clear the status filter."}
               </p>
+              {(urlQ || statusFilter !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchDraft("");
+                    const next = new URLSearchParams(searchParams);
+                    next.delete("q");
+                    next.delete("status");
+                    next.delete("page");
+                    setSearchParams(next, { replace: true });
+                  }}
+                  className="btn btn-ghost btn-sm mt-5"
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           ) : (
             <ul className="divide-y divide-line/10">
@@ -227,6 +289,17 @@ export default function SuperAdminEvents() {
                 </li>
               ))}
             </ul>
+          )}
+
+          {total > 0 && (
+            <Pagination
+              page={page}
+              perPage={per}
+              total={total}
+              onPageChange={setPage}
+              onPerPageChange={setPerPage}
+              disabled={loading}
+            />
           )}
         </section>
       </div>

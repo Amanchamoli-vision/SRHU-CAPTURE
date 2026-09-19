@@ -1,21 +1,16 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { signOut } from "../services/auth";
+import LogoutConfirmModal from "./common/LogoutConfirmModal";
 import srhuLogo from "../assets/logo.png";
 
 function Navbar({ title = "Dean Panel", actions = null }) {
   const navigate = useNavigate();
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
   const handleLogout = async () => {
-    const confirmed = window.confirm(
-      "Are you sure you want to logout?"
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
+    setLogoutConfirmOpen(false);
     await signOut();
-
     navigate("/login");
   };
 
@@ -44,7 +39,7 @@ function Navbar({ title = "Dean Panel", actions = null }) {
           {actions}
 
           <button
-            onClick={handleLogout}
+            onClick={() => setLogoutConfirmOpen(true)}
             className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 transition hover:bg-red-100"
           >
             Logout
@@ -53,6 +48,12 @@ function Navbar({ title = "Dean Panel", actions = null }) {
         </div>
 
       </div>
+
+      <LogoutConfirmModal
+        open={logoutConfirmOpen}
+        onClose={() => setLogoutConfirmOpen(false)}
+        onConfirm={handleLogout}
+      />
     </header>
   );
 }

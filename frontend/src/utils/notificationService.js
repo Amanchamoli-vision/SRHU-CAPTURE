@@ -144,6 +144,43 @@ export async function markAllNotificationsAsRead(userId) {
   );
 }
 
+/**
+ * Delete a single notification for the signed-in user
+ */
+export async function deleteNotification(userId, notificationId) {
+  if (!userId || !notificationId) return;
+
+  if (!String(notificationId).startsWith(LOCAL_ID_PREFIX)) {
+    try {
+      await apiJson(`/notifications/${notificationId}`, { method: "DELETE" });
+    } catch (err) {
+      console.warn("Delete notification DB update warning:", err);
+    }
+  }
+
+  const list = getLocalNotifications(userId);
+  saveLocalNotifications(
+    userId,
+    list.filter((n) => n.id !== notificationId)
+  );
+}
+
+/**
+ * Clear all notifications for the signed-in user
+ */
+export async function clearAllNotifications(userId) {
+  if (!userId) return;
+
+  try {
+    await apiJson("/notifications", { method: "DELETE" });
+  } catch (err) {
+    console.warn("Clear all notifications DB update warning:", err);
+  }
+
+  saveLocalNotifications(userId, []);
+}
+
+
 /** POST a notification. Resolves to the server's copy, or null if it was not stored. */
 async function postNotification({ eventId, notificationType, title, message, data }) {
   try {

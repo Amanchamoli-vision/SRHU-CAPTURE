@@ -16,6 +16,7 @@ import TeacherDashboard from "./pages/teacher/TeacherDashboard";
 import CreateEvent from "./pages/teacher/CreateEvent";
 import MyEvents from "./pages/teacher/MyEvents";
 import TeacherEventDetails from "./pages/teacher/EventDetails";
+import TeacherProfile from "./pages/teacher/Profile";
 
 // Dean
 import DeanDashboard from "./pages/dean/DeanDashboard";
@@ -30,6 +31,7 @@ import UserManagement from "./pages/superadmin/UserManagement";
 import CreateDean from "./pages/superadmin/CreateDean";
 import SuperAdminEvents from "./pages/superadmin/Events";
 import SuperAdminEventDetails from "./pages/superadmin/EventDetails";
+import Settings from "./pages/superadmin/Settings";
 
 /**
  * The create-event wizard keeps a lot of state in refs (the server event id,
@@ -89,6 +91,15 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={["teacher"]}>
                 <TeacherEventDetails />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/teacher/profile"
+            element={
+              <ProtectedRoute allowedRoles={["teacher"]}>
+                <TeacherProfile />
               </ProtectedRoute>
             }
           />
@@ -181,6 +192,15 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={["superadmin"]}>
                 <CreateDean />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/superadmin/settings"
+            element={
+              <ProtectedRoute allowedRoles={["superadmin"]}>
+                <Settings />
               </ProtectedRoute>
             }
           />

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiJson } from "../services/api";
 import {
+  clearAllNotifications,
+  deleteNotification,
   evaluateEventReminders,
   fetchNotifications,
   markAllNotificationsAsRead,
@@ -23,6 +25,7 @@ import {
   IconLayers,
   IconRefresh,
   IconSearch,
+  IconTrash,
   IconX,
   IconXCircle,
 } from "./teacher/icons";
@@ -48,11 +51,13 @@ const FALLBACK_META = { Icon: IconBell, track: "#64748B", label: "Other" };
 const FILTERS = {
   teacher: ["all", "approved", "rejected", "needs_changes", "progress", "reminder"],
   dean: ["all", "submitted", "resubmitted"],
+  superadmin: ["all", "submitted", "approved", "rejected"],
 };
 
 const EMPTY_COPY = {
   teacher: "You will be told here when the Dean approves, rejects or moves one of your events.",
   dean: "New and resubmitted events for your review will appear here.",
+  superadmin: "System and event activity notifications will appear here.",
 };
 
 const POLL_INTERVAL_MS = 30_000;
@@ -90,6 +95,8 @@ export default function NotificationBell({ currentUser, onNew }) {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [toasts, setToasts] = useState([]);
 
@@ -238,6 +245,36 @@ export default function NotificationBell({ currentUser, onNew }) {
     await markAllNotificationsAsRead(userId);
   };
 
+  const deleteItem = async (notifId) => {
+    if (!notifId) return;
+    setNotifications((prev) => prev.filter((n) => n.id !== notifId));
+    setToasts((prev) => prev.filter((t) => t.id !== notifId));
+    await deleteNotification(userId, notifId);
+  };
+
+  const handleClearAll = () => {
+    if (notifications.length === 0) return;
+    setConfirmClearOpen(true);
+  };
+
+  const handleConfirmClear = async () => {
+    if (notifications.length === 0) {
+      setConfirmClearOpen(false);
+      return;
+    }
+    setClearing(true);
+    try {
+      setNotifications([]);
+      setToasts([]);
+      await clearAllNotifications(userId);
+    } catch (err) {
+      console.error("Failed to clear notifications:", err);
+    } finally {
+      setClearing(false);
+      setConfirmClearOpen(false);
+    }
+  };
+
   /** Open the event — the page that carries its status, history and remarks. */
   const openNotification = (notif) => {
     markRead(notif);
@@ -280,39 +317,69 @@ export default function NotificationBell({ currentUser, onNew }) {
           tabIndex={0}
           onClick={() => openNotification(notif)}
           onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), openNotification(notif))}
-          className={`flex cursor-pointer gap-3 px-4 py-3.5 transition hover:bg-raised/45 ${
-            notif.is_read ? "" : "bg-accent/4"
+          className={`group flex cursor-pointer gap-3.5 transition hover:bg-raised/45 ${
+            compact ? "px-4 py-3.5" : "px-6 py-4"
+          } ${
+            notif.is_read
+              ? ""
+              : compact
+              ? "bg-accent/4"
+              : "bg-accent/[0.04] border-l-2 border-l-accent"
           }`}
         >
           <span
-            className="icon-tile icon-tile-track h-8 w-8 shrink-0 rounded-lg"
+            className={`icon-tile icon-tile-track shrink-0 rounded-lg ${
+              compact ? "h-8 w-8" : "h-9 w-9 sm:h-10 sm:w-10 sm:rounded-xl"
+            }`}
             style={{ "--track": meta.track }}
           >
-            <meta.Icon className="h-4 w-4" />
+            <meta.Icon className={compact ? "h-4 w-4" : "h-4.5 w-4.5 sm:h-5 sm:w-5"} />
           </span>
 
           <div className="min-w-0 flex-1">
-            <div className="flex items-start justify-between gap-2">
-              <p className={`text-sm leading-snug text-ink ${notif.is_read ? "font-medium" : "font-semibold"}`}>
+            <div className="flex items-start justify-between gap-2.5">
+              <p
+                className={`leading-snug text-ink ${
+                  compact ? "text-sm" : "text-sm sm:text-base"
+                } ${notif.is_read ? "font-medium" : "font-semibold"}`}
+              >
                 {notif.title || "Notification"}
               </p>
-              <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted">
-                {!notif.is_read && (
-                  <span className="dot dot-sm" style={{ "--track": meta.track }} aria-label="Unread" />
-                )}
-                {timeAgo(notif.created_at)}
-              </span>
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                <span className="flex items-center gap-1.5 text-[11px] sm:text-xs text-muted font-medium">
+                  {!notif.is_read && (
+                    <span className="dot dot-sm" style={{ "--track": meta.track }} aria-label="Unread" />
+                  )}
+                  {timeAgo(notif.created_at)}
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteItem(notif.id);
+                  }}
+                  className="rounded-lg p-1.5 text-muted transition hover:bg-err/10 hover:text-err"
+                  title="Delete notification"
+                  aria-label="Delete notification"
+                >
+                  <IconTrash className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                </button>
+              </div>
             </div>
 
-            <p className={`prose-muted mt-0.5 text-xs ${compact ? "line-clamp-2" : ""}`}>
+            <p
+              className={`text-muted mt-1 ${
+                compact ? "line-clamp-2 text-xs" : "text-xs sm:text-sm leading-relaxed"
+              }`}
+            >
               {notif.message}
             </p>
 
             {notif.event_id && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                <span className="btn btn-ghost btn-xs">
+              <div className={`flex flex-wrap gap-1.5 ${compact ? "mt-2" : "mt-3"}`}>
+                <span className="btn btn-ghost btn-xs text-ink inline-flex items-center gap-1">
                   View event
-                  <IconArrowRight />
+                  <IconArrowRight className="h-3 w-3" />
                 </span>
                 {canEdit && (
                   <button
@@ -321,9 +388,9 @@ export default function NotificationBell({ currentUser, onNew }) {
                       e.stopPropagation();
                       editAndResubmit(notif);
                     }}
-                    className="btn btn-ghost btn-xs"
+                    className="btn btn-ghost btn-xs text-ink inline-flex items-center gap-1"
                   >
-                    <IconEdit />
+                    <IconEdit className="h-3 w-3" />
                     Edit &amp; resubmit
                   </button>
                 )}
@@ -407,15 +474,26 @@ export default function NotificationBell({ currentUser, onNew }) {
 
           {notifications.length > 0 && (
             <div className="flex items-center justify-between gap-2 border-t hairline px-4 py-2.5">
-              <button
-                type="button"
-                onClick={markAllRead}
-                disabled={unreadCount === 0}
-                className="btn btn-ghost btn-xs"
-              >
-                <IconCheck />
-                Mark all read
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={markAllRead}
+                  disabled={unreadCount === 0}
+                  className="btn btn-ghost btn-xs"
+                >
+                  <IconCheck />
+                  Mark read
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  className="btn btn-ghost btn-xs text-err hover:border-err/50"
+                  title="Clear all notifications"
+                >
+                  <IconTrash />
+                  Clear all
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -440,20 +518,16 @@ export default function NotificationBell({ currentUser, onNew }) {
         subtitle={`${notifications.length} total · ${unreadCount} unread`}
         wide
         footer={
-          <>
-            <button
-              type="button"
-              onClick={markAllRead}
-              disabled={unreadCount === 0}
-              className="btn btn-ghost btn-sm"
-            >
-              <IconCheck />
-              Mark all read
-            </button>
+          <div className="flex w-full flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-muted">
+              {unreadCount > 0
+                ? `${unreadCount} unread notification${unreadCount === 1 ? "" : "s"}`
+                : "All notifications read"}
+            </span>
             <button type="button" onClick={() => setHistoryOpen(false)} className="btn btn-brand btn-sm">
               Close
             </button>
-          </>
+          </div>
         }
       >
         <div className="relative">
@@ -464,33 +538,130 @@ export default function NotificationBell({ currentUser, onNew }) {
             type="text"
             value={historySearch}
             onChange={(e) => setHistorySearch(e.target.value)}
-            placeholder="Search notifications…"
+            placeholder="Search by title, message or event…"
             aria-label="Search notifications"
-            className="input pl-10"
+            className="input pl-10 pr-9 text-sm"
           />
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter notifications">
-          {FILTERS[role].map((key) => (
+          {historySearch && (
             <button
-              key={key}
               type="button"
-              role="tab"
-              aria-selected={historyFilter === key}
-              onClick={() => setHistoryFilter(key)}
-              className="tab"
+              onClick={() => setHistorySearch("")}
+              className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted transition hover:text-ink"
+              aria-label="Clear search"
             >
-              {key === "all" ? "All" : (TYPE_META[key] || FALLBACK_META).label}
+              <IconX className="h-4 w-4" />
             </button>
-          ))}
+          )}
         </div>
 
-        <div className="-mx-6 mt-4 border-t hairline">
-          {filteredHistory.length === 0 ? (
+        <div className="mt-3.5 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter notifications">
+          {(FILTERS[role] || ["all"]).map((key) => {
+            const count =
+              key === "all"
+                ? notifications.length
+                : notifications.filter((n) => n.notification_type === key).length;
+            return (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={historyFilter === key}
+                onClick={() => setHistoryFilter(key)}
+                className="tab text-xs sm:text-sm"
+              >
+                {key === "all" ? "All" : (TYPE_META[key] || FALLBACK_META).label}
+                <span className="tab-count">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Action bar at top of list */}
+        <div className="-mx-6 mt-4 flex items-center justify-between border-y hairline bg-raised/35 px-6 py-2.5">
+          <span className="text-xs font-medium text-muted">
+            {filteredHistory.length} {filteredHistory.length === 1 ? "notification" : "notifications"}
+            {unreadCount > 0 && ` · ${unreadCount} unread`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={markAllRead}
+              disabled={unreadCount === 0}
+              className="btn btn-ghost btn-xs text-ink disabled:opacity-40"
+              title="Mark all notifications as read"
+            >
+              <IconCheck className="h-3.5 w-3.5" />
+              Mark read
+            </button>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              disabled={notifications.length === 0}
+              className="btn btn-ghost btn-xs text-err hover:border-err/50 hover:bg-err/10 disabled:opacity-40"
+              title="Clear all notifications"
+            >
+              <IconTrash className="h-3.5 w-3.5" />
+              Clear all
+            </button>
+          </div>
+        </div>
+
+        <div className="-mx-6">
+          {notifications.length === 0 ? (
+            emptyState("No notifications yet", EMPTY_COPY[role] || EMPTY_COPY.dean)
+          ) : filteredHistory.length === 0 ? (
             emptyState("Nothing matches", "Try a different search or filter.")
           ) : (
             <ul>{filteredHistory.map((n) => renderItem(n, false))}</ul>
           )}
+        </div>
+      </Modal>
+
+      {/* ----------------------------- Clear all confirmation dialog */}
+      <Modal
+        open={confirmClearOpen}
+        onClose={() => !clearing && setConfirmClearOpen(false)}
+        eyebrow="Confirm"
+        title="Clear all notifications"
+        subtitle="This action cannot be undone"
+        zIndex={70}
+        footer={
+          <div className="flex w-full items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={() => setConfirmClearOpen(false)}
+              disabled={clearing}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmClear}
+              disabled={clearing}
+              className="btn btn-danger btn-sm"
+            >
+              <IconTrash className="h-4 w-4" />
+              {clearing ? "Clearing…" : "Clear all"}
+            </button>
+          </div>
+        }
+      >
+        <div className="flex items-start gap-3.5">
+          <span
+            className="icon-tile icon-tile-track shrink-0 h-10 w-10 rounded-xl"
+            style={{ "--track": "#EF4444" }}
+          >
+            <IconTrash className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-ink">
+              Are you sure you want to clear all notifications?
+            </p>
+            <p className="mt-1 text-xs text-muted leading-relaxed">
+              This will permanently remove all {notifications.length} notification{notifications.length === 1 ? "" : "s"} from your inbox.
+            </p>
+          </div>
         </div>
       </Modal>
 

@@ -250,3 +250,115 @@ class DeanFilterTests(unittest.TestCase):
 
         self.assertEqual(body["total"], 5)
         self.assertEqual(body["counts"]["all"], 5, "a draft was counted in All")
+
+
+SUPERADMIN = {
+    "_id": "superadmin1",
+    "id": "superadmin1",
+    "role": "superadmin",
+    "name": "Super Admin",
+    "email": "superadmin@srhu.edu.in",
+}
+
+
+class FakeUserCursor(list):
+    def sort(self, key, direction):
+        return FakeUserCursor(
+            sorted(self, key=lambda d: d.get(key) or "", reverse=direction == -1)
+        )
+
+    def skip(self, count):
+        return FakeUserCursor(self[count:]) if count else self
+
+    def limit(self, count):
+        return FakeUserCursor(self[:count]) if count else self
+
+
+class FakeUserStore:
+    def __init__(self, docs: list[dict]):
+        self.docs = docs
+
+    def _matches(self, doc: dict, query: dict) -> bool:
+        import re
+        for k, v in query.items():
+            if k == "$or":
+                match_any = False
+                for clause in v:
+                    if self._matches(doc, clause):
+                        match_any = True
+                        break
+                if not match_any:
+                    return False
+            elif isinstance(v, dict) and "$regex" in v:
+                pattern = v["$regex"]
+                val = str(doc.get(k) or "")
+                if not re.search(pattern, val, re.IGNORECASE):
+                    return False
+            elif doc.get(k) != v:
+                return False
+        return True
+
+    def count_documents(self, query: dict) -> int:
+        return len([d for d in self.docs if self._matches(d, query)])
+
+    def find(self, query: dict, projection=None):
+        filtered = [d for d in self.docs if self._matches(d, query)]
+        return FakeUserCursor(filtered)
+
+
+class SuperAdminUserListPagingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.users_data = []
+        for i in range(25):
+            role = "teacher" if i < 18 else ("dean" if i < 23 else "superadmin")
+            self.users_data.append({
+                "_id": f"user_{i:03d}",
+                "name": f"User {i:03d}",
+                "email": f"user{i:03d}@srhu.edu.in",
+                "role": role,
+                "created_at": f"2026-09-{i + 1:02d}T00:00:00Z",
+            })
+        self.store = FakeUserStore(self.users_data)
+
+    def get(self, query: str = ""):
+        with patch("app.utils.auth.get_current_user", return_value=SUPERADMIN), \
+                patch("app.routers.superadmin.users", self.store):
+            return client.get(f"/superadmin/users{query}", headers={"Authorization": "Bearer t"})
+
+    def test_unpaged_request_returns_all_users(self) -> None:
+        body = self.get().json()
+        self.assertEqual(body["total"], 25)
+        self.assertEqual(len(body["users"]), 25)
+        self.assertFalse(body["has_more"])
+
+    def test_paged_request_respects_skip_and_limit(self) -> None:
+        body = self.get("?skip=0&limit=10").json()
+        self.assertEqual(body["total"], 25)
+        self.assertEqual(body["count"], 10)
+        self.assertEqual(len(body["users"]), 10)
+        self.assertTrue(body["has_more"])
+
+    def test_last_page_reports_no_more(self) -> None:
+        body = self.get("?skip=20&limit=10").json()
+        self.assertEqual(body["total"], 25)
+        self.assertEqual(body["count"], 5)
+        self.assertFalse(body["has_more"])
+
+    def test_role_filtering(self) -> None:
+        body = self.get("?role=dean").json()
+        self.assertEqual(body["total"], 5)
+        self.assertTrue(all(u["role"] == "dean" for u in body["users"]))
+
+    def test_search_query_by_name(self) -> None:
+        body = self.get("?q=User 005").json()
+        self.assertEqual(body["total"], 1)
+        self.assertEqual(body["users"][0]["name"], "User 005")
+
+    def test_counts_breakdown_by_role(self) -> None:
+        body = self.get().json()
+        counts = body["counts"]
+        self.assertEqual(counts["all"], 25)
+        self.assertEqual(counts["teacher"], 18)
+        self.assertEqual(counts["dean"], 5)
+        self.assertEqual(counts["superadmin"], 2)
+

@@ -59,6 +59,8 @@ event_reports = db["event_reports"]
 event_types = db["event_types"]
 # Coordinator contact cards: name + mobile, not user accounts (PRD 5).
 faculty_coordinators = db["faculty_coordinators"]
+# Super Admin configurable upload limits
+upload_config = db["upload_config"]
 
 # Uploaded file bytes are stored in GridFS so that MongoDB remains the single
 # store for the application, including media and documents.

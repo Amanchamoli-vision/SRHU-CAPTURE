@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { IconX } from "./icons";
 
 /**
@@ -6,7 +7,7 @@ import { IconX } from "./icons";
  * dialog treatment. Escape and a backdrop click both close it, and the page
  * behind it cannot scroll while it is open.
  */
-export default function Modal({ open, onClose, eyebrow, title, subtitle, wide, children, footer }) {
+export default function Modal({ open, onClose, eyebrow, title, subtitle, wide, children, footer, zIndex }) {
   useEffect(() => {
     if (!open) return undefined;
 
@@ -25,10 +26,12 @@ export default function Modal({ open, onClose, eyebrow, title, subtitle, wide, c
   }, [open, onClose]);
 
   if (!open) return null;
+  if (typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
       className="hv-backdrop"
+      style={zIndex ? { zIndex } : undefined}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose?.();
       }}
@@ -64,6 +67,7 @@ export default function Modal({ open, onClose, eyebrow, title, subtitle, wide, c
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

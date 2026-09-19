@@ -7,7 +7,7 @@ import {
   resendVerification,
   signOut,
 } from "../../services/auth";
-import DeanShell from "../../components/dean/DeanShell";
+import TeacherShell from "../../components/teacher/TeacherShell";
 import LogoutConfirmModal from "../../components/common/LogoutConfirmModal";
 import EditProfileModal from "../../components/common/EditProfileModal";
 import { useAuth } from "../../context/AuthContext";
@@ -31,9 +31,11 @@ import {
   IconGrid,
   IconInfo,
   IconKey,
+  IconList,
   IconLogout,
   IconMail,
   IconPhone,
+  IconPlus,
   IconRefresh,
   IconShield,
   IconX,
@@ -59,19 +61,10 @@ function formatDateTime(value) {
   });
 }
 
-// One row style for every quick action, link or button alike, so the column
-// reads as a single menu.
 const ACTION_CLASS =
   "flex w-full items-center gap-3 rounded-xl border border-transparent px-2.5 py-1.5 text-left transition hover:border-accent/25 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-transparent disabled:hover:bg-transparent";
 
-/**
- * The Dean's own account, laid out to fit one laptop screen without
- * scrolling: identity once at the top, the facts as a compact tile grid, and
- * everything the Dean can actually do from here in a single column beside it.
- * Name and email are shown once — the old layout repeated them in the hero
- * and again in the list, and the role three times.
- */
-function DeanProfile() {
+export default function TeacherProfile() {
   const navigate = useNavigate();
   const { user: authUser } = useAuth();
 
@@ -80,34 +73,22 @@ function DeanProfile() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Feedback for the account actions, shown as a toast so it never pushes the
-  // layout past the fold.
-  const [notice, setNotice] = useState(null); // { kind: "ok" | "err", text }
-  const [busy, setBusy] = useState(""); // key of the action in flight
+  const [notice, setNotice] = useState(null);
+  const [busy, setBusy] = useState("");
   const [copied, setCopied] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const copiedTimer = useRef(null);
 
-  const handleProfileSaved = (updatedUser) => {
-    setProfile(updatedUser);
-    setNotice({ kind: "ok", text: "Profile updated successfully." });
-  };
-
-  // A Dean created with a temporary password is held on this page (see
-  // ProtectedRoute) until they replace it. authUser is the source of truth:
-  // it updates as soon as the new session is stored.
   const mustChange = needsNewPassword(authUser);
 
-  // In-page change-password form.
+  // In-page change-password form
   const [pwOpen, setPwOpen] = useState(false);
   const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
   const [pwError, setPwError] = useState("");
   const [pwSaving, setPwSaving] = useState(false);
   const showPasswordForm = mustChange || pwOpen;
 
-  // Also the Retry and Refresh handler, so a failed first load, a retry and a
-  // manual refresh all take exactly the same path.
   const loadProfile = useCallback(async () => {
     try {
       setLoading(true);
@@ -129,8 +110,7 @@ function DeanProfile() {
         emailConfirmedAt: user.email_verified_at,
       });
     } catch (err) {
-      console.error("Load dean profile error:", err);
-
+      console.error("Load teacher profile error:", err);
       setError(err.message || "Unable to load your profile.");
     } finally {
       setLoading(false);
@@ -145,19 +125,21 @@ function DeanProfile() {
 
   const handleLogout = async () => {
     await signOut();
-
     navigate("/login");
   };
 
-  const displayName = profile?.name?.trim() || "Dean";
+  const handleProfileSaved = (updatedUser) => {
+    setProfile(updatedUser);
+    setNotice({ kind: "ok", text: "Profile updated successfully." });
+  };
+
+  const displayName = profile?.name?.trim() || "Teacher";
   const displayEmail = profile?.email || account?.email || "—";
   const accountId = profile?.id || account?.id || "";
   const isVerified = Boolean(account?.emailConfirmedAt);
-  const role = profile?.role || "dean";
+  const role = profile?.role || "teacher";
   const hasEmail = displayEmail !== "—";
 
-  // Password changes go through the same emailed-link flow as "Forgot
-  // password", so the new password is never typed on a shared screen.
   const handlePasswordReset = async () => {
     if (!hasEmail || busy) return;
 
@@ -246,8 +228,6 @@ function DeanProfile() {
     }
   };
 
-  // The id exists for support conversations, so copying it is the one thing
-  // anyone ever does with it.
   const handleCopyId = async () => {
     if (!accountId) return;
 
@@ -261,8 +241,6 @@ function DeanProfile() {
     }
   };
 
-  // The facts, in the order someone checking their own account reads them:
-  // what they may do, department, mobile, whether the address is confirmed, then the audit trail.
   const facts = [
     {
       label: "Role",
@@ -285,8 +263,6 @@ function DeanProfile() {
       value: isVerified ? formatDateTime(account?.emailConfirmedAt) : "Not verified",
       Icon: IconCheckCircle,
       track: trackOf(isVerified ? "approved" : "pending"),
-      // Sits beside "Not verified" rather than in Quick actions: the fix is
-      // next to the problem, and the page keeps its height.
       action: !isVerified && (
         <button
           type="button"
@@ -313,17 +289,24 @@ function DeanProfile() {
   const navActions = [
     {
       key: "dashboard",
-      to: "/dean/dashboard",
+      to: "/teacher/dashboard",
       label: "Dashboard",
-      hint: "Pending reviews and totals",
+      hint: "Overview and draft events",
       Icon: IconGrid,
     },
     {
+      key: "create",
+      to: "/teacher/create-event",
+      label: "Create event",
+      hint: "Submit a new proposal",
+      Icon: IconPlus,
+    },
+    {
       key: "events",
-      to: "/dean/events",
-      label: "All events",
-      hint: "Search, approve, reject",
-      Icon: IconCalendar,
+      to: "/teacher/my-events",
+      label: "My events",
+      hint: "Track proposal progress",
+      Icon: IconList,
     },
   ];
 
@@ -365,7 +348,7 @@ function DeanProfile() {
   ];
 
   return (
-    <DeanShell
+    <TeacherShell
       active="profile"
       profile={profile}
       onLogout={handleLogout}
@@ -598,9 +581,6 @@ function DeanProfile() {
                   </div>
                 ))}
 
-                {/* Shown in full rather than truncated, in a face that makes
-                    every character unambiguous, since it gets read aloud or
-                    pasted into a support message. */}
                 <div className="flex items-center gap-3 rounded-xl border hairline bg-line/2 px-3 py-2.5 col-span-2">
                   <span className="icon-tile hidden h-9 w-9 rounded-lg min-[480px]:inline-flex">
                     <IconKey className="h-4 w-4" />
@@ -627,8 +607,6 @@ function DeanProfile() {
                 </div>
               </dl>
 
-              {/* Kept here rather than in the rail note, next to the details
-                  it is about and visible at every width. */}
               <p className="mt-3 flex items-start gap-2 text-xs text-muted lg:mt-auto lg:pt-3">
                 <IconInfo className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>
@@ -701,8 +679,6 @@ function DeanProfile() {
         )}
       </div>
 
-      {/* Bottom-right like All Events, so feedback never shifts the layout
-          past the fold. */}
       <div className="pointer-events-none fixed bottom-5 right-5 z-50 flex w-85 max-w-[calc(100vw-2.5rem)] flex-col gap-3">
         {notice && (
           <div
@@ -739,8 +715,6 @@ function DeanProfile() {
         profile={profile}
         onSaved={handleProfileSaved}
       />
-    </DeanShell>
+    </TeacherShell>
   );
 }
-
-export default DeanProfile;

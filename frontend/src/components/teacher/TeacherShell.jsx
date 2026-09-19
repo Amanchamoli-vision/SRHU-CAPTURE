@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import srhuLogo from "../../assets/srhu-logo-dark.png";
 import NotificationBell from "../NotificationBell";
 import useThemeToggle from "../theme/useThemeToggle";
+import LogoutConfirmModal from "../common/LogoutConfirmModal";
 import {
   IconArrowUp,
   IconGrid,
@@ -12,6 +13,7 @@ import {
   IconMoon,
   IconPlus,
   IconSun,
+  IconUser,
   RidgeDivider,
 } from "./icons";
 
@@ -19,6 +21,7 @@ const NAV = [
   { key: "dashboard", to: "/teacher/dashboard", label: "Dashboard", Icon: IconGrid },
   { key: "create", to: "/teacher/create-event", label: "Create Event", Icon: IconPlus },
   { key: "events", to: "/teacher/my-events", label: "My Events", Icon: IconList },
+  { key: "profile", to: "/teacher/profile", label: "My Profile", Icon: IconUser },
 ];
 
 /**
@@ -45,6 +48,7 @@ export default function TeacherShell({
 }) {
   const [dark, toggleTheme] = useThemeToggle();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -136,7 +140,7 @@ export default function TeacherShell({
 
             {/* Only while the rail is off-screen; from lg up the rail's own
                 account block is the one place the signed-in user appears. */}
-            <div className="hidden items-center gap-2.5 sm:flex lg:hidden">
+            <Link to="/teacher/profile" className="hidden items-center gap-2.5 sm:flex lg:hidden transition hover:opacity-80">
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
                 {initial}
               </span>
@@ -144,15 +148,17 @@ export default function TeacherShell({
                 <span className="block text-sm font-semibold text-ink">
                   {profile?.name || "Teacher"}
                 </span>
-                <span className="block text-[11px] text-muted">Teacher</span>
+                <span className="block text-[11px] text-muted truncate max-w-[120px]">
+                  {profile?.department || "Teacher"}
+                </span>
               </span>
-            </div>
+            </Link>
 
             {/* On the narrowest screens this would be a fifth icon crowding
                 the menu button, so there it stays in the overlay menu only. */}
             <button
               type="button"
-              onClick={onLogout}
+              onClick={() => setLogoutConfirmOpen(true)}
               className="btn btn-ghost btn-sm hidden sm:inline-flex"
             >
               <IconLogout />
@@ -189,7 +195,11 @@ export default function TeacherShell({
           ))}
 
           {/* Same account block as the Dean and Super Admin menus. */}
-          <div className="rail-account mt-6 px-0">
+          <Link
+            to="/teacher/profile"
+            onClick={() => setMenuOpen(false)}
+            className="rail-account mt-6 px-0 transition hover:opacity-80"
+          >
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
               {initial}
             </span>
@@ -197,13 +207,15 @@ export default function TeacherShell({
               <span className="block truncate text-sm font-semibold text-ink">
                 {profile?.name || "Teacher"}
               </span>
-              <span className="block text-[11px] text-muted">Teacher</span>
+              <span className="block text-[11px] text-muted truncate">
+                {profile?.department || "Teacher"}
+              </span>
             </span>
-          </div>
+          </Link>
 
           <button
             type="button"
-            onClick={() => { setMenuOpen(false); onLogout?.(); }}
+            onClick={() => { setMenuOpen(false); setLogoutConfirmOpen(true); }}
             className="btn btn-ghost btn-block mt-4"
           >
             <IconLogout />
@@ -251,7 +263,7 @@ export default function TeacherShell({
 
             <RidgeDivider className="divider my-3 h-7 shrink-0" />
 
-            <div className="rail-account">
+            <Link to="/teacher/profile" className="rail-account transition hover:bg-accent/5">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
                 {initial}
               </span>
@@ -259,9 +271,11 @@ export default function TeacherShell({
                 <span className="block truncate text-sm font-semibold text-ink">
                   {profile?.name || "Teacher"}
                 </span>
-                <span className="block text-[11px] text-muted">Teacher</span>
+                <span className="block text-[11px] text-muted truncate">
+                  {profile?.department || "Teacher"}
+                </span>
               </span>
-            </div>
+            </Link>
           </div>
         </aside>
 
@@ -285,6 +299,15 @@ export default function TeacherShell({
           <IconArrowUp className="h-4 w-4" />
         </button>
       )}
+
+      <LogoutConfirmModal
+        open={logoutConfirmOpen}
+        onClose={() => setLogoutConfirmOpen(false)}
+        onConfirm={() => {
+          setLogoutConfirmOpen(false);
+          onLogout?.();
+        }}
+      />
     </div>
   );
 }

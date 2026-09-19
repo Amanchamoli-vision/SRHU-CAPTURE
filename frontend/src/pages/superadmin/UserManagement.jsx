@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
@@ -6,7 +6,8 @@ import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
 import RoleChip from "../../components/common/RoleChip";
-import { ROLE_TRACK, initialsOf, normalizeRole, trackOfRole } from "../../components/common/roles";
+import Pagination from "../../components/common/Pagination";
+import { ROLE_TRACK, initialsOf, trackOfRole } from "../../components/common/roles";
 import {
   IconAlertTriangle,
   IconAward,
@@ -86,11 +87,40 @@ function UserManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [users, setUsers] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState({ all: 0, teacher: 0, dean: 0, superadmin: 0 });
   const [loading, setLoading] = useState(true);
   const [processingUserId, setProcessingUserId] = useState(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [query, setQuery] = useState("");
+
+  const page = Math.max(1, Number(searchParams.get("page")) || 1);
+  const rawPer = Number(searchParams.get("per")) || 25;
+  const per = [25, 50, 100].includes(rawPer) ? rawPer : 25;
+  const skip = (page - 1) * per;
+
+  const urlQ = searchParams.get("q") || "";
+  const [searchDraft, setSearchDraft] = useState(urlQ);
+
+  // Sync draft when URL q changes (e.g. back button, clear filters)
+  useEffect(() => {
+    setSearchDraft(urlQ);
+  }, [urlQ]);
+
+  // Debounce searchDraft -> URL query string, resetting to page 1
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = searchDraft.trim();
+      if (trimmed !== urlQ) {
+        const next = new URLSearchParams(searchParams);
+        if (trimmed) next.set("q", trimmed);
+        else next.delete("q");
+        next.delete("page");
+        setSearchParams(next, { replace: true });
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchDraft, urlQ, searchParams, setSearchParams]);
 
   // { kind: "dean" | "teacher" | "delete", user }
   const [pending, setPending] = useState(null);
@@ -103,6 +133,22 @@ function UserManagement() {
     const next = new URLSearchParams(searchParams);
     if (key === "all") next.delete("role");
     else next.set("role", key);
+    next.delete("page");
+    setSearchParams(next, { replace: true });
+  };
+
+  const setPage = (nextPage) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextPage > 1) next.set("page", String(nextPage));
+    else next.delete("page");
+    setSearchParams(next, { replace: true });
+  };
+
+  const setPerPage = (nextPer) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextPer !== 25) next.set("per", String(nextPer));
+    else next.delete("per");
+    next.delete("page");
     setSearchParams(next, { replace: true });
   };
 
@@ -119,8 +165,23 @@ function UserManagement() {
       setLoading(true);
       setError("");
 
-      const data = await apiJson("/superadmin/users");
+      const params = new URLSearchParams({
+        skip: String(skip),
+        limit: String(per),
+      });
+      if (roleFilter !== "all") {
+        params.set("role", roleFilter);
+      }
+      if (urlQ) {
+        params.set("q", urlQ);
+      }
+
+      const data = await apiJson(`/superadmin/users?${params}`);
       setUsers(data?.users || []);
+      setTotal(data?.total || 0);
+      if (data?.counts) {
+        setCounts(data.counts);
+      }
     } catch (err) {
       if (err?.status === 401) {
         handleUnauthorized();
@@ -131,7 +192,7 @@ function UserManagement() {
     } finally {
       setLoading(false);
     }
-  }, [handleUnauthorized]);
+  }, [skip, per, roleFilter, urlQ, handleUnauthorized]);
 
   useEffect(() => {
     loadUsers();
@@ -160,7 +221,11 @@ function UserManagement() {
 
       setSuccess(data?.message || action.success(displayName));
       setPending(null);
-      await loadUsers();
+      if (kind === "delete" && users.length === 1 && page > 1) {
+        setPage(page - 1);
+      } else {
+        await loadUsers();
+      }
     } catch (err) {
       if (err?.status === 401) {
         setPending(null);
@@ -180,24 +245,7 @@ function UserManagement() {
     navigate("/login");
   };
 
-  // ------------------------------------------------------------ derived
-  const counts = useMemo(() => {
-    const c = { all: users.length, teacher: 0, dean: 0, superadmin: 0 };
-    for (const u of users) {
-      const r = normalizeRole(u.role);
-      if (r in c) c[r] += 1;
-    }
-    return c;
-  }, [users]);
-
-  const visibleUsers = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return users.filter((u) => {
-      if (roleFilter !== "all" && normalizeRole(u.role) !== roleFilter) return false;
-      if (!term) return true;
-      return [u.name, u.email].some((f) => String(f ?? "").toLowerCase().includes(term));
-    });
-  }, [users, roleFilter, query]);
+  const visibleUsers = users;
 
   const isSelf = (user) => profile?.id && user.id === profile.id;
 
@@ -211,7 +259,7 @@ function UserManagement() {
       active="users"
       profile={profile}
       onLogout={handleLogout}
-      railBadge={loading ? undefined : users.length}
+      railBadge={loading ? undefined : (counts.all ?? total)}
       railNote="Promoting a teacher to Dean takes effect immediately. Deleting an account cannot be undone."
     >
       <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
@@ -220,9 +268,9 @@ function UserManagement() {
           eyebrow="Super Admin"
           title="User"
           accent="Management"
-          subtitle="Every account registered with Campus Capture: teachers, Deans and super admins."
+          subtitle="Every registered account across Swami Rama Himalayan University. Promote teachers to Deans, step Deans back to teachers, or remove accounts."
           actions={
-            <>
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={loadUsers}
@@ -236,37 +284,50 @@ function UserManagement() {
                 <IconUserPlus />
                 Create Dean
               </Link>
-            </>
+            </div>
           }
         />
 
-        {/* ----------------------------------------------------- notices */}
-        {success && (
-          <div className="toast toast-ok mt-6" role="status">
-            <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-ok" />
-            <p className="flex-1 text-sm font-medium text-ink">{success}</p>
+        {error && (
+          <div
+            className="mt-6 flex items-start gap-3 rounded-2xl border p-4"
+            data-tint=""
+            style={{ "--track": "#EF4444" }}
+            role="alert"
+          >
+            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink">Action failed</p>
+              <p className="prose-muted mt-0.5 text-sm">{error}</p>
+            </div>
             <button
               type="button"
-              onClick={() => setSuccess("")}
-              className="icon-btn icon-btn-sm -my-1 -mr-1 border-0 bg-transparent"
-              aria-label="Dismiss"
+              onClick={() => setError("")}
+              className="btn btn-ghost btn-xs shrink-0"
             >
-              <IconX />
+              Dismiss
             </button>
           </div>
         )}
 
-        {error && (
-          <div className="toast toast-err mt-6" role="alert">
-            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
-            <p className="flex-1 text-sm font-medium text-ink">{error}</p>
+        {success && (
+          <div
+            className="mt-6 flex items-start gap-3 rounded-2xl border p-4"
+            data-tint=""
+            style={{ "--track": "#10B981" }}
+            role="status"
+          >
+            <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-ok" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink">Success</p>
+              <p className="prose-muted mt-0.5 text-sm">{success}</p>
+            </div>
             <button
               type="button"
-              onClick={() => setError("")}
-              className="icon-btn icon-btn-sm -my-1 -mr-1 border-0 bg-transparent"
-              aria-label="Dismiss"
+              onClick={() => setSuccess("")}
+              className="btn btn-ghost btn-xs shrink-0"
             >
-              <IconX />
+              Dismiss
             </button>
           </div>
         )}
@@ -287,7 +348,7 @@ function UserManagement() {
                   <span className="dot dot-sm" style={{ "--track": ROLE_TRACK[tab.key] }} />
                 )}
                 {tab.label}
-                <span className="tab-count">{counts[tab.key]}</span>
+                <span className="tab-count">{counts[tab.key] ?? 0}</span>
               </button>
             ))}
           </div>
@@ -297,8 +358,8 @@ function UserManagement() {
             <IconSearch className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
             <input
               type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
               placeholder="Search by name or email"
               className="input pl-10"
             />
@@ -316,9 +377,11 @@ function UserManagement() {
             </div>
             {!loading && (
               <p className="num text-sm text-muted">
-                <span className="font-semibold text-ink">{visibleUsers.length}</span>
+                <span className="font-semibold text-ink">
+                  {total === 0 ? 0 : `${skip + 1}–${Math.min(skip + visibleUsers.length, total)}`}
+                </span>
                 {" of "}
-                {users.length}
+                {total}
               </p>
             )}
           </div>
@@ -334,17 +397,24 @@ function UserManagement() {
                 <IconInbox />
               </span>
               <p className="h3 mt-4 text-ink">
-                {users.length === 0 ? "No users yet" : "No matches"}
+                {total === 0 && !urlQ && roleFilter === "all" ? "No users yet" : "No matches"}
               </p>
               <p className="prose-muted mt-1 text-sm">
-                {users.length === 0
+                {total === 0 && !urlQ && roleFilter === "all"
                   ? "There are no registered accounts in the system."
                   : "Try a different search or clear the role filter."}
               </p>
-              {users.length > 0 && (
+              {(urlQ || roleFilter !== "all") && (
                 <button
                   type="button"
-                  onClick={() => { setQuery(""); setRoleFilter("all"); }}
+                  onClick={() => {
+                    setSearchDraft("");
+                    const next = new URLSearchParams(searchParams);
+                    next.delete("q");
+                    next.delete("role");
+                    next.delete("page");
+                    setSearchParams(next, { replace: true });
+                  }}
                   className="btn btn-ghost btn-sm mt-5"
                 >
                   Clear filters
@@ -360,18 +430,22 @@ function UserManagement() {
                     <div className="flex items-start gap-3">
                       <Avatar user={user} />
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="min-w-0 truncate font-display text-sm font-semibold text-ink">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-display text-sm font-semibold text-ink">
                             {user.name || "Unnamed user"}
-                            {isSelf(user) && <span className="ml-1.5 text-xs font-medium text-muted">(you)</span>}
-                          </p>
+                          </span>
+                          {isSelf(user) && (
+                            <span className="badge badge-accent text-[10px]">You</span>
+                          )}
                           <RoleChip role={user.role} />
                         </div>
                         <p className="prose-muted mt-0.5 truncate text-xs">{user.email}</p>
-                        <p className="prose-muted mt-0.5 text-xs">Joined {formatJoined(user.created_at)}</p>
+                        <p className="prose-muted mt-1 text-[11px]">
+                          Joined {formatJoined(user.created_at)}
+                        </p>
                       </div>
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    <div className="mt-3 flex items-center justify-end gap-1.5 border-t hairline pt-3">
                       <RowActions
                         user={user}
                         self={isSelf(user)}
@@ -383,35 +457,40 @@ function UserManagement() {
                 ))}
               </ul>
 
+              {/* Desktop: standard table with sticky header. */}
               <div className="hidden overflow-x-auto md:block">
                 <table className="w-full text-left">
                   <thead>
-                    <tr className="border-b hairline bg-raised/45">
-                      {TABLE_COLUMNS.map((column) => (
+                    <tr className="border-b hairline bg-raised/40">
+                      {TABLE_COLUMNS.map((col, idx) => (
                         <th
-                          key={column}
+                          key={col}
                           scope="col"
-                          className={`px-5 py-3 font-display text-[11px] font-semibold uppercase tracking-[.14em] text-muted ${
-                            column === "Actions" ? "text-right" : ""
+                          className={`px-5 py-3 text-xs font-semibold uppercase tracking-wider text-muted ${
+                            idx === TABLE_COLUMNS.length - 1 ? "text-right" : ""
                           }`}
                         >
-                          {column}
+                          {col}
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line/8">
                     {visibleUsers.map((user) => (
-                      <tr key={user.id} className="transition hover:bg-raised/35">
+                      <tr key={user.id} className="transition hover:bg-raised/40">
                         <td className="px-5 py-3.5">
                           <div className="flex items-center gap-3">
                             <Avatar user={user} />
                             <div className="min-w-0">
-                              <p className="truncate font-display text-sm font-semibold text-ink">
-                                {user.name || "Unnamed user"}
-                                {isSelf(user) && <span className="ml-1.5 text-xs font-medium text-muted">(you)</span>}
-                              </p>
-                              <p className="truncate text-xs text-muted">{user.email}</p>
+                              <div className="flex items-center gap-2">
+                                <span className="font-display text-sm font-semibold text-ink">
+                                  {user.name || "Unnamed user"}
+                                </span>
+                                {isSelf(user) && (
+                                  <span className="badge badge-accent text-[10px]">You</span>
+                                )}
+                              </div>
+                              <p className="prose-muted truncate text-xs">{user.email}</p>
                             </div>
                           </div>
                         </td>
@@ -437,6 +516,17 @@ function UserManagement() {
                 </table>
               </div>
             </>
+          )}
+
+          {total > 0 && (
+            <Pagination
+              page={page}
+              perPage={per}
+              total={total}
+              onPageChange={setPage}
+              onPerPageChange={setPerPage}
+              disabled={loading}
+            />
           )}
         </section>
       </div>

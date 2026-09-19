@@ -102,6 +102,21 @@ export async function fetchCurrentUser() {
   }
 }
 
+/**
+ * Update the signed-in user's profile details (name, phone, department).
+ */
+export async function updateProfile({ name, phone, department }) {
+  const data = await apiJson("/users/me", {
+    method: "PATCH",
+    body: { name, phone, department },
+  });
+  const user = data?.user || null;
+  if (user) {
+    updateSessionUser(user);
+  }
+  return data;
+}
+
 export function onAuthStateChange(callback) {
   return subscribe(callback);
 }

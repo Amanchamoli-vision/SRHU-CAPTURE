@@ -511,3 +511,91 @@ class StreamingTests(UploadTests):
         with self.assertRaises(Exception) as caught:
             stream_upload(upload, 1024)
         self.assertEqual(getattr(caught.exception, "status_code", None), 413)
+
+    # ---- Super Admin dynamic upload limits ----
+
+    def test_dynamic_photo_count_limit(self) -> None:
+        custom_limits = {
+            "max_photos_per_event": 2,
+            "max_photo_size_mb": 20,
+            "max_photo_total_mb": None,
+            "max_videos_per_event": None,
+            "max_video_size_mb": 200,
+            "max_video_total_mb": 200,
+            "max_photo_size_bytes": 20 * 1024 * 1024,
+            "max_photo_total_bytes": None,
+            "max_video_size_bytes": 200 * 1024 * 1024,
+            "max_video_total_bytes": 200 * 1024 * 1024,
+        }
+        with patch("app.routers.events.get_upload_limits", return_value=custom_limits):
+            self.assertEqual(self.upload("p1.png", PNG, "image/png").status_code, 201)
+            self.assertEqual(self.upload("p2.png", PNG, "image/png").status_code, 201)
+            extra = self.upload("p3.png", PNG, "image/png")
+            self.assertEqual(extra.status_code, 400)
+            self.assertIn("at most 2 photos", extra.json()["detail"])
+
+    def test_dynamic_photo_size_limit(self) -> None:
+        custom_limits = {
+            "max_photos_per_event": 10,
+            "max_photo_size_mb": 1,
+            "max_photo_total_mb": None,
+            "max_videos_per_event": None,
+            "max_video_size_mb": 200,
+            "max_video_total_mb": 200,
+            "max_photo_size_bytes": 1 * 1024 * 1024,
+            "max_photo_total_bytes": None,
+            "max_video_size_bytes": 200 * 1024 * 1024,
+            "max_video_total_bytes": 200 * 1024 * 1024,
+        }
+        big_photo = PNG + b"\x00" * (1 * 1024 * 1024)
+        with patch("app.routers.events.get_upload_limits", return_value=custom_limits):
+            response = self.upload("big.png", big_photo, "image/png")
+            self.assertEqual(response.status_code, 413)
+            self.assertIn("Photos must be smaller than 1 MB", response.json()["detail"])
+
+    def test_dynamic_video_count_limit(self) -> None:
+        custom_limits = {
+            "max_photos_per_event": 10,
+            "max_photo_size_mb": 20,
+            "max_photo_total_mb": None,
+            "max_videos_per_event": 1,
+            "max_video_size_mb": 200,
+            "max_video_total_mb": 200,
+            "max_photo_size_bytes": 20 * 1024 * 1024,
+            "max_photo_total_bytes": None,
+            "max_video_size_bytes": 200 * 1024 * 1024,
+            "max_video_total_bytes": 200 * 1024 * 1024,
+        }
+        with patch("app.routers.events.get_upload_limits", return_value=custom_limits):
+            self.assertEqual(self.upload("v1.mp4", MP4, "video/mp4").status_code, 201)
+            extra = self.upload("v2.mp4", MP4, "video/mp4")
+            self.assertEqual(extra.status_code, 400)
+            self.assertIn("at most 1 videos", extra.json()["detail"])
+
+    def test_dynamic_video_total_size_limit(self) -> None:
+        custom_limits = {
+            "max_photos_per_event": 10,
+            "max_photo_size_mb": 20,
+            "max_photo_total_mb": None,
+            "max_videos_per_event": None,
+            "max_video_size_mb": 50,
+            "max_video_total_mb": 50,
+            "max_photo_size_bytes": 20 * 1024 * 1024,
+            "max_photo_total_bytes": None,
+            "max_video_size_bytes": 50 * 1024 * 1024,
+            "max_video_total_bytes": 50 * 1024 * 1024,
+        }
+        self.media.docs.append({
+            "_id": ObjectId(),
+            "event_id": self.event_id,
+            "media_type": "video",
+            "file_size": 50 * 1024 * 1024,
+        })
+        with patch("app.routers.events.get_upload_limits", return_value=custom_limits):
+            response = self.upload("extra.mp4", MP4, "video/mp4")
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(
+                response.json()["detail"],
+                "You have exceeded the limit. Maximum allowed video size is 50 MB.",
+            )
+
