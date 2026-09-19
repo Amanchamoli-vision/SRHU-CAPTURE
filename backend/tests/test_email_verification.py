@@ -63,55 +63,54 @@ class VerifyEmailTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def verify(self, password: str = PASSWORD):
-        return self.client.post(
-            "/auth/verify-email", json={"token": "t" * 43, "password": password}
-        )
+    def verify(self, token: str = "t" * 43):
+        return self.client.post("/auth/verify-email", json={"token": token})
 
-    def test_first_click_verifies_and_keeps_the_token(self) -> None:
-        self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH)
+    def test_first_click_verifies_and_returns_session(self) -> None:
+        self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH, role="teacher")
         response = self.verify()
 
         self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertIn("access_token", data)
+        self.assertEqual(data["token_type"], "bearer")
+        self.assertEqual(data["user"]["email"], STORED_EMAIL)
+        self.assertEqual(data["user"]["role"], "teacher")
+        self.assertFalse(data["already_verified"])
+
         changes = self.users.update_one.call_args[0][1]["$set"]
         self.assertTrue(changes["email_verified"])
+        self.assertIsNone(changes["verification_expires_at"])
         self.assertNotIn("verification_token_hash", changes)
 
-    def test_wrong_password_is_refused_and_the_token_is_kept(self) -> None:
-        """Pre-registration takeover: the real owner must not verify a stranger's account."""
-        self.users.find_one.return_value = stored_user(password_hash=hash_password("attacker"))
-        response = self.verify(PASSWORD)
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            response.json()["detail"],
-            "The password doesn't match this account. If you didn't create it, "
-            "use Forgot password to set your own password.",
-        )
-        self.users.update_one.assert_not_called()
-        self.users.find_one_and_update.assert_not_called()
-
-    def test_password_is_required(self) -> None:
-        self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH)
-        response = self.client.post("/auth/verify-email", json={"token": "t" * 43})
-        self.assertEqual(response.status_code, 422)
-
-    def test_second_click_is_a_success_not_an_error(self) -> None:
+    def test_second_click_returns_already_verified(self) -> None:
         """StrictMode, a double click or a link scanner must not show "invalid"."""
         self.users.find_one.return_value = stored_user(
-            email_verified=True, verification_expires_at=None, password_hash=PASSWORD_HASH
+            email_verified=True, verification_expires_at=None, password_hash=PASSWORD_HASH, role="teacher"
         )
-        # The password is not checked once the account is already verified.
-        response = self.verify("anything")
+        response = self.verify()
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertIn("already verified", response.json()["message"])
+        data = response.json()
+        self.assertTrue(data.get("already_verified"))
+        self.assertIn("already verified", data["message"])
+        self.users.update_one.assert_not_called()
+
+    def test_expired_token_is_rejected(self) -> None:
+        self.users.find_one.return_value = stored_user(
+            verification_expires_at=utc_now() - timedelta(hours=1),
+            password_hash=PASSWORD_HASH,
+        )
+        response = self.verify()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("expired", response.json()["detail"])
         self.users.update_one.assert_not_called()
 
     def test_unknown_token_is_still_rejected(self) -> None:
         self.users.find_one.return_value = None
         response = self.verify()
         self.assertEqual(response.status_code, 400)
+        self.assertIn("invalid or has already been used", response.json()["detail"])
 
     def test_verify_is_rate_limited_per_ip(self) -> None:
         self.users.find_one.return_value = None

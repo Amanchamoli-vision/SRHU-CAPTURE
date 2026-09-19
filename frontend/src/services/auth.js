@@ -133,12 +133,21 @@ export async function register({ name, email, password }) {
   });
 }
 
-export async function verifyEmail(token, password) {
-  return apiJson("/auth/verify-email", {
+export async function verifyEmail(token, password = null) {
+  const payload = { token };
+  if (password) payload.password = password;
+
+  const data = await apiJson("/auth/verify-email", {
     method: "POST",
     auth: false,
-    body: { token, password },
+    body: payload,
   });
+
+  if (data?.access_token && data?.user) {
+    writeSession(sessionFromTokenResponse(data), "SIGNED_IN");
+  }
+
+  return data;
 }
 
 export async function resendVerification(email) {

@@ -91,6 +91,12 @@ def authenticate(authorization: str | None) -> tuple[dict, dict]:
             detail="User account no longer exists",
         )
 
+    if document.get("is_active") is False:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been deactivated. Please contact the administrator.",
+        )
+
     # A password change, password reset or logout bumps token_version, which
     # ends every token issued before it. Tokens from before versioning carry no
     # `ver` and count as 0, like accounts without the field.

@@ -37,6 +37,7 @@ export default function UploadPanel({
   hint,
   emptyLabel,
   disabled = false,
+  required = false,
   onPick,
   onRemove,
   onRetry,
@@ -303,8 +304,10 @@ export default function UploadPanel({
 
       {items.length === 0 && uploads.length === 0 && (
         <p className="prose-muted mt-4 flex items-center gap-2 text-xs">
-          <IconAlertTriangle className="h-4 w-4 shrink-0 text-muted" />
-          Nothing added yet. This step is optional — you can continue without it.
+          <IconAlertTriangle className={`h-4 w-4 shrink-0 ${required ? "text-amber-500" : "text-muted"}`} />
+          {required
+            ? "Nothing added yet. At least one file is required before this event can be submitted for approval."
+            : "Nothing added yet. This step is optional — you can continue without it."}
         </p>
       )}
     </div>

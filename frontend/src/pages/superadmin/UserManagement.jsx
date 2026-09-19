@@ -7,16 +7,22 @@ import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
 import RoleChip from "../../components/common/RoleChip";
 import Pagination from "../../components/common/Pagination";
-import { ROLE_TRACK, initialsOf, trackOfRole } from "../../components/common/roles";
+import { ROLE_TRACK, initialsOf, normalizeRole, trackOfRole } from "../../components/common/roles";
+import BulkTeacherOnboardModal from "../../components/superadmin/BulkTeacherOnboardModal";
 import {
   IconAlertTriangle,
   IconAward,
+  IconCheck,
   IconCheckCircle,
+  IconCopy,
+  IconEdit,
   IconInbox,
   IconRefresh,
+  IconRotateCcw,
   IconSearch,
   IconShield,
   IconTrash,
+  IconUpload,
   IconUser,
   IconUserPlus,
   IconX,
@@ -29,7 +35,7 @@ const ROLE_TABS = [
   { key: "superadmin", label: "Super Admins" },
 ];
 
-const TABLE_COLUMNS = ["User", "Role", "Joined", "Actions"];
+const TABLE_COLUMNS = ["User", "Role", "Status", "Joined", "Actions"];
 
 const formatJoined = (iso) => {
   if (!iso) return "—";
@@ -66,6 +72,30 @@ const ACTIONS = {
     path: (id) => `/superadmin/users/${id}/make-teacher`,
     success: (name) => `${name} is now a Teacher.`,
     failure: "Failed to make user Teacher.",
+  },
+  deactivate: {
+    eyebrow: "Account Access",
+    title: "Deactivate user?",
+    body: (name) => `${name} will be immediately logged out and unable to sign in. Their historical events, media, and accreditation records remain completely preserved.`,
+    confirm: "Deactivate Account",
+    busy: "Deactivating…",
+    tone: "btn-danger",
+    method: "PATCH",
+    path: (id) => `/superadmin/users/${id}/toggle-active`,
+    success: (name) => `${name} has been deactivated.`,
+    failure: "Failed to deactivate user.",
+  },
+  activate: {
+    eyebrow: "Account Access",
+    title: "Activate user?",
+    body: (name) => `${name} will regain full access to sign in and use the platform.`,
+    confirm: "Activate Account",
+    busy: "Activating…",
+    tone: "btn-brand",
+    method: "PATCH",
+    path: (id) => `/superadmin/users/${id}/toggle-active`,
+    success: (name) => `${name} has been activated.`,
+    failure: "Failed to activate user.",
   },
   delete: {
     eyebrow: "Permanent",
@@ -240,6 +270,99 @@ function UserManagement() {
     }
   };
 
+  // Edit Profile modal state
+  const [editingUser, setEditingUser] = useState(null);
+  const [editFormData, setEditFormData] = useState({ name: "", phone: "", department: "" });
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [departmentsList, setDepartmentsList] = useState([]);
+
+  // Bulk Onboard modal state
+  const [bulkOnboardOpen, setBulkOnboardOpen] = useState(false);
+
+  // Reset Password modal state
+  const [resettingUser, setResettingUser] = useState(null);
+  const [resetPasswordResult, setResetPasswordResult] = useState(null);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    apiJson("/superadmin/departments?is_active=true")
+      .then((res) => setDepartmentsList(res?.departments || []))
+      .catch(() => {});
+  }, []);
+
+  const handleOpenEdit = (user) => {
+    setEditingUser(user);
+    setEditFormData({
+      name: user.name || "",
+      phone: user.phone || "",
+      department: user.department || "",
+    });
+    setEditError("");
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    try {
+      setEditBusy(true);
+      setEditError("");
+      await apiJson(`/superadmin/users/${editingUser.id}/profile`, {
+        method: "PATCH",
+        body: {
+          name: editFormData.name.trim() || null,
+          phone: editFormData.phone.trim() || null,
+          department: editFormData.department.trim() || null,
+        },
+      });
+      setSuccess(`Profile for ${editFormData.name || editingUser.email} updated successfully.`);
+      setEditingUser(null);
+      await loadUsers();
+    } catch (err) {
+      console.error("Save profile error:", err);
+      setEditError(err?.message || "Failed to update profile.");
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
+  const handleOpenReset = (user) => {
+    setResettingUser(user);
+    setResetPasswordResult(null);
+    setResetError("");
+    setCopied(false);
+  };
+
+  const handleExecuteReset = async () => {
+    if (!resettingUser) return;
+    try {
+      setResetBusy(true);
+      setResetError("");
+      const res = await apiJson(`/superadmin/users/${resettingUser.id}/reset-password`, {
+        method: "POST",
+        body: {},
+      });
+      setResetPasswordResult(res);
+      setSuccess(`Password reset for ${resettingUser.name || resettingUser.email}.`);
+      await loadUsers();
+    } catch (err) {
+      console.error("Reset password error:", err);
+      setResetError(err?.message || "Failed to reset password.");
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
+  const handleCopyPassword = () => {
+    if (resetPasswordResult?.temporary_password) {
+      navigator.clipboard.writeText(resetPasswordResult.temporary_password);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   const handleLogout = async () => {
     await signOut();
     navigate("/login");
@@ -279,6 +402,14 @@ function UserManagement() {
               >
                 {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
                 Refresh
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkOnboardOpen(true)}
+                className="btn btn-secondary"
+              >
+                <IconUpload />
+                Bulk Onboard
               </button>
               <Link to="/superadmin/create-dean" className="btn btn-primary">
                 <IconUserPlus />
@@ -438,19 +569,28 @@ function UserManagement() {
                             <span className="badge badge-accent text-[10px]">You</span>
                           )}
                           <RoleChip role={user.role} />
+                          {user.is_active !== false ? (
+                            <span className="chip chip-sm bg-ok/10 text-ok border-ok/30">Active</span>
+                          ) : (
+                            <span className="chip chip-sm bg-err/10 text-err border-err/30">Deactivated</span>
+                          )}
                         </div>
                         <p className="prose-muted mt-0.5 truncate text-xs">{user.email}</p>
-                        <p className="prose-muted mt-1 text-[11px]">
-                          Joined {formatJoined(user.created_at)}
-                        </p>
+                        <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted">
+                          {user.department && <span>Dept: {user.department}</span>}
+                          {user.phone && <span>Ph: {user.phone}</span>}
+                          <span>Joined {formatJoined(user.created_at)}</span>
+                        </div>
                       </div>
                     </div>
-                    <div className="mt-3 flex items-center justify-end gap-1.5 border-t hairline pt-3">
+                    <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5 border-t hairline pt-3">
                       <RowActions
                         user={user}
                         self={isSelf(user)}
                         busy={processingUserId === user.id}
                         onAct={(kind) => setPending({ kind, user })}
+                        onEdit={handleOpenEdit}
+                        onReset={handleOpenReset}
                       />
                     </div>
                   </li>
@@ -491,11 +631,23 @@ function UserManagement() {
                                 )}
                               </div>
                               <p className="prose-muted truncate text-xs">{user.email}</p>
+                              {(user.department || user.phone) && (
+                                <p className="prose-muted mt-0.5 truncate text-[11px]">
+                                  {[user.department, user.phone].filter(Boolean).join(" · ")}
+                                </p>
+                              )}
                             </div>
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-5 py-3.5">
                           <RoleChip role={user.role} />
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3.5">
+                          {user.is_active !== false ? (
+                            <span className="chip chip-sm bg-ok/10 text-ok border-ok/30">Active</span>
+                          ) : (
+                            <span className="chip chip-sm bg-err/10 text-err border-err/30">Deactivated</span>
+                          )}
                         </td>
                         <td className="num whitespace-nowrap px-5 py-3.5 text-sm text-muted">
                           {formatJoined(user.created_at)}
@@ -507,6 +659,8 @@ function UserManagement() {
                               self={isSelf(user)}
                               busy={processingUserId === user.id}
                               onAct={(kind) => setPending({ kind, user })}
+                              onEdit={handleOpenEdit}
+                              onReset={handleOpenReset}
                             />
                           </div>
                         </td>
@@ -560,7 +714,17 @@ function UserManagement() {
                 </>
               ) : (
                 <>
-                  {pending?.kind === "delete" ? <IconTrash /> : pending?.kind === "dean" ? <IconAward /> : <IconUser />}
+                  {pending?.kind === "delete" ? (
+                    <IconTrash />
+                  ) : pending?.kind === "dean" ? (
+                    <IconAward />
+                  ) : pending?.kind === "deactivate" ? (
+                    <IconAlertTriangle />
+                  ) : pending?.kind === "activate" ? (
+                    <IconCheck />
+                  ) : (
+                    <IconUser />
+                  )}
                   {pendingAction?.confirm}
                 </>
               )}
@@ -598,6 +762,203 @@ function UserManagement() {
           </div>
         )}
       </Modal>
+
+      {/* --------------------------------------------- Edit Profile Modal */}
+      <Modal
+        open={Boolean(editingUser)}
+        onClose={() => { if (!editBusy) setEditingUser(null); }}
+        eyebrow="User Profile"
+        title="Edit User Profile"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setEditingUser(null)}
+              disabled={editBusy}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="edit-user-form"
+              disabled={editBusy}
+              className="btn btn-primary btn-sm"
+            >
+              {editBusy ? <span className="spin h-4 w-4" /> : null}
+              Save Changes
+            </button>
+          </>
+        }
+      >
+        {editingUser && (
+          <form id="edit-user-form" onSubmit={handleSaveEdit} className="space-y-4">
+            {editError && (
+              <div className="toast toast-err text-xs" role="alert">
+                <IconAlertTriangle className="h-4 w-4 shrink-0 text-err" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <div>
+              <label className="label block text-xs font-semibold text-ink" htmlFor="user-name">
+                Full Name *
+              </label>
+              <input
+                id="user-name"
+                type="text"
+                required
+                value={editFormData.name}
+                onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                className="input mt-1 w-full"
+              />
+            </div>
+
+            <div>
+              <label className="label block text-xs font-semibold text-ink" htmlFor="user-department">
+                Department
+              </label>
+              {departmentsList.length > 0 ? (
+                <select
+                  id="user-department"
+                  value={editFormData.department}
+                  onChange={(e) => setEditFormData({ ...editFormData, department: e.target.value })}
+                  className="input mt-1 w-full"
+                >
+                  <option value="">Select department</option>
+                  {departmentsList.map((d) => (
+                    <option key={d.id} value={d.name}>
+                      {d.name} ({d.code})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  id="user-department"
+                  type="text"
+                  value={editFormData.department}
+                  onChange={(e) => setEditFormData({ ...editFormData, department: e.target.value })}
+                  placeholder="e.g. Computer Science & Engineering"
+                  className="input mt-1 w-full"
+                />
+              )}
+            </div>
+
+            <div>
+              <label className="label block text-xs font-semibold text-ink" htmlFor="user-phone">
+                Mobile Number (10 digits)
+              </label>
+              <input
+                id="user-phone"
+                type="tel"
+                maxLength={10}
+                value={editFormData.phone}
+                onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value.replace(/\D/g, "") })}
+                placeholder="10-digit mobile number"
+                className="input mt-1 w-full"
+              />
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* --------------------------------------------- Reset Password Modal */}
+      <Modal
+        open={Boolean(resettingUser)}
+        onClose={() => { if (!resetBusy) setResettingUser(null); }}
+        eyebrow="Security Override"
+        title="Reset User Password"
+        footer={
+          resetPasswordResult ? (
+            <button
+              type="button"
+              onClick={() => setResettingUser(null)}
+              className="btn btn-primary btn-sm"
+            >
+              Done
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setResettingUser(null)}
+                disabled={resetBusy}
+                className="btn btn-ghost btn-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteReset}
+                disabled={resetBusy}
+                className="btn btn-brand btn-sm"
+              >
+                {resetBusy ? (
+                  <>
+                    <span className="spin h-4 w-4" />
+                    Resetting…
+                  </>
+                ) : (
+                  <>
+                    <IconRotateCcw />
+                    Generate Temporary Password
+                  </>
+                )}
+              </button>
+            </>
+          )
+        }
+      >
+        {resettingUser && (
+          <div className="space-y-4">
+            {resetError && (
+              <div className="toast toast-err text-xs" role="alert">
+                <IconAlertTriangle className="h-4 w-4 shrink-0 text-err" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            {!resetPasswordResult ? (
+              <>
+                <p className="prose-muted text-sm">
+                  Resetting the password for <strong>{resettingUser.name || resettingUser.email}</strong> will terminate all active sessions immediately and generate a temporary password. The user will be required to choose a new password on their next login.
+                </p>
+                <div className="rounded-xl border hairline bg-raised/50 p-3 text-xs text-muted">
+                  An email with credentials will be queued if SMTP is configured.
+                </div>
+              </>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm font-semibold text-ok">
+                  Password reset successfully!
+                </p>
+                <p className="text-xs text-muted">
+                  Share this temporary password with the user. It will not be shown again:
+                </p>
+                <div className="flex items-center justify-between gap-2 rounded-xl border hairline bg-raised/80 p-3 font-mono text-sm">
+                  <span className="select-all font-bold text-ink">
+                    {resetPasswordResult.temporary_password}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyPassword}
+                    className="btn btn-ghost btn-xs"
+                  >
+                    {copied ? <IconCheck className="text-ok" /> : <IconCopy />}
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <BulkTeacherOnboardModal
+        isOpen={bulkOnboardOpen}
+        onClose={() => setBulkOnboardOpen(false)}
+        onSuccess={loadUsers}
+      />
     </SuperAdminShell>
   );
 }
@@ -626,7 +987,7 @@ function Avatar({ user }) {
  * flow for demoting or removing one from here, and the signed-in super admin can
  * never act on themselves.
  */
-function RowActions({ user, self, busy, onAct }) {
+function RowActions({ user, self, busy, onAct, onEdit, onReset }) {
   const role = normalizeRole(user.role);
 
   if (role === "superadmin" || self) {
@@ -638,17 +999,42 @@ function RowActions({ user, self, busy, onAct }) {
     );
   }
 
+  const isActive = user.is_active !== false;
+
   return (
     <>
+      <button
+        type="button"
+        onClick={() => onEdit(user)}
+        disabled={busy}
+        className="btn btn-ghost btn-xs btn-icon"
+        title="Edit user profile"
+        aria-label="Edit user profile"
+      >
+        <IconEdit className="h-4 w-4" />
+      </button>
+
+      <button
+        type="button"
+        onClick={() => onReset(user)}
+        disabled={busy}
+        className="btn btn-ghost btn-xs btn-icon"
+        title="Reset password"
+        aria-label="Reset password"
+      >
+        <IconRotateCcw className="h-4 w-4" />
+      </button>
+
       {role === "teacher" && (
         <button
           type="button"
           onClick={() => onAct("dean")}
           disabled={busy}
-          className="btn btn-brand btn-xs"
+          className="btn btn-brand btn-xs btn-icon"
+          title="Promote to Dean"
+          aria-label="Promote to Dean"
         >
-          <IconAward />
-          Make Dean
+          <IconAward className="h-4 w-4" />
         </button>
       )}
       {role === "dean" && (
@@ -656,21 +1042,38 @@ function RowActions({ user, self, busy, onAct }) {
           type="button"
           onClick={() => onAct("teacher")}
           disabled={busy}
-          className="btn btn-ghost btn-xs"
+          className="btn btn-ghost btn-xs btn-icon"
+          title="Step back to Teacher"
+          aria-label="Step back to Teacher"
         >
-          <IconUser />
-          Make Teacher
+          <IconUser className="h-4 w-4" />
         </button>
       )}
+
+      <button
+        type="button"
+        onClick={() => onAct(isActive ? "deactivate" : "activate")}
+        disabled={busy}
+        className={`btn btn-xs btn-icon ${isActive ? "btn-ghost text-err hover:bg-err/10" : "btn-ok"}`}
+        title={isActive ? "Deactivate user" : "Activate user"}
+        aria-label={isActive ? "Deactivate user" : "Activate user"}
+      >
+        {isActive ? (
+          <IconAlertTriangle className="h-4 w-4" />
+        ) : (
+          <IconCheck className="h-4 w-4" />
+        )}
+      </button>
+
       <button
         type="button"
         onClick={() => onAct("delete")}
         disabled={busy}
-        className="btn btn-danger btn-xs"
+        className="btn btn-danger btn-xs btn-icon"
         title="Delete account"
+        aria-label="Delete account"
       >
-        <IconTrash />
-        Delete
+        <IconTrash className="h-4 w-4" />
       </button>
     </>
   );

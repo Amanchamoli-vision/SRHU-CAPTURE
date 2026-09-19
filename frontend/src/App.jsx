@@ -25,13 +25,14 @@ import DeanArchive from "./pages/dean/Archive";
 import DeanEventDetails from "./pages/dean/EventDetails";
 import DeanProfile from "./pages/dean/Profile";
 
-// Super Admin
 import SuperAdminDashboard from "./pages/superadmin/SuperAdminDashboard";
 import UserManagement from "./pages/superadmin/UserManagement";
 import CreateDean from "./pages/superadmin/CreateDean";
 import SuperAdminEvents from "./pages/superadmin/Events";
 import SuperAdminEventDetails from "./pages/superadmin/EventDetails";
 import Settings from "./pages/superadmin/Settings";
+import Departments from "./pages/superadmin/Departments";
+import AuditLogs from "./pages/superadmin/AuditLogs";
 
 /**
  * The create-event wizard keeps a lot of state in refs (the server event id,
@@ -183,6 +184,24 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={["superadmin"]}>
                 <UserManagement />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/superadmin/departments"
+            element={
+              <ProtectedRoute allowedRoles={["superadmin"]}>
+                <Departments />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/superadmin/audit-logs"
+            element={
+              <ProtectedRoute allowedRoles={["superadmin"]}>
+                <AuditLogs />
               </ProtectedRoute>
             }
           />

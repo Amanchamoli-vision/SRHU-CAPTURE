@@ -1,7 +1,4 @@
-import { useEffect, useState } from "react";
-
-const HOURS = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
-const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Parse a canonical "HH:MM" (24h) string into 12-hour components.
@@ -31,7 +28,7 @@ function parse24hTo12h(hhmm) {
  * Convert 12-hour components into canonical "HH:MM" (24h) string.
  */
 function to24h(hourStr, minuteStr, period) {
-  if (!hourStr) return "";
+  if (!hourStr && !minuteStr) return "";
   const h = parseInt(hourStr, 10);
   if (!Number.isFinite(h) || h < 1 || h > 12) return "";
 
@@ -48,9 +45,13 @@ function to24h(hourStr, minuteStr, period) {
 
 /**
  * TimePicker12h:
- * 12-hour time picker with Hour, Minute, and AM/PM dropdowns.
- * Completely replaces native 24-hour time inputs while seamlessly reading
- * and writing canonical "HH:MM" (24h) format for the backend and database.
+ * Compact, typeable 12-hour time picker with Hour, Minute, and AM/PM controls.
+ * Replaces the bulky 60-item dropdown with a clean, typeable input supporting:
+ * - Direct manual typing of Hour (1-12) and Minute (00-59)
+ * - Step-based minute increments (5-minute steps via spinner / arrow keys)
+ * - Simple 2-option AM/PM dropdown (AM / PM only)
+ * - Compact visual footprint (max-w-[240px]) matching the form's input aesthetics
+ * - Seamlessly reads and writes canonical "HH:MM" (24h) format.
  */
 export default function TimePicker12h({
   id,
@@ -62,113 +63,435 @@ export default function TimePicker12h({
 }) {
   const parsed = parse24hTo12h(value);
 
-  // Keep track of AM/PM preference even if hour is not yet chosen
-  const [selectedPeriod, setSelectedPeriod] = useState(parsed?.period || "AM");
+  const [hour, setHour] = useState(parsed?.hour || "");
+  const [minute, setMinute] = useState(parsed?.minute || "");
+  const [period, setPeriod] = useState(parsed?.period || "AM");
 
-  // Keep selectedPeriod in sync when value changes externally
+  // Synchronous ref to prevent stale closures during rapid typing
+  const stateRef = useRef({
+    hour: parsed?.hour || "",
+    minute: parsed?.minute || "",
+    period: parsed?.period || "AM",
+  });
+
+  const hourRef = useRef(null);
+  const minuteRef = useRef(null);
+
+  // Sync internal state when value prop changes externally (draft load, reset, etc.)
   useEffect(() => {
-    if (parsed?.period) {
-      setSelectedPeriod(parsed.period);
+    const next = parse24hTo12h(value);
+    if (next) {
+      setHour(next.hour);
+      setMinute(next.minute);
+      setPeriod(next.period);
+      stateRef.current = { hour: next.hour, minute: next.minute, period: next.period };
+    } else if (!value) {
+      setHour("");
+      setMinute("");
+      stateRef.current.hour = "";
+      stateRef.current.minute = "";
     }
-  }, [parsed?.period]);
+  }, [value]);
 
-  const currentHour = parsed?.hour || "";
-  const currentMinute = parsed?.minute || "";
-  const currentPeriod = parsed?.period || selectedPeriod;
-
-  const handleHourChange = (e) => {
-    const newHour = e.target.value;
-    if (!newHour) {
+  const commitTime = (hVal, mVal, pVal) => {
+    stateRef.current = { hour: hVal, minute: mVal, period: pVal };
+    if (!hVal && !mVal) {
       onChange("");
       return;
     }
+    const val24 = to24h(hVal, mVal || "00", pVal);
+    onChange(val24);
+  };
 
-    // Default minute to "00" if none selected yet for 1-click hour picking
-    const nextMinute = currentMinute || "00";
-    onChange(to24h(newHour, nextMinute, currentPeriod));
+  const handleHourChange = (e) => {
+    const raw = e.target.value.replace(/\D/g, "");
+    const curMin = stateRef.current.minute;
+    const curPeriod = stateRef.current.period;
+
+    if (!raw) {
+      setHour("");
+      stateRef.current.hour = "";
+      commitTime("", curMin, curPeriod);
+      return;
+    }
+
+    const num = parseInt(raw, 10);
+    if (num > 12) {
+      const last = parseInt(raw.slice(-1), 10);
+      if (last >= 1 && last <= 9) {
+        const hStr = String(last).padStart(2, "0");
+        setHour(hStr);
+        stateRef.current.hour = hStr;
+        commitTime(hStr, curMin, curPeriod);
+        minuteRef.current?.focus();
+        minuteRef.current?.select();
+      }
+      return;
+    }
+
+    if (raw.length === 1) {
+      if (num > 1) {
+        // Digits 2-9 are definitively single-digit hours: auto pad and advance to minute
+        const hStr = String(num).padStart(2, "0");
+        setHour(hStr);
+        stateRef.current.hour = hStr;
+        commitTime(hStr, curMin, curPeriod);
+        minuteRef.current?.focus();
+        minuteRef.current?.select();
+      } else {
+        // num === 1 (could be 10, 11, 12): keep as "1"
+        setHour(raw);
+        stateRef.current.hour = raw;
+        commitTime(raw, curMin, curPeriod);
+      }
+    } else if (raw.length === 2) {
+      if (num >= 1 && num <= 12) {
+        const hStr = String(num).padStart(2, "0");
+        setHour(hStr);
+        stateRef.current.hour = hStr;
+        commitTime(hStr, curMin, curPeriod);
+        minuteRef.current?.focus();
+        minuteRef.current?.select();
+      }
+    }
+  };
+
+  const handleHourBlur = () => {
+    const curHour = stateRef.current.hour;
+    const curMin = stateRef.current.minute;
+    const curPeriod = stateRef.current.period;
+    if (!curHour) return;
+
+    const num = parseInt(curHour, 10);
+    if (num >= 1 && num <= 12) {
+      const hStr = String(num).padStart(2, "0");
+      setHour(hStr);
+      stateRef.current.hour = hStr;
+      const mStr = curMin ? String(parseInt(curMin, 10)).padStart(2, "0") : "00";
+      setMinute(mStr);
+      stateRef.current.minute = mStr;
+      commitTime(hStr, mStr, curPeriod);
+    } else {
+      setHour("");
+      stateRef.current.hour = "";
+      commitTime("", curMin, curPeriod);
+    }
+  };
+
+  const handleHourKeyDown = (e) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      stepHour(1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      stepHour(-1);
+    } else if (e.key === ":" || e.key === "/" || (e.key === "ArrowRight" && stateRef.current.hour.length >= 1)) {
+      e.preventDefault();
+      minuteRef.current?.focus();
+      minuteRef.current?.select();
+    }
+  };
+
+  const stepHour = (delta) => {
+    const current = parseInt(stateRef.current.hour, 10) || 12;
+    let next = current + delta;
+    if (next > 12) next = 1;
+    if (next < 1) next = 12;
+    const hStr = String(next).padStart(2, "0");
+    setHour(hStr);
+    stateRef.current.hour = hStr;
+    const mStr = stateRef.current.minute || "00";
+    setMinute(mStr);
+    stateRef.current.minute = mStr;
+    commitTime(hStr, mStr, stateRef.current.period);
   };
 
   const handleMinuteChange = (e) => {
-    const newMinute = e.target.value;
-    if (!currentHour) {
+    const raw = e.target.value.replace(/\D/g, "");
+    const curHour = stateRef.current.hour;
+    const curPeriod = stateRef.current.period;
+
+    if (!raw) {
+      setMinute("");
+      stateRef.current.minute = "";
+      commitTime(curHour, "", curPeriod);
       return;
     }
-    onChange(to24h(currentHour, newMinute, currentPeriod));
-  };
 
-  const handlePeriodChange = (e) => {
-    const newPeriod = e.target.value;
-    setSelectedPeriod(newPeriod);
-    if (currentHour) {
-      onChange(to24h(currentHour, currentMinute || "00", newPeriod));
+    const num = parseInt(raw, 10);
+    if (num > 59) {
+      setMinute("59");
+      stateRef.current.minute = "59";
+      commitTime(curHour, "59", curPeriod);
+      return;
+    }
+
+    if (raw.length <= 2) {
+      setMinute(raw);
+      stateRef.current.minute = raw;
+      if (raw.length === 2) {
+        commitTime(curHour, raw, curPeriod);
+      }
     }
   };
 
-  const selectClass = `input min-h-10 py-2 pr-6 pl-2.5 text-center text-sm font-medium ${
-    hasError ? "border-red-500 ring-red-500/20" : ""
-  }`;
+  const handleMinuteBlur = () => {
+    const curHour = stateRef.current.hour;
+    const curMin = stateRef.current.minute;
+    const curPeriod = stateRef.current.period;
+
+    if (!curMin) {
+      if (curHour) {
+        setMinute("00");
+        stateRef.current.minute = "00";
+        commitTime(curHour, "00", curPeriod);
+      }
+      return;
+    }
+    const num = parseInt(curMin, 10);
+    if (num >= 0 && num <= 59) {
+      const mStr = String(num).padStart(2, "0");
+      setMinute(mStr);
+      stateRef.current.minute = mStr;
+      commitTime(curHour, mStr, curPeriod);
+    } else {
+      setMinute("00");
+      stateRef.current.minute = "00";
+      commitTime(curHour, "00", curPeriod);
+    }
+  };
+
+  const handleMinuteKeyDown = (e) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = e.shiftKey ? 1 : 5;
+      stepMinute(step);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const step = e.shiftKey ? -1 : -5;
+      stepMinute(step);
+    } else if (e.key === "Backspace" && !stateRef.current.minute) {
+      e.preventDefault();
+      hourRef.current?.focus();
+    } else if (e.key === "ArrowLeft" && e.target.selectionStart === 0) {
+      e.preventDefault();
+      hourRef.current?.focus();
+    } else if (e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      handlePeriodChange("AM");
+    } else if (e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      handlePeriodChange("PM");
+    }
+  };
+
+  const stepMinute = (delta) => {
+    const current = parseInt(stateRef.current.minute, 10) || 0;
+    let next;
+    if (Math.abs(delta) === 5) {
+      if (delta > 0) {
+        next = Math.floor(current / 5) * 5 + 5;
+      } else {
+        next = Math.ceil(current / 5) * 5 - 5;
+      }
+    } else {
+      next = current + delta;
+    }
+    if (next >= 60) next = 0;
+    if (next < 0) next = 55;
+    const mStr = String(next).padStart(2, "0");
+    setMinute(mStr);
+    stateRef.current.minute = mStr;
+    const hStr = stateRef.current.hour || "12";
+    if (!stateRef.current.hour) {
+      setHour(hStr);
+      stateRef.current.hour = hStr;
+    }
+    commitTime(hStr, mStr, stateRef.current.period);
+  };
+
+  const handlePeriodChange = (newPeriod) => {
+    setPeriod(newPeriod);
+    stateRef.current.period = newPeriod;
+    if (stateRef.current.hour) {
+      commitTime(stateRef.current.hour, stateRef.current.minute || "00", newPeriod);
+    }
+  };
+
+  const handlePaste = (e) => {
+    const text = e.clipboardData?.getData("text") || "";
+    const clean = text.trim();
+    const match = clean.match(/^(\d{1,2}):(\d{2})(?:\s*([ap]m))?$/i);
+    if (match) {
+      e.preventDefault();
+      let h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      let p = match[3] ? match[3].toUpperCase() : stateRef.current.period;
+
+      if (h > 12) {
+        p = h >= 12 ? "PM" : "AM";
+        h = h % 12 === 0 ? 12 : h % 12;
+      }
+
+      if (h >= 1 && h <= 12 && m >= 0 && m <= 59) {
+        const hStr = String(h).padStart(2, "0");
+        const mStr = String(m).padStart(2, "0");
+        setHour(hStr);
+        setMinute(mStr);
+        setPeriod(p);
+        commitTime(hStr, mStr, p);
+      }
+    }
+  };
 
   return (
-    <div className="flex items-center gap-1.5 sm:gap-2">
-      <div className="relative flex-1">
-        <select
+    <div
+      onPaste={handlePaste}
+      className={`time-picker-box flex items-center justify-between gap-1.5 h-10 px-3 rounded-xl border bg-[var(--input-bg)] transition-all ${
+        hasError
+          ? "border-red-500 ring-2 ring-red-500/20"
+          : "border-[rgb(var(--c-line)/0.14)] focus-within:border-[rgb(var(--c-accent)/0.7)] focus-within:ring-2 focus-within:ring-[rgb(var(--c-accent)/0.18)]"
+      } ${disabled ? "opacity-60 cursor-not-allowed bg-[rgb(var(--c-raised)/0.6)]" : ""} w-full max-w-[240px]`}
+    >
+      {/* Clock icon */}
+      <svg
+        className="w-4 h-4 text-muted shrink-0 select-none"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+      </svg>
+
+      {/* Time digits container */}
+      <div className="flex items-center gap-1 min-w-0">
+        {/* Hour input */}
+        <input
+          ref={hourRef}
           id={id ? `${id}-hour` : undefined}
           name={id ? `${id}_hour` : undefined}
-          value={currentHour}
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={2}
+          placeholder="HH"
+          value={hour}
           onChange={handleHourChange}
+          onBlur={handleHourBlur}
+          onKeyDown={handleHourKeyDown}
           disabled={disabled}
-          aria-invalid={hasError ? "true" : undefined}
-          aria-label={`${ariaLabel || id || "Time"} Hour`}
-          className={selectClass}
-        >
-          <option value="">Hour</option>
-          {HOURS.map((h) => (
-            <option key={h} value={h}>
-              {h}
-            </option>
-          ))}
-        </select>
-      </div>
+          aria-label={`${ariaLabel || id || "Time"} Hour (1-12)`}
+          className="w-7 text-center font-semibold text-sm bg-transparent outline-none text-ink p-0 placeholder:text-muted/50 selection:bg-accent selection:text-white"
+        />
 
-      <span className="text-muted font-bold text-base select-none">:</span>
+        {/* Micro stepper for Hour */}
+        <div className="flex flex-col -my-1 shrink-0 select-none">
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled}
+            onClick={() => stepHour(1)}
+            title="Increase hour"
+            aria-label="Increase hour"
+            className="h-3 w-3 flex items-center justify-center text-muted hover:text-ink rounded transition-colors"
+          >
+            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <path d="M18 15l-6-6-6 6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled}
+            onClick={() => stepHour(-1)}
+            title="Decrease hour"
+            aria-label="Decrease hour"
+            className="h-3 w-3 flex items-center justify-center text-muted hover:text-ink rounded transition-colors"
+          >
+            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        </div>
 
-      <div className="relative flex-1">
-        <select
+        <span className="font-bold text-muted/80 select-none text-sm px-0.5">:</span>
+
+        {/* Minute input */}
+        <input
+          ref={minuteRef}
           id={id ? `${id}-minute` : undefined}
           name={id ? `${id}_minute` : undefined}
-          value={currentMinute}
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={2}
+          placeholder="MM"
+          value={minute}
           onChange={handleMinuteChange}
-          disabled={disabled || !currentHour}
-          aria-invalid={hasError ? "true" : undefined}
-          aria-label={`${ariaLabel || id || "Time"} Minute`}
-          className={selectClass}
-        >
-          <option value="">Min</option>
-          {MINUTES.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
+          onBlur={handleMinuteBlur}
+          onKeyDown={handleMinuteKeyDown}
+          disabled={disabled}
+          aria-label={`${ariaLabel || id || "Time"} Minute (00-59)`}
+          className="w-7 text-center font-semibold text-sm bg-transparent outline-none text-ink p-0 placeholder:text-muted/50 selection:bg-accent selection:text-white"
+        />
+
+        {/* Micro stepper for Minute */}
+        <div className="flex flex-col -my-1 shrink-0 select-none">
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled}
+            onClick={() => stepMinute(5)}
+            title="Step minute up (+5m)"
+            aria-label="Increase minute by 5"
+            className="h-3 w-3 flex items-center justify-center text-muted hover:text-ink rounded transition-colors"
+          >
+            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <path d="M18 15l-6-6-6 6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled}
+            onClick={() => stepMinute(-5)}
+            title="Step minute down (-5m)"
+            aria-label="Decrease minute by 5"
+            className="h-3 w-3 flex items-center justify-center text-muted hover:text-ink rounded transition-colors"
+          >
+            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        </div>
       </div>
 
-      <div className="relative w-22 sm:w-24">
-        <select
-          id={id ? `${id}-period` : undefined}
-          name={id ? `${id}_period` : undefined}
-          value={currentPeriod}
-          onChange={handlePeriodChange}
-          disabled={disabled}
-          aria-invalid={hasError ? "true" : undefined}
-          aria-label={`${ariaLabel || id || "Time"} AM or PM`}
-          className={`input min-h-10 py-2 pr-6 pl-2.5 text-center text-sm font-semibold w-full ${
-            hasError ? "border-red-500 ring-red-500/20" : ""
-          }`}
-        >
-          <option value="AM">AM</option>
-          <option value="PM">PM</option>
-        </select>
-      </div>
+      {/* Subtle vertical divider */}
+      <div className="h-4 w-px bg-[rgb(var(--c-line)/0.2)] mx-0.5 select-none" />
+
+      {/* AM/PM dropdown (clean 2-option select) */}
+      <select
+        id={id ? `${id}-period` : undefined}
+        name={id ? `${id}_period` : undefined}
+        value={period}
+        onChange={(e) => handlePeriodChange(e.target.value)}
+        disabled={disabled}
+        aria-label={`${ariaLabel || id || "Time"} AM or PM`}
+        className="bg-transparent text-xs font-bold text-ink cursor-pointer outline-none border-none py-1 pl-1 pr-4 rounded hover:bg-[rgb(var(--c-line)/0.08)] transition-colors appearance-none"
+        style={{
+          backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%239AA9BF' stroke-width='2' viewBox='0 0 24 24'><path d='m6 9 6 6 6-6'/></svg>")`,
+          backgroundRepeat: 'no-repeat',
+          backgroundPosition: 'right 0.1rem center',
+        }}
+      >
+        <option value="AM" className="bg-[rgb(var(--c-surface))] text-ink font-semibold">AM</option>
+        <option value="PM" className="bg-[rgb(var(--c-surface))] text-ink font-semibold">PM</option>
+      </select>
     </div>
   );
 }
