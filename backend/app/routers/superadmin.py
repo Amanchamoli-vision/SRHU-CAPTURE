@@ -1,15 +1,23 @@
 import logging
+import re
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from pymongo import DESCENDING
 from pymongo.errors import DuplicateKeyError
 
 from app.database import events, users
-from app.models.documents import USER_PRIVATE_FIELDS, new_user_document
+from app.models.documents import ROLES, USER_PRIVATE_FIELDS, new_user_document
 from app.routers.auth import find_user_by_email
 from app.schemas.superadmin import CreateDeanRequest
+from app.schemas.upload_limits import UploadLimitsRequest
 from app.services import email_service
 from app.services.storage_service import delete_user_cascade
+from app.services.upload_limits import (
+    LIMIT_BOUNDS,
+    default_upload_limits,
+    get_upload_limits_record,
+    save_upload_limits,
+)
 from app.utils.auth import get_superadmin_user, public_user
 from app.utils.security import generate_temporary_password, hash_password
 from app.utils.serializers import serialize_many, to_object_id, utc_now
@@ -84,25 +92,88 @@ def get_dashboard_stats(
 
 # ============================================================
 # GET ALL USERS
+#
+# Optional filters and paging, mirroring /dean/events so the two
+# consoles behave the same way:
+#
+# /superadmin/users
+# /superadmin/users?role=dean
+# /superadmin/users?q=meera
+# /superadmin/users?skip=25&limit=25
 # ============================================================
 
 @router.get("/users")
 def get_all_users(
-    authorization: str | None = Header(default=None)
+    authorization: str | None = Header(default=None),
+
+    # One of the roles the console's tabs show, or "all".
+    role: str | None = Query(default=None, max_length=20),
+
+    # Free-text search over the name and the email address.
+    q: str | None = Query(default=None, max_length=200),
+
+    # Optional paging. No default cap, deliberately: the events list and the
+    # single-event screen both read this endpoint only to map teacher ids to
+    # names, and capping it by default would silently blank those names for
+    # everyone past the first page. A caller that wants a page asks for one.
+    skip: int | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
 ):
     get_superadmin_user(authorization)
 
+    query: dict = {}
+
+    selected_role = (role or "all").strip().lower()
+    if selected_role and selected_role != "all":
+        if selected_role not in ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unknown role filter.",
+            )
+        query["role"] = selected_role
+
+    search = (q or "").strip()
+    if search:
+        # Escaped for the same reason the event search is: an unescaped "("
+        # or "+" in the box would either mis-match or 500.
+        pattern = re.escape(search)
+        query["$or"] = [
+            {"name": {"$regex": pattern, "$options": "i"}},
+            {"email": {"$regex": pattern, "$options": "i"}},
+        ]
+
+    # Counts for the role tabs, under the search but not under the selected
+    # role -- otherwise picking "Deans" would report every other tab as 0.
+    count_query = {key: value for key, value in query.items() if key != "role"}
+    counts = {name: users.count_documents({**count_query, "role": name}) for name in ROLES}
+    counts["all"] = users.count_documents(count_query)
+
+    total = users.count_documents(query)
+
     cursor = users.find(
-        {},
+        query,
         {field: 0 for field in USER_PRIVATE_FIELDS},
     ).sort("created_at", DESCENDING)
+    if skip:
+        cursor = cursor.skip(skip)
+    if limit:
+        cursor = cursor.limit(limit)
 
     user_list = serialize_many(cursor)
 
     return {
         "success": True,
         "users": user_list,
-        "total": len(user_list)
+        # `total` is the size of the whole filtered set, not of the page: a
+        # paging UI needs it to render "1-25 of 312" and to know whether a
+        # next page exists. `count` is what is actually in this response.
+        "total": total,
+        "count": len(user_list),
+        "counts": counts,
+        "has_more": (skip or 0) + len(user_list) < total,
+        "skip": skip or 0,
+        "limit": limit,
+        "filters": {"role": selected_role, "q": search or None},
     }
 
 
@@ -296,3 +367,64 @@ def delete_user(
         ),
         "user": public_user(user)
     }
+
+
+# ============================================================
+# UPLOAD LIMITS
+#
+# The per-event photo and video caps a teacher's upload is measured
+# against. One global configuration, not per teacher or department:
+# every event is reviewed by the same Dean and stored in the same
+# bucket, so a second dimension would only make "why was my file
+# refused?" harder to answer.
+# ============================================================
+
+def _limits_response(record: dict, message: str | None = None) -> dict:
+    """The record plus the bounds the console renders its hints from."""
+    payload = {
+        "success": True,
+        "limits": record["limits"],
+        "defaults": default_upload_limits(),
+        "bounds": LIMIT_BOUNDS,
+        "is_default": record["is_default"],
+        "updated_at": record["updated_at"],
+        "updated_by": record["updated_by"],
+    }
+    if message:
+        payload["message"] = message
+    return payload
+
+
+@router.get("/upload-limits")
+def get_upload_limits_settings(
+    authorization: str | None = Header(default=None),
+):
+    """The limits in force, the built-in defaults, and the allowed ranges.
+
+    `is_default` is true until the first save, which is how the console tells
+    "nobody has configured this yet" from "someone configured it back to the
+    default values".
+    """
+    get_superadmin_user(authorization)
+    return _limits_response(get_upload_limits_record())
+
+
+@router.put("/upload-limits")
+def update_upload_limits_settings(
+    payload: UploadLimitsRequest,
+    authorization: str | None = Header(default=None),
+):
+    """Replace the limits. Takes effect on the next upload -- no deploy.
+
+    The whole configuration is sent at once (see `UploadLimitsRequest`), so a
+    save always leaves a complete, self-consistent row behind.
+    """
+    superadmin_profile = get_superadmin_user(authorization)
+
+    record = save_upload_limits(
+        payload.model_dump(),
+        updated_by=superadmin_profile.get("id"),
+    )
+    logger.info("upload_limits_updated by=%s", superadmin_profile.get("id"))
+
+    return _limits_response(record, "Upload limits saved.")

@@ -4,19 +4,20 @@
  * Pure functions, deliberately: the wizard's pick handler was already long,
  * and these rules are the part most worth testing on their own.
  *
- * Mirrors the server's limits (backend/app/config.py). The server is the
- * authority — this exists so a teacher learns about a limit before spending
- * minutes uploading, not after.
+ * The photo and video *amounts* are no longer constants here — they are the
+ * Super Admin's configuration, fetched by `services/uploadLimits.js` and
+ * passed in as `limits`. What stays hardcoded is what is not configurable:
+ * which formats are accepted, and the document budget.
+ *
+ * The server is still the authority on every limit; this exists so a teacher
+ * learns about one before spending minutes uploading, not after.
  */
 
-/** PRD 7: ten photos, 20 MB each, four formats. */
-export const MAX_IMAGE_COUNT = 10;
-export const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+import { FALLBACK_UPLOAD_LIMITS } from "../services/uploadLimits";
+
+/** PRD 7: four photo formats. */
 export const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 export const ALLOWED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "gif"];
-
-/** PRD 11: one combined budget, no cap on how many files it is split across. */
-export const MAX_VIDEO_TOTAL = 200 * 1024 * 1024;
 
 /** PRD 9: combined budget only — any number of documents, no per-file cap. */
 export const MAX_DOC_TOTAL = 15 * 1024 * 1024;
@@ -38,13 +39,48 @@ export const DOC_ACCEPT = ALLOWED_DOC_EXTENSIONS.map((ext) => `.${ext}`).join(",
 
 export const formatMb = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
 
+const MEGABYTE = 1024 * 1024;
+
+/** Megabytes from the server to bytes, passing `null` ("no limit") through. */
+export const mbToBytes = (megabytes) =>
+  megabytes == null ? null : megabytes * MEGABYTE;
+
 const extensionOf = (name) => (name || "").split(".").pop()?.toLowerCase() || "";
 
-/** The over-limit copy PRD 11 specifies, reused for documents. */
-export function overLimitMessage(kind) {
-  const noun = kind === "video" ? "video" : "document";
-  const limit = kind === "video" ? MAX_VIDEO_TOTAL : MAX_DOC_TOTAL;
-  return `You have exceeded the limit. Maximum allowed ${noun} size is ${formatMb(limit)}.`;
+/**
+ * The four numbers the wizard needs for one upload kind, in bytes and counts,
+ * derived from the Super Admin's configuration.
+ *
+ * Every caller goes through this rather than reading `limits` directly, so a
+ * missing or half-loaded configuration resolves to the fallback in one place.
+ * `null` for a cap means that cap is off.
+ */
+export function rulesFor(kind, limits = FALLBACK_UPLOAD_LIMITS) {
+  const config = { ...FALLBACK_UPLOAD_LIMITS, ...(limits || {}) };
+
+  if (kind === "image") {
+    return {
+      maxCount: config.max_photos_per_event,
+      maxFileBytes: mbToBytes(config.max_photo_size_mb),
+      maxTotalBytes: mbToBytes(config.max_photo_total_mb),
+    };
+  }
+  if (kind === "video") {
+    return {
+      maxCount: config.max_videos_per_event,
+      maxFileBytes: mbToBytes(config.max_video_size_mb),
+      maxTotalBytes: mbToBytes(config.max_video_total_mb),
+    };
+  }
+  // Documents are not Super Admin configurable: one combined budget, no
+  // per-file cap and no count cap (PRD 9).
+  return { maxCount: null, maxFileBytes: null, maxTotalBytes: MAX_DOC_TOTAL };
+}
+
+/** The over-limit copy PRD 11 specifies, reused for photos and documents. */
+export function overLimitMessage(kind, limitBytes) {
+  const noun = kind === "video" ? "video" : kind === "image" ? "photo" : "document";
+  return `You have exceeded the limit. Maximum allowed ${noun} size is ${formatMb(limitBytes)}.`;
 }
 
 /** Combined size of what is already attached plus what is still uploading. */
@@ -56,25 +92,28 @@ export function usedBytes(saved = [], pending = []) {
   return stored + inFlight;
 }
 
-export function limitFor(kind) {
-  if (kind === "video") return MAX_VIDEO_TOTAL;
-  if (kind === "document") return MAX_DOC_TOTAL;
-  return null; // photos are capped per file and by count, not by total
+/** The combined byte budget for a kind, or null when it has none. */
+export function limitFor(kind, limits) {
+  return rulesFor(kind, limits).maxTotalBytes;
 }
 
 /**
  * Sort a batch of picked files into accepted, rejected and duplicate-named.
  *
- * Checks run type -> per-file size -> running total -> duplicate name, in that
- * order, so the teacher is never asked to confirm a duplicate for a file that
- * would have been rejected anyway.
+ * Checks run type -> per-file size -> count -> running total -> duplicate
+ * name, in that order, so the teacher is never asked to confirm a duplicate
+ * for a file that would have been rejected anyway.
  *
+ * @param {object} args
+ * @param {object} args.limits the Super Admin's configuration; omitted or
+ *   partial falls back to the shipped defaults.
  * @returns {{accepted: File[], duplicates: File[], rejections: string[],
  *            overLimit: string|null}}
  */
 export function validatePick({
   files,
   kind,
+  limits,
   savedItems = [],
   pendingUploads = [],
   existingNames = [],
@@ -86,7 +125,7 @@ export function validatePick({
 
   const isImage = kind === "image";
   const isDocument = kind === "document";
-  const totalLimit = limitFor(kind);
+  const { maxCount, maxFileBytes, maxTotalBytes } = rulesFor(kind, limits);
 
   let runningBytes = usedBytes(savedItems, pendingUploads);
   let runningCount =
@@ -121,22 +160,23 @@ export function validatePick({
       }
     }
 
-    if (isImage && file.size > MAX_IMAGE_SIZE) {
-      rejections.push(`"${file.name}" is larger than ${formatMb(MAX_IMAGE_SIZE)}.`);
+    if (maxFileBytes != null && file.size > maxFileBytes) {
+      rejections.push(`"${file.name}" is larger than ${formatMb(maxFileBytes)}.`);
       continue;
     }
 
-    if (isImage && runningCount >= MAX_IMAGE_COUNT) {
+    if (maxCount != null && runningCount >= maxCount) {
+      const noun = isImage ? "photos" : kind === "video" ? "videos" : "files";
       rejections.push(
-        `"${file.name}" was not added. The limit is ${MAX_IMAGE_COUNT} photos.`,
+        `"${file.name}" was not added. The limit is ${maxCount} ${noun}.`,
       );
       continue;
     }
 
-    if (totalLimit != null && runningBytes + file.size > totalLimit) {
+    if (maxTotalBytes != null && runningBytes + file.size > maxTotalBytes) {
       // Everything picked before this one is still accepted, which is what
       // "you have exceeded the limit" implies.
-      overLimit = overLimitMessage(kind);
+      overLimit = overLimitMessage(kind, maxTotalBytes);
       break;
     }
 

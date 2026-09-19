@@ -27,15 +27,18 @@ from app.services.storage_service import (  # noqa: E402
 from tests.test_event_history import EVENT_PAYLOAD, FakeEvents, NoUsers  # noqa: E402
 
 
-# The event-types service binds its collection at import time, so a test that
-# creates an event would otherwise reach for a real MongoDB.
+# The event-types and upload-limits services bind their collections at import
+# time, so a test that creates an event or uploads a file would otherwise reach
+# for a real MongoDB.
 _event_types_patcher = None
+_app_settings_patcher = None
 
 
 def setUpModule() -> None:
-    global _event_types_patcher
+    global _event_types_patcher, _app_settings_patcher
     from unittest.mock import patch as _patch
 
+    from tests.fake_app_settings import FakeAppSettings
     from tests.fake_event_types import FakeEventTypes
 
     _event_types_patcher = _patch(
@@ -43,10 +46,19 @@ def setUpModule() -> None:
     )
     _event_types_patcher.start()
 
+    # Empty: no row saved means the built-in defaults apply, which are the
+    # values these tests assert against.
+    _app_settings_patcher = _patch(
+        "app.services.upload_limits.app_settings", FakeAppSettings()
+    )
+    _app_settings_patcher.start()
+
 
 def tearDownModule() -> None:
     if _event_types_patcher is not None:
         _event_types_patcher.stop()
+    if _app_settings_patcher is not None:
+        _app_settings_patcher.stop()
 
 
 

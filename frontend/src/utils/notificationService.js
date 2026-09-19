@@ -124,6 +124,68 @@ export async function markNotificationAsRead(userId, notificationId) {
 }
 
 /**
+ * Delete one notification, for good.
+ *
+ * The local cache is pruned as well as the server copy. A notification that
+ * has not reached the server yet (a `LOCAL_ID_PREFIX` id) only exists in that
+ * cache, and `syncPendingNotifications` would re-create it on the next poll
+ * if it were left behind — so removing it locally *is* the delete.
+ *
+ * @returns {Promise<boolean>} whether the server copy was removed
+ */
+export async function deleteNotification(userId, notificationId) {
+  if (!userId || !notificationId) return false;
+
+  const pruneLocal = () =>
+    saveLocalNotifications(
+      userId,
+      getLocalNotifications(userId).filter((n) => n.id !== notificationId),
+    );
+
+  if (String(notificationId).startsWith(LOCAL_ID_PREFIX)) {
+    pruneLocal();
+    return true;
+  }
+
+  try {
+    await apiJson(`/notifications/${notificationId}`, { method: "DELETE" });
+  } catch (err) {
+    // A 404 means it is already gone, which is the outcome we wanted.
+    if (err?.status !== 404) {
+      console.warn("Delete notification failed:", err);
+      return false;
+    }
+  }
+
+  pruneLocal();
+  return true;
+}
+
+/**
+ * Delete every notification for the signed-in user.
+ *
+ * @returns {Promise<{ok: boolean, deleted: number}>} `deleted` is the server's
+ * own count, so the UI can report what actually happened rather than the
+ * length of the list it happened to be showing.
+ */
+export async function clearAllNotifications(userId) {
+  if (!userId) return { ok: false, deleted: 0 };
+
+  let deleted = 0;
+  try {
+    const data = await apiJson("/notifications", { method: "DELETE" });
+    deleted = Number(data?.deleted) || 0;
+  } catch (err) {
+    console.warn("Clear all notifications failed:", err);
+    return { ok: false, deleted: 0 };
+  }
+
+  // Clears the pending queue too, so nothing is re-sent after the clear.
+  saveLocalNotifications(userId, []);
+  return { ok: true, deleted };
+}
+
+/**
  * Mark all notifications as read for the signed-in user
  */
 export async function markAllNotificationsAsRead(userId) {

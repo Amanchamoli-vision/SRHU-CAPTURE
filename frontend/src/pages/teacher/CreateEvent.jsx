@@ -21,10 +21,8 @@ import {
   DOC_ACCEPT,
   IMAGE_ACCEPT,
   MAX_DOC_TOTAL,
-  MAX_IMAGE_COUNT,
-  MAX_IMAGE_SIZE,
-  MAX_VIDEO_TOTAL,
   formatMb,
+  rulesFor,
   usedBytes,
   validatePick,
 } from "../../utils/uploadRules";
@@ -33,6 +31,7 @@ import Combobox from "../../components/common/Combobox";
 import EventSummary from "../../components/common/EventSummary";
 import EventTypeSelect from "../../components/common/EventTypeSelect";
 import useEventTypes from "../../hooks/useEventTypes";
+import useUploadLimits from "../../hooks/useUploadLimits";
 import {
   createFacultyCoordinator,
   listFacultyCoordinators,
@@ -210,6 +209,12 @@ function CreateEvent() {
     addType: addEventType,
   } = useEventTypes();
 
+  // How much may be attached, as the Super Admin has configured it. Read on
+  // every page load, so a changed cap reaches teachers without a deploy.
+  const { limits: uploadLimits } = useUploadLimits();
+  const photoRules = rulesFor("image", uploadLimits);
+  const videoRules = rulesFor("video", uploadLimits);
+
   const [coordinators, setCoordinators] = useState([]);
   const [coordinatorsLoading, setCoordinatorsLoading] = useState(true);
   const [savingCoordinator, setSavingCoordinator] = useState(false);
@@ -291,7 +296,10 @@ function CreateEvent() {
     return { items: documentItems, uploads: documentUploads };
   };
 
-  // Running totals for the budget meters (PRD 9 / 11).
+  // Running totals for the budget meters (PRD 9 / 11). Photos only show one
+  // when the Super Admin has set a combined photo budget; by default they are
+  // capped by count and per file instead.
+  const photoBytesUsed = usedBytes(photos, photoUploads);
   const videoBytesUsed = usedBytes(videos, videoUploads);
   const documentBytesUsed = usedBytes(documentItems, documentUploads);
 
@@ -747,6 +755,7 @@ function CreateEvent() {
     const { accepted, duplicates, rejections, overLimit } = validatePick({
       files: Array.from(files),
       kind,
+      limits: uploadLimits,
       savedItems: saved,
       pendingUploads: pending,
       existingNames,
@@ -1171,9 +1180,13 @@ function CreateEvent() {
                 </>
               )}
               {step === 2 &&
-                `Optional. Posters, banners and photographs — up to ${MAX_IMAGE_COUNT} images, ${formatMb(MAX_IMAGE_SIZE)} each.`}
+                `Optional. Posters, banners and photographs — up to ${photoRules.maxCount} images, ${formatMb(photoRules.maxFileBytes)} each.`}
               {step === 3 &&
-                `Optional. Teasers and recordings — ${formatMb(MAX_VIDEO_TOTAL)} in total, across any number of videos.`}
+                `Optional. Teasers and recordings — ${formatMb(videoRules.maxTotalBytes)} in total, ${
+                  videoRules.maxCount == null
+                    ? "across any number of videos"
+                    : `across up to ${videoRules.maxCount} videos`
+                }.`}
               {step === 4 &&
                 `Optional. PDF, Word, Excel or presentation files — ${formatMb(MAX_DOC_TOTAL)} in total.`}
             </p>
@@ -1517,8 +1530,10 @@ function CreateEvent() {
                 accept={IMAGE_ACCEPT}
                 items={photos}
                 uploads={photoUploads}
-                max={MAX_IMAGE_COUNT}
-                maxSizeLabel={`JPG, PNG, WebP or GIF up to ${formatMb(MAX_IMAGE_SIZE)} each`}
+                max={photoRules.maxCount}
+                totalLimitBytes={photoRules.maxTotalBytes}
+                usedBytes={photoBytesUsed}
+                maxSizeLabel={`JPG, PNG, WebP or GIF up to ${formatMb(photoRules.maxFileBytes)} each`}
                 emptyLabel="Drag photos here"
                 hint="Posters, banners, and photographs of the event."
                 disabled={busy}
@@ -1539,9 +1554,12 @@ function CreateEvent() {
                 accept="video/*"
                 items={videos}
                 uploads={videoUploads}
-                totalLimitBytes={MAX_VIDEO_TOTAL}
+                max={videoRules.maxCount}
+                totalLimitBytes={videoRules.maxTotalBytes}
                 usedBytes={videoBytesUsed}
-                maxSizeLabel={`MP4, WebM or MOV · ${formatMb(MAX_VIDEO_TOTAL)} total, any number of files`}
+                maxSizeLabel={`MP4, WebM or MOV up to ${formatMb(videoRules.maxFileBytes)} each · ${formatMb(
+                  videoRules.maxTotalBytes,
+                )} total`}
                 emptyLabel="Drag videos here"
                 hint="Teasers, highlights, or a recording of the event."
                 disabled={busy}

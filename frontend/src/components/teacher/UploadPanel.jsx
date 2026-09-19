@@ -49,7 +49,16 @@ export default function UploadPanel({
 
   const active = items.length + uploads.filter((u) => !u.error).length;
   const budgetFull = totalLimitBytes != null && usedBytes >= totalLimitBytes;
-  const full = (max != null && active >= max) || budgetFull;
+  // Which cap was reached decides the wording. Both can apply to one kind now
+  // that the Super Admin may set a count and a combined budget for the same
+  // step, and "the maximum of null" -- what a budget-only kind used to render
+  // -- helps nobody.
+  const countFull = max != null && active >= max;
+  const full = countFull || budgetFull;
+  const fullLabel = countFull
+    ? `You have added the maximum of ${max}`
+    : "You have used the whole size budget";
+
   const locked = disabled || full;
 
   const budgetPct =
@@ -102,7 +111,7 @@ export default function UploadPanel({
         </span>
 
         <p className="mt-3 font-display text-sm font-semibold text-ink">
-          {full ? `You have added the maximum of ${max}` : emptyLabel}
+          {full ? fullLabel : emptyLabel}
         </p>
         <p className="prose-muted mt-1 text-xs">{hint}</p>
 

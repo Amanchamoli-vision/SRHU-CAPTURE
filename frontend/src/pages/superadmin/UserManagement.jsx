@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { apiJson } from "../../services/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { apiJson, isAbortError } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
+import Pagination from "../../components/common/Pagination";
+import useTableQuery from "../../hooks/useTableQuery";
 import RoleChip from "../../components/common/RoleChip";
 import { ROLE_TRACK, initialsOf, normalizeRole, trackOfRole } from "../../components/common/roles";
 import {
@@ -83,28 +85,33 @@ const ACTIONS = {
 function UserManagement() {
   const navigate = useNavigate();
   const { profile, signOut } = useAuth();
-  const [searchParams, setSearchParams] = useSearchParams();
+
+  // The directory is server-paged, so the role filter, the search term and
+  // the page all live in the URL (see useTableQuery) -- one source of truth,
+  // linkable, and every filter change resets to page 1. Filtering in the
+  // browser stopped being an option once only one page is fetched.
+  const { query, setFilter, setPage, setPerPage } = useTableQuery();
+  const { page, per, role: roleFilter, q: searchQuery } = query;
 
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processingUserId, setProcessingUserId] = useState(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [query, setQuery] = useState("");
+
+  // Totals for the role tabs and the footer, straight from the server: they
+  // describe the whole filtered set, which the page on screen cannot.
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState({ all: 0, teacher: 0, dean: 0, superadmin: 0 });
+
+  // The box is uncontrolled by the URL while typing: writing every keystroke
+  // would flood history and fire a request per character.
+  const [searchDraft, setSearchDraft] = useState(searchQuery);
 
   // { kind: "dean" | "teacher" | "delete", user }
   const [pending, setPending] = useState(null);
 
-  const roleFilter = ROLE_TABS.some((t) => t.key === searchParams.get("role"))
-    ? searchParams.get("role")
-    : "all";
-
-  const setRoleFilter = (key) => {
-    const next = new URLSearchParams(searchParams);
-    if (key === "all") next.delete("role");
-    else next.set("role", key);
-    setSearchParams(next, { replace: true });
-  };
+  const setRoleFilter = (key) => setFilter("role", key, { replace: true });
 
   // A 401 means the login token is gone or rejected even after a refresh;
   // apiJson has already cleared the stored session by then.
@@ -114,28 +121,77 @@ function UserManagement() {
   }, [navigate]);
 
   // ------------------------------------------------------------ load
+  //
+  // Only the newest request may update the table: typing in the search box
+  // or clicking through pages quickly must not let a slow, older response
+  // overwrite the newer one.
+  const loadControllerRef = useRef(null);
+
+  useEffect(() => () => loadControllerRef.current?.abort(), []);
+
   const loadUsers = useCallback(async () => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+
     try {
       setLoading(true);
       setError("");
 
-      const data = await apiJson("/superadmin/users");
+      const params = new URLSearchParams({
+        skip: String(query.skip),
+        limit: String(query.per),
+      });
+      if (query.role && query.role !== "all") params.set("role", query.role);
+      if (query.q) params.set("q", query.q);
+
+      const data = await apiJson(`/superadmin/users?${params}`, {
+        signal: controller.signal,
+      });
+
+      if (controller.signal.aborted) return;
       setUsers(data?.users || []);
+      setTotal(data?.total || 0);
+      setCounts(data?.counts || { all: data?.total || 0 });
     } catch (err) {
+      if (controller.signal.aborted || isAbortError(err)) return;
       if (err?.status === 401) {
         handleUnauthorized();
         return;
       }
       console.error("Load users error:", err);
       setError(err.message || "Failed to load users");
+      setUsers([]);
+      setTotal(0);
     } finally {
-      setLoading(false);
+      if (loadControllerRef.current === controller) setLoading(false);
     }
-  }, [handleUnauthorized]);
+  }, [handleUnauthorized, query.skip, query.per, query.role, query.q]);
 
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  // Deleting the last account on a page, or a bookmarked ?page=99, would
+  // otherwise strand the console on an empty table that reads as "no
+  // matches". Clamp straight to the last real page rather than stepping back
+  // one at a time.
+  useEffect(() => {
+    if (loading || total === 0) return;
+    const lastPage = Math.max(1, Math.ceil(total / per));
+    if (page > lastPage) setPage(lastPage);
+  }, [loading, total, per, page, setPage]);
+
+  // Debounced so typing does not fire a request per character; `replace`
+  // keeps the back button useful instead of one entry per keystroke.
+  useEffect(() => {
+    if (searchDraft === searchQuery) return undefined;
+    const timer = setTimeout(
+      () => setFilter("q", searchDraft, { replace: true }),
+      350,
+    );
+    return () => clearTimeout(timer);
+  }, [searchDraft, searchQuery, setFilter]);
 
   // A success line should not sit there forever; an error stays until read.
   useEffect(() => {
@@ -181,23 +237,21 @@ function UserManagement() {
   };
 
   // ------------------------------------------------------------ derived
-  const counts = useMemo(() => {
-    const c = { all: users.length, teacher: 0, dean: 0, superadmin: 0 };
-    for (const u of users) {
-      const r = normalizeRole(u.role);
-      if (r in c) c[r] += 1;
-    }
-    return c;
-  }, [users]);
+  // `users` is already one filtered page from the server, so there is nothing
+  // left to narrow here -- the name is kept so the two layouts below read the
+  // same as before.
+  const visibleUsers = users;
 
-  const visibleUsers = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return users.filter((u) => {
-      if (roleFilter !== "all" && normalizeRole(u.role) !== roleFilter) return false;
-      if (!term) return true;
-      return [u.name, u.email].some((f) => String(f ?? "").toLowerCase().includes(term));
-    });
-  }, [users, roleFilter, query]);
+  // True when the empty state is the result of a filter rather than an empty
+  // directory. `counts.all` is the search-narrowed total, so the untouched
+  // directory is the one where no filter and no search are set.
+  const filtered = roleFilter !== "all" || Boolean(searchQuery);
+
+  const clearFilters = () => {
+    setSearchDraft("");
+    setFilter("q", "", { replace: true });
+    setRoleFilter("all");
+  };
 
   const isSelf = (user) => profile?.id && user.id === profile.id;
 
@@ -211,7 +265,7 @@ function UserManagement() {
       active="users"
       profile={profile}
       onLogout={handleLogout}
-      railBadge={loading ? undefined : users.length}
+      railBadge={loading ? undefined : counts.all}
       railNote="Promoting a teacher to Dean takes effect immediately. Deleting an account cannot be undone."
     >
       <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
@@ -297,8 +351,8 @@ function UserManagement() {
             <IconSearch className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
             <input
               type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
               placeholder="Search by name or email"
               className="input pl-10"
             />
@@ -316,9 +370,8 @@ function UserManagement() {
             </div>
             {!loading && (
               <p className="num text-sm text-muted">
-                <span className="font-semibold text-ink">{visibleUsers.length}</span>
-                {" of "}
-                {users.length}
+                <span className="font-semibold text-ink">{total}</span>
+                {total === 1 ? " account" : " accounts"}
               </p>
             )}
           </div>
@@ -334,17 +387,17 @@ function UserManagement() {
                 <IconInbox />
               </span>
               <p className="h3 mt-4 text-ink">
-                {users.length === 0 ? "No users yet" : "No matches"}
+                {filtered ? "No matches" : "No users yet"}
               </p>
               <p className="prose-muted mt-1 text-sm">
-                {users.length === 0
-                  ? "There are no registered accounts in the system."
-                  : "Try a different search or clear the role filter."}
+                {filtered
+                  ? "Try a different search or clear the role filter."
+                  : "There are no registered accounts in the system."}
               </p>
-              {users.length > 0 && (
+              {filtered && (
                 <button
                   type="button"
-                  onClick={() => { setQuery(""); setRoleFilter("all"); }}
+                  onClick={clearFilters}
                   className="btn btn-ghost btn-sm mt-5"
                 >
                   Clear filters
@@ -437,6 +490,21 @@ function UserManagement() {
                 </table>
               </div>
             </>
+          )}
+
+          {/* Rendered whenever there is anything to page, including the last
+              short page -- hiding it at total === 0 keeps the empty state
+              clean, the way the Dean's tables do it. */}
+          {total > 0 && (
+            <Pagination
+              page={page}
+              perPage={per}
+              total={total}
+              onPageChange={setPage}
+              onPerPageChange={setPerPage}
+              disabled={loading}
+              noun="users"
+            />
           )}
         </section>
       </div>

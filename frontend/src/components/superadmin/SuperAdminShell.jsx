@@ -10,6 +10,7 @@ import {
   IconLogout,
   IconMoon,
   IconSun,
+  IconUploadCloud,
   IconUserPlus,
   IconUsers,
   RidgeDivider,
@@ -23,6 +24,7 @@ const NAV = [
   { key: "events", to: "/superadmin/events", label: "Events", Icon: IconCalendar },
   { key: "users", to: "/superadmin/users", label: "User Management", short: "Users", Icon: IconUsers },
   { key: "create-dean", to: "/superadmin/create-dean", label: "Create Dean", Icon: IconUserPlus },
+  { key: "upload-limits", to: "/superadmin/upload-limits", label: "Upload Limits", short: "Uploads", Icon: IconUploadCloud },
 ];
 
 /**

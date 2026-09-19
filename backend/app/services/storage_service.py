@@ -137,14 +137,11 @@ _MAGIC_CHECKS = {
     ".pptx": lambda h: h.startswith(_ZIP),
 }
 
-# Per-event caps, matching the create-event wizard. Sourced from settings so
-# they can be tuned per deployment; re-exported under the old names because
-# app/routers/events.py imports them from here.
-MAX_EVENT_PHOTOS = settings.max_photos_per_event
+# The document cap, which is fixed per deployment. The photo and video caps
+# used to live here too; they are Super Admin configurable now and are read
+# per request from app/services/upload_limits.py, so keeping a module-level
+# copy would just be a stale second answer.
 MAX_EVENT_DOCUMENTS = settings.max_documents_per_event
-# Videos are capped by combined size, not by count (PRD 11). Kept only so the
-# existing import in the events router keeps resolving.
-MAX_EVENT_VIDEOS = None
 
 _READ_CHUNK = 1024 * 1024
 

@@ -109,6 +109,18 @@ class FakeNotifications:
                 return MagicMock(matched_count=1)
         return MagicMock(matched_count=0)
 
+    def delete_one(self, query: dict):
+        for index, doc in enumerate(self.docs):
+            if self._matches(doc, query):
+                self.docs.pop(index)
+                return MagicMock(deleted_count=1)
+        return MagicMock(deleted_count=0)
+
+    def delete_many(self, query: dict):
+        before = len(self.docs)
+        self.docs = [d for d in self.docs if not self._matches(d, query)]
+        return MagicMock(deleted_count=before - len(self.docs))
+
     def for_user(self, user_id: str) -> list[dict]:
         return [d for d in self.docs if d["user_id"] == user_id]
 
@@ -328,3 +340,126 @@ class StatusEmailTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NotificationDeleteTests(NotificationRoutingTests):
+    """Removing notifications, one at a time or all at once.
+
+    The important property is ownership: the filter carries `user_id`, so one
+    user cannot delete another's by guessing an id.
+    """
+
+    # Only the delete behaviour belongs to this class.
+    test_dean_sees_submitted_and_teacher_sees_decisions = None
+    test_stage_changes_notify_once_each = None
+    test_reminder_is_accepted_and_foreign_event_is_refused = None
+
+    def seed(self, user_id: str, title: str = "Something happened") -> str:
+        from app.models.documents import new_notification_document
+
+        document = new_notification_document(
+            user_id=user_id,
+            event_id=None,
+            notification_type="reminder",
+            title=title,
+            message="Body",
+        )
+        return str(self.notifications.insert_one(document).inserted_id)
+
+    def feed(self, token: str = "Bearer teacher"):
+        return self.client.get("/notifications", headers={"Authorization": token}).json()
+
+    # ---------------------------------------------------- single delete
+
+    def test_deleting_one_removes_only_that_notification(self) -> None:
+        keep = self.seed(TEACHER["id"], "Keep me")
+        drop = self.seed(TEACHER["id"], "Drop me")
+
+        response = self.client.delete(
+            f"/notifications/{drop}", headers={"Authorization": "Bearer teacher"}
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        titles = [n["title"] for n in self.feed()["notifications"]]
+        self.assertEqual(titles, ["Keep me"])
+        self.assertTrue(keep)
+
+    def test_deleting_someone_elses_notification_is_404(self) -> None:
+        theirs = self.seed(DEAN_A["id"], "Dean's own")
+
+        response = self.client.delete(
+            f"/notifications/{theirs}", headers={"Authorization": "Bearer teacher"}
+        )
+
+        self.assertEqual(response.status_code, 404)
+        # And it is still there for its owner.
+        self.assertEqual(len(self.feed("Bearer dean-a")["notifications"]), 1)
+
+    def test_deleting_a_missing_notification_is_404(self) -> None:
+        response = self.client.delete(
+            "/notifications/6aac7ecbee2ad335979f1268",
+            headers={"Authorization": "Bearer teacher"},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_deleting_twice_is_404_the_second_time(self) -> None:
+        one = self.seed(TEACHER["id"])
+        headers = {"Authorization": "Bearer teacher"}
+
+        self.assertEqual(self.client.delete(f"/notifications/{one}", headers=headers).status_code, 200)
+        self.assertEqual(self.client.delete(f"/notifications/{one}", headers=headers).status_code, 404)
+
+    def test_legacy_teacher_path_also_deletes(self) -> None:
+        one = self.seed(TEACHER["id"])
+
+        response = self.client.delete(
+            f"/teacher/notifications/{one}", headers={"Authorization": "Bearer teacher"}
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+
+    # ---------------------------------------------------- clear all
+
+    def test_clear_all_empties_only_the_callers_list(self) -> None:
+        for _ in range(3):
+            self.seed(TEACHER["id"])
+        self.seed(DEAN_A["id"], "Dean keeps this")
+
+        response = self.client.delete(
+            "/notifications", headers={"Authorization": "Bearer teacher"}
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["deleted"], 3)
+        self.assertEqual(self.feed()["notifications"], [])
+        self.assertEqual(len(self.feed("Bearer dean-a")["notifications"]), 1)
+
+    def test_clear_all_on_an_empty_list_is_not_an_error(self) -> None:
+        response = self.client.delete(
+            "/notifications", headers={"Authorization": "Bearer teacher"}
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["deleted"], 0)
+
+    def test_clear_all_removes_read_and_unread_alike(self) -> None:
+        self.seed(TEACHER["id"], "Unread one")
+        read_id = self.seed(TEACHER["id"], "Read one")
+        headers = {"Authorization": "Bearer teacher"}
+        self.client.patch(f"/notifications/{read_id}/read", headers=headers)
+
+        self.client.delete("/notifications", headers=headers)
+
+        self.assertEqual(self.feed()["notifications"], [])
+
+    def test_clear_all_reports_the_real_count(self) -> None:
+        # The UI shows this number in its confirmation, so it must not be
+        # whatever the client happened to have on screen.
+        for _ in range(7):
+            self.seed(TEACHER["id"])
+
+        response = self.client.delete(
+            "/notifications", headers={"Authorization": "Bearer teacher"}
+        )
+
+        self.assertEqual(response.json()["deleted"], 7)

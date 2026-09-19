@@ -69,8 +69,23 @@ class Settings(BaseSettings):
     # count; videos and documents by their combined size, because "10 videos of
     # 20 MB" and "2 videos of 100 MB" cost the same storage and the teacher
     # should be free to choose.
+    #
+    # These are the *fallback* defaults only. The photo and video limits are
+    # Super Admin configurable and live in the `app_settings` collection --
+    # see app/services/upload_limits.py. A value here is used when no row has
+    # been saved yet (or the database cannot be read), so changing one still
+    # shifts the starting point for a fresh deployment.
     max_photos_per_event: int = 10
     max_photo_size_mb: int = 20
+    # No combined photo budget by default: photos are capped per file and by
+    # count. A Super Admin may add one.
+    max_photo_total_mb: int | None = None
+    # No video count cap by default, for the reason above. A Super Admin may
+    # add one.
+    max_videos_per_event: int | None = None
+    # A single video may fill the whole event budget, which is what shipped
+    # before the per-video cap existed.
+    max_video_size_mb: int = 200
     max_video_total_mb: int = 200
     max_documents_total_mb: int = 15
     # No per-document size cap; this only stops an unbounded number of tiny
@@ -216,6 +231,10 @@ class Settings(BaseSettings):
     def max_photo_size_bytes(self) -> int:
         return self.max_photo_size_mb * 1024 * 1024
 
+    # No byte helper for max_photo_total_mb / max_video_size_mb: those are
+    # Super Admin configurable, so the value in force comes from
+    # app/services/upload_limits.py (which converts with `to_bytes`), never
+    # from the fallback here.
     @property
     def max_video_total_bytes(self) -> int:
         return self.max_video_total_mb * 1024 * 1024

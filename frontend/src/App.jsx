@@ -30,6 +30,7 @@ import UserManagement from "./pages/superadmin/UserManagement";
 import CreateDean from "./pages/superadmin/CreateDean";
 import SuperAdminEvents from "./pages/superadmin/Events";
 import SuperAdminEventDetails from "./pages/superadmin/EventDetails";
+import SuperAdminUploadLimits from "./pages/superadmin/UploadLimits";
 
 /**
  * The create-event wizard keeps a lot of state in refs (the server event id,
@@ -181,6 +182,15 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={["superadmin"]}>
                 <CreateDean />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/superadmin/upload-limits"
+            element={
+              <ProtectedRoute allowedRoles={["superadmin"]}>
+                <SuperAdminUploadLimits />
               </ProtectedRoute>
             }
           />

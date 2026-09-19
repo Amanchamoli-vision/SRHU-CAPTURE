@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { apiJson } from "../services/api";
 import {
+  clearAllNotifications,
+  deleteNotification,
   evaluateEventReminders,
   fetchNotifications,
   markAllNotificationsAsRead,
@@ -23,6 +26,7 @@ import {
   IconLayers,
   IconRefresh,
   IconSearch,
+  IconTrash,
   IconX,
   IconXCircle,
 } from "./teacher/icons";
@@ -94,6 +98,12 @@ export default function NotificationBell({ currentUser, onNew }) {
   const [toasts, setToasts] = useState([]);
 
   const [historySearch, setHistorySearch] = useState("");
+
+  // Rows being removed, so a second click cannot fire a second request while
+  // the first is still in flight.
+  const [deletingIds, setDeletingIds] = useState([]);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [historyFilter, setHistoryFilter] = useState("all");
 
   const userId = currentUser?.id;
@@ -238,6 +248,46 @@ export default function NotificationBell({ currentUser, onNew }) {
     await markAllNotificationsAsRead(userId);
   };
 
+  /**
+   * Remove one notification.
+   *
+   * No confirmation: a notification is already transient — the server drops
+   * it an hour after it is read — so a dialog would be friction on something
+   * of no consequence. Clearing the whole list does confirm.
+   */
+  const removeOne = async (notif) => {
+    if (deletingIds.includes(notif.id)) return;
+
+    setDeletingIds((prev) => [...prev, notif.id]);
+    // Optimistic: the row goes now, and comes back if the server refuses.
+    const snapshot = notifications;
+    setNotifications((prev) => prev.filter((n) => n.id !== notif.id));
+    setToasts((prev) => prev.filter((t) => t.id !== notif.id));
+
+    const ok = await deleteNotification(userId, notif.id);
+    if (!ok) setNotifications(snapshot);
+
+    setDeletingIds((prev) => prev.filter((id) => id !== notif.id));
+  };
+
+  const confirmClearAll = async () => {
+    setClearing(true);
+    const snapshot = notifications;
+    const { ok } = await clearAllNotifications(userId);
+
+    if (ok) {
+      setNotifications([]);
+      setToasts([]);
+      setConfirmClear(false);
+      setOpen(false);
+      setHistoryOpen(false);
+    } else {
+      setNotifications(snapshot);
+      setConfirmClear(false);
+    }
+    setClearing(false);
+  };
+
   /** Open the event — the page that carries its status, history and remarks. */
   const openNotification = (notif) => {
     markRead(notif);
@@ -301,6 +351,23 @@ export default function NotificationBell({ currentUser, onNew }) {
                   <span className="dot dot-sm" style={{ "--track": meta.track }} aria-label="Unread" />
                 )}
                 {timeAgo(notif.created_at)}
+
+                {/* stopPropagation: the whole row is a button that opens the
+                    event, so without it deleting would also navigate away. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeOne(notif);
+                  }}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  disabled={deletingIds.includes(notif.id)}
+                  title="Delete this notification"
+                  aria-label={`Delete notification: ${notif.title || "Notification"}`}
+                  className="icon-btn icon-btn-sm -my-1 -mr-1.5 shrink-0 text-muted hover:text-err"
+                >
+                  <IconTrash className="h-3.5 w-3.5" />
+                </button>
               </span>
             </div>
 
@@ -344,6 +411,23 @@ export default function NotificationBell({ currentUser, onNew }) {
       <p className="prose-muted mt-1 max-w-xs text-xs">{body}</p>
     </div>
   );
+
+  /**
+   * The bell lives inside the app header, which carries a `backdrop-filter`
+   * (deliberately: it makes the header the containing block for the dropdown,
+   * which is `position: fixed`). A dialog rendered in that subtree inherits
+   * the same containing block, so `.hv-backdrop`'s `inset: 0` resolved
+   * against the header strip rather than the viewport -- the panel was
+   * clipped off the top of the screen and only the header was dimmed. The
+   * header also re-tokenises its subtree for dark chrome (`--c-ink` near
+   * white), which `.hv-popover` restores for the dropdown but not for a
+   * modal, leaving its rows near-white on white.
+   *
+   * Portalling to <body> takes the dialogs out of the header on both counts,
+   * and leaves the shared Modal and the global styles untouched.
+   */
+  const inBodyPortal = (node) =>
+    typeof document === "undefined" ? node : createPortal(node, document.body);
 
   return (
     <div ref={wrapRef} className="relative">
@@ -407,15 +491,25 @@ export default function NotificationBell({ currentUser, onNew }) {
 
           {notifications.length > 0 && (
             <div className="flex items-center justify-between gap-2 border-t hairline px-4 py-2.5">
-              <button
-                type="button"
-                onClick={markAllRead}
-                disabled={unreadCount === 0}
-                className="btn btn-ghost btn-xs"
-              >
-                <IconCheck />
-                Mark all read
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={markAllRead}
+                  disabled={unreadCount === 0}
+                  className="btn btn-ghost btn-xs"
+                >
+                  <IconCheck />
+                  Mark all read
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClear(true)}
+                  className="btn btn-ghost btn-xs text-err"
+                >
+                  <IconTrash className="h-3.5 w-3.5" />
+                  Clear all
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -432,70 +526,165 @@ export default function NotificationBell({ currentUser, onNew }) {
       )}
 
       {/* ------------------------------------------------ the full history */}
-      <Modal
-        open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-        eyebrow="Inbox"
-        title="All notifications"
-        subtitle={`${notifications.length} total · ${unreadCount} unread`}
-        wide
-        footer={
-          <>
-            <button
-              type="button"
-              onClick={markAllRead}
-              disabled={unreadCount === 0}
-              className="btn btn-ghost btn-sm"
-            >
-              <IconCheck />
-              Mark all read
-            </button>
-            <button type="button" onClick={() => setHistoryOpen(false)} className="btn btn-brand btn-sm">
-              Close
-            </button>
-          </>
-        }
-      >
-        <div className="relative">
-          <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-muted">
-            <IconSearch className="h-4 w-4" />
-          </span>
-          <input
-            type="text"
-            value={historySearch}
-            onChange={(e) => setHistorySearch(e.target.value)}
-            placeholder="Search notifications…"
-            aria-label="Search notifications"
-            className="input pl-10"
-          />
-        </div>
+{inBodyPortal(
+        <Modal
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          eyebrow="Inbox"
+          title="All notifications"
+          subtitle={`${notifications.length} total · ${unreadCount} unread`}
+          wide
+          footer={
+            <>
+              {/* Destructive action kept to the left, away from Close, so it
+                  is not the button the thumb lands on by accident. */}
+              <button
+                type="button"
+                onClick={() => setConfirmClear(true)}
+                disabled={notifications.length === 0}
+                className="btn btn-ghost btn-sm mr-auto text-err"
+              >
+                <IconTrash />
+                Clear all
+              </button>
+              <button
+                type="button"
+                onClick={markAllRead}
+                disabled={unreadCount === 0}
+                className="btn btn-ghost btn-sm"
+              >
+                <IconCheck />
+                Mark all read
+              </button>
+              <button type="button" onClick={() => setHistoryOpen(false)} className="btn btn-brand btn-sm">
+                Close
+              </button>
+            </>
+          }
+        >
+          {/* The controls stay put while only the list scrolls. Previously the
+              whole body scrolled as one block, so on a long list the search box
+              and the filters disappeared off the top. */}
+          <div className="flex max-h-[min(calc(86svh-15rem),32rem)] flex-col">
+            <div className="shrink-0 space-y-3">
+              <div className="relative">
+                <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-muted">
+                  <IconSearch className="h-4 w-4" />
+                </span>
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Search notifications…"
+                  aria-label="Search notifications"
+                  className="input pl-10 pr-9"
+                />
+                {historySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setHistorySearch("")}
+                    aria-label="Clear search"
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted transition hover:text-ink"
+                  >
+                    <IconX className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
 
-        <div className="mt-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter notifications">
-          {FILTERS[role].map((key) => (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              aria-selected={historyFilter === key}
-              onClick={() => setHistoryFilter(key)}
-              className="tab"
-            >
-              {key === "all" ? "All" : (TYPE_META[key] || FALLBACK_META).label}
-            </button>
-          ))}
-        </div>
+              <div
+                className="flex flex-wrap gap-1.5"
+                role="tablist"
+                aria-label="Filter notifications"
+              >
+                {FILTERS[role].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={historyFilter === key}
+                    onClick={() => setHistoryFilter(key)}
+                    className="tab"
+                  >
+                    {key === "all" ? "All" : (TYPE_META[key] || FALLBACK_META).label}
+                  </button>
+                ))}
+              </div>
 
-        <div className="-mx-6 mt-4 border-t hairline">
-          {filteredHistory.length === 0 ? (
-            emptyState("Nothing matches", "Try a different search or filter.")
-          ) : (
-            <ul>{filteredHistory.map((n) => renderItem(n, false))}</ul>
-          )}
-        </div>
-      </Modal>
+              {/* Says what the filter is actually showing, so an empty-looking
+                  inbox is never mistaken for an empty one. */}
+              <p className="prose-muted text-xs" aria-live="polite">
+                {filteredHistory.length === notifications.length
+                  ? `${notifications.length} notification${notifications.length === 1 ? "" : "s"}`
+                  : `Showing ${filteredHistory.length} of ${notifications.length}`}
+              </p>
+            </div>
 
-      {/* ---------------------------------------------------------- toasts */}
-      {toasts.length > 0 && (
+            {/* Full-bleed so rows meet the panel edge, as they do in the
+                dropdown; the negative margin is cancelled by the row padding. */}
+            <div className="-mx-6 mt-3 min-h-0 flex-1 overflow-y-auto border-t hairline">
+              {filteredHistory.length === 0 ? (
+                notifications.length === 0
+                  ? emptyState("No notifications yet", EMPTY_COPY[role])
+                  : emptyState("Nothing matches", "Try a different search or filter.")
+              ) : (
+                <ul>{filteredHistory.map((n) => renderItem(n, false))}</ul>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Clearing the whole list is the one notification action worth
+          confirming: it is irreversible and removes things the user may not
+          have read. The count comes from state, and the server reports the
+          real number it removed. */}
+{inBodyPortal(
+        <Modal
+          open={confirmClear}
+          onClose={() => !clearing && setConfirmClear(false)}
+          eyebrow="Notifications"
+          title="Are you sure you want to clear all notifications?"
+          subtitle={
+            notifications.length === 1
+              ? "1 notification will be removed."
+              : `All ${notifications.length} notifications will be removed.`
+          }
+          footer={
+            <>
+              <button
+                type="button"
+                onClick={() => setConfirmClear(false)}
+                disabled={clearing}
+                className="btn btn-ghost btn-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmClearAll}
+                disabled={clearing}
+                className="btn btn-danger btn-sm"
+              >
+                {clearing ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
+                {clearing ? "Clearing…" : "Clear all"}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink">
+            This removes every notification in your inbox, read and unread. It
+            cannot be undone — but it does not affect the events themselves.
+          </p>
+        </Modal>
+      )}
+
+      {/* ---------------------------------------------------------- toasts
+          Portalled for the same reason as the dialogs above: `fixed` inside
+          the header resolved against the header strip, so the toasts stacked
+          over it instead of the bottom-right of the screen, in the header's
+          near-white ink on the page's white surface. */}
+      {toasts.length > 0 &&
+        inBodyPortal(
         <div className="pointer-events-none fixed bottom-5 right-5 z-50 flex w-85 max-w-[calc(100vw-2.5rem)] flex-col gap-3">
           {toasts.map((notif) => {
             const meta = TYPE_META[notif.notification_type] || FALLBACK_META;
@@ -532,7 +721,7 @@ export default function NotificationBell({ currentUser, onNew }) {
             );
           })}
         </div>
-      )}
+        )}
     </div>
   );
 }

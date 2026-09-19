@@ -8,6 +8,7 @@ Every piece of persistent state lives in one MongoDB database:
     event_documents  supporting document metadata (file bytes live in GridFS)
     notifications    in-app notifications for teachers
     event_reports    generated report records
+    app_settings     one row per global setting the Super Admin can change
     uploads.*        GridFS buckets holding the uploaded file bytes
 """
 
@@ -59,6 +60,10 @@ event_reports = db["event_reports"]
 event_types = db["event_types"]
 # Coordinator contact cards: name + mobile, not user accounts (PRD 5).
 faculty_coordinators = db["faculty_coordinators"]
+# Global configuration the Super Admin edits at runtime. One document per
+# setting group, keyed by a string `_id` ("upload_limits"), so there is no
+# index to declare and no way for a second row to appear.
+app_settings = db["app_settings"]
 
 # Uploaded file bytes are stored in GridFS so that MongoDB remains the single
 # store for the application, including media and documents.

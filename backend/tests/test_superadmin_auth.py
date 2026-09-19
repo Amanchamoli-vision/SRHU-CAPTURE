@@ -49,6 +49,9 @@ class SuperadminRouterTests(unittest.TestCase):
         self.client = TestClient(app)
         self.users = MagicMock()
         self.users.find.return_value.sort.return_value = []
+        # The listing counts before it pages (see tests/test_superadmin_users.py
+        # for the real thing); a MagicMock count would not serialise to JSON.
+        self.users.count_documents.return_value = 0
         patcher = patch("app.routers.superadmin.users", self.users)
         patcher.start()
         self.addCleanup(patcher.stop)

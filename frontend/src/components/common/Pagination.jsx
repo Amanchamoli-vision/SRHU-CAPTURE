@@ -6,8 +6,20 @@ import { PER_PAGE_OPTIONS } from "../../hooks/useTableQuery";
  * Shows a real range ("Showing 26–50 of 312") rather than a row count, because
  * with server paging the number of rows on screen says nothing about how many
  * there are.
+ *
+ * `noun` names what is being paged, for the empty state only. It defaults to
+ * "events" because that is what this control paged first and every existing
+ * caller means.
  */
-function Pagination({ page, perPage, total, onPageChange, onPerPageChange, disabled }) {
+function Pagination({
+  page,
+  perPage,
+  total,
+  onPageChange,
+  onPerPageChange,
+  disabled,
+  noun = "events",
+}) {
   const pageCount = Math.max(1, Math.ceil(total / perPage));
   const from = total === 0 ? 0 : (page - 1) * perPage + 1;
   const to = Math.min(total, page * perPage);
@@ -15,7 +27,7 @@ function Pagination({ page, perPage, total, onPageChange, onPerPageChange, disab
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t hairline px-4 py-3 sm:px-6">
       <p className="prose-muted text-xs">
-        {total === 0 ? "No events" : `Showing ${from}–${to} of ${total}`}
+        {total === 0 ? `No ${noun}` : `Showing ${from}–${to} of ${total}`}
       </p>
 
       <div className="flex items-center gap-2">

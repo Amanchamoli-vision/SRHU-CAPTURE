@@ -7,21 +7,49 @@ description: Upload limits, allowed formats and the R2/GridFS storage path for C
 
 ## Limits (per event)
 
-All configurable in `backend/app/config.py`; the frontend mirrors them in
-`frontend/src/utils/uploadRules.js`. **Change both or a file the form accepts
-is rejected on submit.**
+**Photo and video limits are Super Admin data, not constants.** They live in
+one `app_settings` document (`_id: "upload_limits"`), are served by
+`app/services/upload_limits.py`, and are read per request by the upload
+endpoints and per page load by the wizard. Changing one needs no deploy.
+**Do not reintroduce a hardcoded photo or video cap anywhere.**
 
-| Kind | Limit | Shape |
-|---|---|---|
-| Photos | 10 files, 20 MB each | count + per-file |
-| Videos | 200 MB combined | **total bytes**, no count cap |
-| Documents | 15 MB combined | **total bytes**, no per-file cap |
+Documents are still fixed, in `backend/app/config.py`.
+
+| Kind | Default | Shape | Configurable |
+|---|---|---|---|
+| Photos | 10 files, 20 MB each, no combined cap | count + per-file (+ optional total) | yes |
+| Videos | 200 MB combined, 200 MB per file, no count cap | total bytes (+ optional count, per-file) | yes |
+| Documents | 15 MB combined | **total bytes**, no per-file cap | no |
+
+The defaults above are what was hardcoded before, so an untouched deployment
+behaves exactly as it did. `None` means a cap is off; the two that default to
+off (photo total, video count) never existed before.
 
 Videos and documents are budgeted by total size on purpose: "10 videos of
 20 MB" and "2 videos of 100 MB" cost the same, so the teacher chooses.
 
-The over-limit copy is specified verbatim by PRD 11:
+The over-limit copy is specified verbatim by PRD 11, with the configured
+number substituted:
 `You have exceeded the limit. Maximum allowed video size is 200 MB.`
+
+### Where things are
+
+| | |
+|---|---|
+| Storage + defaults + sanitising | `app/services/upload_limits.py` |
+| Request validation & bounds | `app/schemas/upload_limits.py` |
+| Console API | `GET`/`PUT /superadmin/upload-limits` |
+| Teacher-facing read | `GET /upload-limits` (any signed-in role) |
+| Console screen | `frontend/src/pages/superadmin/UploadLimits.jsx` |
+| Frontend rules | `frontend/src/utils/uploadRules.js` (`rulesFor`, `validatePick`) |
+
+`frontend/src/utils/uploadRules.js` still holds the **formats** and the
+document budget — those are not configurable. Its `FALLBACK_UPLOAD_LIMITS`
+(in `services/uploadLimits.js`) is only what the wizard uses if the limits
+request fails.
+
+Any test that uploads a file must patch `app.services.upload_limits.app_settings`
+(`tests/fake_app_settings.py`) or it reaches for a real MongoDB.
 
 ## Formats
 

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { apiJson } from "../../services/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { apiJson, isAbortError } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
+import Pagination from "../../components/common/Pagination";
+import useTableQuery from "../../hooks/useTableQuery";
 import StatusChip from "../../components/teacher/StatusChip";
 import { trackOf } from "../../components/teacher/status";
 import {
@@ -14,7 +16,6 @@ import {
   IconSearch,
   IconX,
 } from "../../components/teacher/icons";
-import { getStatusBucket } from "../../utils/constants";
 
 const STATUS_TABS = [
   { key: "all", label: "All" },
@@ -38,79 +39,132 @@ const formatDay = (value) => {
 export default function SuperAdminEvents() {
   const navigate = useNavigate();
   const { profile, signOut } = useAuth();
-  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Status, search and page live in the URL (see useTableQuery), the same way
+  // the Dean's table holds them: linkable, and one place a filter can be out
+  // of step with the rows it produced. Every filter change resets to page 1.
+  const { query, setFilter, setPage, setPerPage } = useTableQuery();
+  const { page, per, q: searchQuery, status: statusFilter } = query;
 
   const [events, setEvents] = useState([]);
   const [teacherNames, setTeacherNames] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
 
-  const statusFilter = STATUS_TABS.some((t) => t.key === searchParams.get("status"))
-    ? searchParams.get("status")
-    : "all";
+  // Totals for the status tabs and the footer, from the server: with one page
+  // fetched, the rows on screen cannot say how many there are.
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState({ all: 0, pending: 0, approved: 0, rejected: 0 });
 
-  const setStatusFilter = (key) => {
-    const next = new URLSearchParams(searchParams);
-    if (key === "all") next.delete("status");
-    else next.set("status", key);
-    setSearchParams(next, { replace: true });
-  };
+  // Uncontrolled by the URL while typing; see the debounce below.
+  const [searchDraft, setSearchDraft] = useState(searchQuery);
+
+  const setStatusFilter = (key) => setFilter("status", key, { replace: true });
+
+  // The teacher directory, only to turn a teacher_id into a name. Fetched
+  // once on mount rather than per page: it does not change as the table is
+  // paged, and re-requesting it on every Next click would undo the point.
+  useEffect(() => {
+    let cancelled = false;
+
+    apiJson("/superadmin/users")
+      .then((data) => {
+        if (cancelled) return;
+        setTeacherNames(
+          Object.fromEntries((data?.users || []).map((u) => [u.id, u.name || u.email])),
+        );
+      })
+      .catch(() => {
+        // Non-blocking: the row simply omits "by <teacher>".
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Only the newest request may update the list: paging or typing quickly
+  // must not let a slow, older response overwrite the newer one.
+  const loadControllerRef = useRef(null);
+
+  useEffect(() => () => loadControllerRef.current?.abort(), []);
 
   const loadEvents = useCallback(async () => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+
     try {
       setLoading(true);
       setError("");
 
-      const [eventData, userData] = await Promise.all([
-        apiJson("/dean/events"),
-        apiJson("/superadmin/users"),
-      ]);
+      const params = new URLSearchParams({
+        skip: String(query.skip),
+        limit: String(query.per),
+      });
+      if (query.q) params.set("q", query.q);
+      if (query.status && query.status !== "all") {
+        params.set("status_bucket", query.status);
+      }
 
-      setEvents(eventData?.events || []);
-      setTeacherNames(
-        Object.fromEntries((userData?.users || []).map((u) => [u.id, u.name || u.email]))
-      );
+      const data = await apiJson(`/dean/events?${params}`, {
+        signal: controller.signal,
+      });
+
+      if (controller.signal.aborted) return;
+      setEvents(data?.events || []);
+      setTotal(data?.total || 0);
+      setCounts(data?.counts || { all: data?.total || 0 });
     } catch (err) {
+      if (controller.signal.aborted || isAbortError(err)) return;
       if (err?.status === 401) {
         navigate("/login");
         return;
       }
       console.error("Load events error:", err);
       setError(err.message || "Failed to load events");
+      setEvents([]);
+      setTotal(0);
     } finally {
-      setLoading(false);
+      if (loadControllerRef.current === controller) setLoading(false);
     }
-  }, [navigate]);
+  }, [navigate, query.skip, query.per, query.q, query.status]);
 
   useEffect(() => {
     loadEvents();
   }, [loadEvents]);
+
+  // A bookmarked ?page=99 would otherwise show an empty table that reads as
+  // "no matches". Clamp to the last real page.
+  useEffect(() => {
+    if (loading || total === 0) return;
+    const lastPage = Math.max(1, Math.ceil(total / per));
+    if (page > lastPage) setPage(lastPage);
+  }, [loading, total, per, page, setPage]);
+
+  // Debounced so typing does not fire a request per character; `replace`
+  // keeps the back button useful instead of one entry per keystroke.
+  useEffect(() => {
+    if (searchDraft === searchQuery) return undefined;
+    const timer = setTimeout(
+      () => setFilter("q", searchDraft, { replace: true }),
+      350,
+    );
+    return () => clearTimeout(timer);
+  }, [searchDraft, searchQuery, setFilter]);
 
   const handleLogout = async () => {
     await signOut();
     navigate("/login");
   };
 
-  const counts = useMemo(() => {
-    const c = { all: events.length, pending: 0, approved: 0, rejected: 0 };
-    for (const e of events) {
-      const bucket = getStatusBucket(e.status);
-      if (bucket in c) c[bucket] += 1;
-    }
-    return c;
-  }, [events]);
+  // `events` is already one filtered page from the server; the name is kept
+  // so the list below reads the same as before.
+  const visibleEvents = events;
 
-  const visibleEvents = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return events.filter((e) => {
-      if (statusFilter !== "all" && getStatusBucket(e.status) !== statusFilter) return false;
-      if (!term) return true;
-      return [e.event_name, e.location, e.event_type, teacherNames[e.teacher_id]].some((f) =>
-        String(f ?? "").toLowerCase().includes(term)
-      );
-    });
-  }, [events, statusFilter, query, teacherNames]);
+  // True when an empty table is the result of a filter rather than an empty
+  // system, which decides which empty state to show.
+  const filtered = statusFilter !== "all" || Boolean(searchQuery);
 
   return (
     <SuperAdminShell
@@ -171,9 +225,9 @@ export default function SuperAdminEvents() {
             <IconSearch className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
             <input
               type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search event, venue or teacher"
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
+              placeholder="Search event, venue or organiser"
               className="input pl-10"
             />
           </label>
@@ -190,11 +244,11 @@ export default function SuperAdminEvents() {
               <span className="icon-tile mx-auto">
                 <IconInbox />
               </span>
-              <p className="h3 mt-4 text-ink">{events.length === 0 ? "No events yet" : "No matches"}</p>
+              <p className="h3 mt-4 text-ink">{filtered ? "No matches" : "No events yet"}</p>
               <p className="prose-muted mt-1 text-sm">
-                {events.length === 0
-                  ? "Nothing has been submitted for review."
-                  : "Try a different search or clear the status filter."}
+                {filtered
+                  ? "Try a different search or clear the status filter."
+                  : "Nothing has been submitted for review."}
               </p>
             </div>
           ) : (
@@ -227,6 +281,17 @@ export default function SuperAdminEvents() {
                 </li>
               ))}
             </ul>
+          )}
+
+          {total > 0 && (
+            <Pagination
+              page={page}
+              perPage={per}
+              total={total}
+              onPageChange={setPage}
+              onPerPageChange={setPerPage}
+              disabled={loading}
+            />
           )}
         </section>
       </div>

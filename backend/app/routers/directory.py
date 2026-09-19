@@ -1,8 +1,10 @@
-"""Lookup data the create-event form needs: categories and coordinators.
+"""Lookup data the create-event form needs: categories, coordinators, limits.
 
-Both are lists a teacher picks from and may add to, and neither belongs to an
-existing router -- events.py is about the events themselves, users.py about the
-caller's own account.
+The first two are lists a teacher picks from and may add to; the third is the
+Super Admin's upload configuration, which the wizard needs before it can tell
+a teacher a file is too big. None of them belongs to an existing router --
+events.py is about the events themselves, users.py about the caller's own
+account.
 """
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
@@ -15,6 +17,7 @@ from app.services.event_types import (
     list_event_type_names,
     resolve_event_type,
 )
+from app.services.upload_limits import get_upload_limits
 from app.utils.auth import get_current_user, require_role
 from app.utils.serializers import serialize_many
 
@@ -202,3 +205,23 @@ def add_faculty_coordinator(
             "source": "custom",
         },
     }
+
+
+# ============================================================
+# UPLOAD LIMITS
+# ============================================================
+
+@router.get("/upload-limits")
+def get_effective_upload_limits(authorization: str | None = Header(default=None)):
+    """The photo and video caps the teacher's wizard validates against.
+
+    Read-only and available to any signed-in role: the Dean's and Super
+    Admin's event screens show the same attachments, and a teacher must not
+    need superadmin rights to learn what they are allowed to upload.
+
+    Fetched on every page load, so a limit the Super Admin changes reaches
+    teachers without a deploy. The server re-checks every upload anyway; this
+    exists so a teacher learns about a cap before spending the minutes.
+    """
+    get_current_user(authorization)
+    return {"success": True, "limits": get_upload_limits()}

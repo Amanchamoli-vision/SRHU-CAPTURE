@@ -51,7 +51,6 @@ from app.services.event_fields import (
 )
 from app.services.storage_service import (
     MAX_EVENT_DOCUMENTS,
-    MAX_EVENT_PHOTOS,
     absolutize,
     check_file_signature,
     delete_event_cascade,
@@ -64,6 +63,7 @@ from app.services.storage_service import (
     save_upload,
     stream_upload,
 )
+from app.services.upload_limits import get_upload_limits, to_bytes
 from app.utils.auth import check_dean, check_event_viewer, get_current_user, require_role
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
@@ -1624,7 +1624,7 @@ def _ensure_under_cap(collection, cap_query: dict, cap: int | None, kind: str) -
 def _size_cap_error(cap_bytes: int, kind: str) -> HTTPException:
     """The over-limit message, worded as PRD 11 specifies for videos."""
     megabytes = cap_bytes // (1024 * 1024)
-    noun = {"video": "video", "document": "document"}.get(kind, "file")
+    noun = {"image": "photo", "video": "video", "document": "document"}.get(kind, "file")
     return HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=(
@@ -1796,13 +1796,19 @@ def upload_teacher_event_media(
     media_type = info["kind"]
     is_image = media_type == "image"
 
-    # Photos: at most N, each under its own size cap. Videos: no count limit,
-    # but one combined budget for the event (PRD 7 / 11).
-    cap = MAX_EVENT_PHOTOS if is_image else None
-    cap_bytes = None if is_image else settings.max_video_total_bytes
-    per_file_limit = (
-        settings.max_photo_size_bytes if is_image else settings.max_video_total_bytes
-    )
+    # Every cap comes from the Super Admin's configuration, read per request
+    # so a change takes effect on the next upload rather than the next deploy.
+    # Photos are capped by count and per file, videos by combined size; each
+    # kind may also carry the other cap, and `None` means that one is off.
+    limits = get_upload_limits()
+    if is_image:
+        cap = limits["max_photos_per_event"]
+        cap_bytes = to_bytes(limits["max_photo_total_mb"])
+        per_file_limit = to_bytes(limits["max_photo_size_mb"])
+    else:
+        cap = limits["max_videos_per_event"]
+        cap_bytes = to_bytes(limits["max_video_total_mb"])
+        per_file_limit = to_bytes(limits["max_video_size_mb"])
     cap_query = {"event_id": event_key, "media_type": media_type}
     _ensure_under_cap(event_media, cap_query, cap, media_type)
 
@@ -2195,4 +2201,65 @@ def mark_notification_read(
     return {
         "success": True,
         "message": "Notification marked as read",
+    }
+
+
+# ============================================================
+# DELETE NOTIFICATIONS
+#
+# Both routes are scoped to the caller's own notifications: the filter carries
+# `user_id`, so one user cannot delete another's by guessing an id.
+# ============================================================
+
+@router.delete("/notifications/{notification_id}")
+@router.delete(
+    "/teacher/notifications/{notification_id}"
+)
+def delete_notification(
+    notification_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Remove one notification for good."""
+    user = get_current_user(authorization)
+
+    result = notifications.delete_one(
+        {"_id": to_object_id(notification_id), "user_id": user["id"]}
+    )
+
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found"
+        )
+
+    return {
+        "success": True,
+        "message": "Notification deleted",
+    }
+
+
+@router.delete("/notifications")
+@router.delete(
+    "/teacher/notifications"
+)
+def clear_notifications(
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Empty the caller's notification list.
+
+    Returns how many were removed so the UI can report it rather than
+    guessing from the list it happened to be showing.
+    """
+    user = get_current_user(authorization)
+
+    result = notifications.delete_many({"user_id": user["id"]})
+
+    return {
+        "success": True,
+        "message": "Notifications cleared",
+        "deleted": result.deleted_count,
     }
