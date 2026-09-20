@@ -3,7 +3,7 @@
 import logging
 
 import jwt
-from fastapi import HTTPException, status
+from fastapi import Header, HTTPException, status
 
 from app.database import users
 from app.models.documents import USER_PRIVATE_FIELDS
@@ -138,3 +138,18 @@ def check_event_viewer(user: dict) -> dict:
 
 def get_superadmin_user(authorization: str | None) -> dict:
     return require_role(get_current_user(authorization), "superadmin")
+
+
+def superadmin_dep(authorization: str | None = Header(default=None)) -> dict:
+    """``get_superadmin_user`` as a FastAPI dependency.
+
+    Calling the check inside the handler body means Pydantic validates the request
+    body first, so an unauthenticated caller with a malformed body got a 422 that
+    echoed the whole schema back. FastAPI resolves dependencies before binding the
+    body, so as a dependency the 401 wins.
+
+    It returns the actor rather than None because every superadmin route needs it
+    for the audit log -- which is why this is a per-route dependency and not a
+    router-level one.
+    """
+    return get_superadmin_user(authorization)

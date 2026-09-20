@@ -6,6 +6,7 @@ import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
 import EventMediaSections from "../../components/common/EventMediaSections";
+import { getRefusalReason } from "../../utils/constants";
 import useMediaRefresh from "../../components/common/useMediaRefresh";
 import {
   IconAlertTriangle,
@@ -206,10 +207,14 @@ export default function SuperAdminEventDetails() {
                   <p className="prose-muted mt-2 whitespace-pre-line text-sm">
                     {description || "No description provided."}
                   </p>
-                  {event.rejection_reason && (
+                  {getRefusalReason(event) && (
                     <p className="mt-4 text-sm text-ink">
-                      <span className="font-semibold">Dean&apos;s remarks: </span>
-                      {event.rejection_reason}
+                      <span className="font-semibold">
+                        {event.status === "revoked"
+                          ? "Why the Dean withdrew approval: "
+                          : "Dean's remarks: "}
+                      </span>
+                      {getRefusalReason(event)}
                     </p>
                   )}
                 </div>

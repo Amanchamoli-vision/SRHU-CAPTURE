@@ -15,23 +15,51 @@ from pymongo import ReturnDocument
 
 def _matches(document: dict, query: dict) -> bool:
     for key, wanted in query.items():
+        if key == "$or":
+            if not any(_matches(document, clause) for clause in wanted):
+                return False
+            continue
+
         value = document.get(key)
         if isinstance(wanted, dict) and any(op.startswith("$") for op in wanted):
+            # `$options` is a modifier on `$regex`, not a test of its own.
+            flags = re.IGNORECASE if "i" in (wanted.get("$options") or "") else 0
             for op, operand in wanted.items():
+                if op == "$options":
+                    continue
                 if op == "$gt":
                     if value is None or not value > operand:
                         return False
                 elif op == "$ne":
                     if value == operand:
                         return False
+                elif op == "$in":
+                    if value not in operand:
+                        return False
                 elif op == "$regex":
-                    if not isinstance(value, str) or not re.search(operand, value):
+                    if not isinstance(value, str) or not re.search(operand, value, flags):
                         return False
                 else:  # pragma: no cover - only for test authors
                     raise NotImplementedError(op)
         elif value != wanted:
             return False
     return True
+
+
+class _Cursor:
+    """Just enough of a pymongo cursor for the callers that page a find()."""
+
+    def __init__(self, documents: list[dict]) -> None:
+        self._documents = documents
+
+    def limit(self, count: int) -> "_Cursor":
+        return _Cursor(self._documents[:count] if count else self._documents)
+
+    def sort(self, *_args, **_kwargs) -> "_Cursor":
+        return self
+
+    def __iter__(self):
+        return iter(self._documents)
 
 
 class FakeUsers:
@@ -47,6 +75,15 @@ class FakeUsers:
             if _matches(document, query):
                 return copy.deepcopy(document)
         return None
+
+    def find(self, query: dict | None = None, projection=None, **_kwargs):
+        return _Cursor(
+            [
+                copy.deepcopy(document)
+                for document in self.documents
+                if _matches(document, query or {})
+            ]
+        )
 
     def _apply(self, document: dict, update: dict) -> None:
         for key, value in update.get("$set", {}).items():

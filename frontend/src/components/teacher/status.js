@@ -66,3 +66,15 @@ export const isApprovedStatus = (status) =>
   status === "in_progress" ||
   status === "completed" ||
   status === "published";
+
+/**
+ * Statuses the Dean has refused: a first rejection, or an approval withdrawn.
+ *
+ * The backend treats the two as one bucket -- STATUS_BUCKETS["rejected"] and
+ * TEACHER_EDITABLE_STATUSES in backend/app/models/documents.py both cover
+ * revoked -- so the teacher screens must too. Before this existed, a revoked
+ * event belonged to no bucket at all: no tab counted it, and it offered the
+ * teacher no way to act on it.
+ */
+export const isRefusedStatus = (status) =>
+  status === "rejected" || status === "revoked";

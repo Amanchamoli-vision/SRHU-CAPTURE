@@ -1,8 +1,18 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { lazy, Suspense } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+} from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/common/ProtectedRoute";
 
-// Landing & Authentication
+// Landing & Authentication.
+//
+// Eager: these are what an unauthenticated visitor lands on, so splitting them
+// out would only add a round trip before the first paint.
 import Landing from "./pages/Landing";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
@@ -11,28 +21,50 @@ import ForgotPassword from "./pages/auth/ForgotPassword";
 import ResetPassword from "./pages/auth/ResetPassword";
 import NotFound from "./pages/NotFound";
 
+// The three role areas are loaded on demand.
+//
+// Every visitor used to download all of them in one 1.09 MB chunk -- a teacher
+// opening the login page on campus mobile data paid for the Dean's review
+// screens, the whole Super Admin console and its charting library before
+// anything rendered. A person only ever holds one role.
+
 // Teacher
-import TeacherDashboard from "./pages/teacher/TeacherDashboard";
-import CreateEvent from "./pages/teacher/CreateEvent";
-import MyEvents from "./pages/teacher/MyEvents";
-import TeacherEventDetails from "./pages/teacher/EventDetails";
-import TeacherProfile from "./pages/teacher/Profile";
+const TeacherDashboard = lazy(() => import("./pages/teacher/TeacherDashboard"));
+const CreateEvent = lazy(() => import("./pages/teacher/CreateEvent"));
+const MyEvents = lazy(() => import("./pages/teacher/MyEvents"));
+const TeacherEventDetails = lazy(() => import("./pages/teacher/EventDetails"));
+const TeacherProfile = lazy(() => import("./pages/teacher/Profile"));
 
 // Dean
-import DeanDashboard from "./pages/dean/DeanDashboard";
-import DeanAllEvents from "./pages/dean/AllEvents";
-import DeanArchive from "./pages/dean/Archive";
-import DeanEventDetails from "./pages/dean/EventDetails";
-import DeanProfile from "./pages/dean/Profile";
+const DeanDashboard = lazy(() => import("./pages/dean/DeanDashboard"));
+const DeanAllEvents = lazy(() => import("./pages/dean/AllEvents"));
+const DeanArchive = lazy(() => import("./pages/dean/Archive"));
+const DeanEventDetails = lazy(() => import("./pages/dean/EventDetails"));
+const DeanProfile = lazy(() => import("./pages/dean/Profile"));
 
-import SuperAdminDashboard from "./pages/superadmin/SuperAdminDashboard";
-import UserManagement from "./pages/superadmin/UserManagement";
-import CreateDean from "./pages/superadmin/CreateDean";
-import SuperAdminEvents from "./pages/superadmin/Events";
-import SuperAdminEventDetails from "./pages/superadmin/EventDetails";
-import Settings from "./pages/superadmin/Settings";
-import Departments from "./pages/superadmin/Departments";
-import AuditLogs from "./pages/superadmin/AuditLogs";
+// Super Admin
+const SuperAdminDashboard = lazy(
+  () => import("./pages/superadmin/SuperAdminDashboard"),
+);
+const UserManagement = lazy(() => import("./pages/superadmin/UserManagement"));
+const CreateDean = lazy(() => import("./pages/superadmin/CreateDean"));
+const SuperAdminEvents = lazy(() => import("./pages/superadmin/Events"));
+const SuperAdminEventDetails = lazy(
+  () => import("./pages/superadmin/EventDetails"),
+);
+const Settings = lazy(() => import("./pages/superadmin/Settings"));
+const Departments = lazy(() => import("./pages/superadmin/Departments"));
+const AuditLogs = lazy(() => import("./pages/superadmin/AuditLogs"));
+
+/** Shown only while a role area's chunk is being fetched. */
+function RouteFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center">
+      <span className="spin h-8 w-8 text-accent" />
+      <span className="sr-only">Loading…</span>
+    </div>
+  );
+}
 
 /**
  * The create-event wizard keeps a lot of state in refs (the server event id,
@@ -49,188 +81,191 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            {/* ================= AUTH ================= */}
+            <Route path="/" element={<Landing />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/verify-email" element={<VerifyEmail />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
 
-          {/* ================= AUTH ================= */}
-          <Route path="/" element={<Landing />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/verify-email" element={<VerifyEmail />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
+            {/* ================= TEACHER ================= */}
+            <Route
+              path="/teacher/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={["teacher"]}>
+                  <TeacherDashboard />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* ================= TEACHER ================= */}
-          <Route
-            path="/teacher/dashboard"
-            element={
-              <ProtectedRoute allowedRoles={["teacher"]}>
-                <TeacherDashboard />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/teacher/create-event"
+              element={
+                <ProtectedRoute allowedRoles={["teacher"]}>
+                  <CreateEventRoute />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/teacher/create-event"
-            element={
-              <ProtectedRoute allowedRoles={["teacher"]}>
-                <CreateEventRoute />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/teacher/my-events"
+              element={
+                <ProtectedRoute allowedRoles={["teacher"]}>
+                  <MyEvents />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/teacher/my-events"
-            element={
-              <ProtectedRoute allowedRoles={["teacher"]}>
-                <MyEvents />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/teacher/events/:eventId"
+              element={
+                <ProtectedRoute allowedRoles={["teacher"]}>
+                  <TeacherEventDetails />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/teacher/events/:eventId"
-            element={
-              <ProtectedRoute allowedRoles={["teacher"]}>
-                <TeacherEventDetails />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/teacher/profile"
+              element={
+                <ProtectedRoute allowedRoles={["teacher"]}>
+                  <TeacherProfile />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/teacher/profile"
-            element={
-              <ProtectedRoute allowedRoles={["teacher"]}>
-                <TeacherProfile />
-              </ProtectedRoute>
-            }
-          />
+            {/* ================= DEAN ================= */}
+            <Route
+              path="/dean/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={["dean"]}>
+                  <DeanDashboard />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* ================= DEAN ================= */}
-          <Route
-            path="/dean/dashboard"
-            element={
-              <ProtectedRoute allowedRoles={["dean"]}>
-                <DeanDashboard />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/dean/events"
+              element={
+                <ProtectedRoute allowedRoles={["dean"]}>
+                  <DeanAllEvents />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/dean/events"
-            element={
-              <ProtectedRoute allowedRoles={["dean"]}>
-                <DeanAllEvents />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/dean/archive"
+              element={
+                <ProtectedRoute allowedRoles={["dean"]}>
+                  <DeanArchive />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/dean/archive"
-            element={
-              <ProtectedRoute allowedRoles={["dean"]}>
-                <DeanArchive />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/dean/events/:eventId"
+              element={
+                <ProtectedRoute allowedRoles={["dean"]}>
+                  <DeanEventDetails />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/dean/events/:eventId"
-            element={
-              <ProtectedRoute allowedRoles={["dean"]}>
-                <DeanEventDetails />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/dean/profile"
+              element={
+                <ProtectedRoute allowedRoles={["dean"]}>
+                  <DeanProfile />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/dean/profile"
-            element={
-              <ProtectedRoute allowedRoles={["dean"]}>
-                <DeanProfile />
-              </ProtectedRoute>
-            }
-          />
+            {/* ================= SUPER ADMIN ================= */}
+            <Route
+              path="/superadmin/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <SuperAdminDashboard />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* ================= SUPER ADMIN ================= */}
-          <Route
-            path="/superadmin/dashboard"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <SuperAdminDashboard />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/superadmin/events"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <SuperAdminEvents />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/superadmin/events"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <SuperAdminEvents />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/superadmin/events/:eventId"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <SuperAdminEventDetails />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/superadmin/events/:eventId"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <SuperAdminEventDetails />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/superadmin/users"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <UserManagement />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/superadmin/users"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <UserManagement />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/superadmin/departments"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <Departments />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/superadmin/departments"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <Departments />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/superadmin/audit-logs"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <AuditLogs />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/superadmin/audit-logs"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <AuditLogs />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/superadmin/create-dean"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <CreateDean />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/superadmin/create-dean"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <CreateDean />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/superadmin/settings"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <Settings />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/superadmin/settings"
-            element={
-              <ProtectedRoute allowedRoles={["superadmin"]}>
-                <Settings />
-              </ProtectedRoute>
-            }
-          />
+            {/* Old /admin bookmarks from before the superadmin rename */}
+            <Route
+              path="/admin/*"
+              element={<Navigate to="/superadmin/dashboard" replace />}
+            />
 
-          {/* Old /admin bookmarks from before the superadmin rename */}
-          <Route path="/admin/*" element={<Navigate to="/superadmin/dashboard" replace />} />
-
-          {/* Anything else: a real 404 page instead of a blank screen */}
-          <Route path="*" element={<NotFound />} />
-
-        </Routes>
+            {/* Anything else: a real 404 page instead of a blank screen */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </AuthProvider>
     </BrowserRouter>
   );

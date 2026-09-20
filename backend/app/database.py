@@ -12,6 +12,8 @@ Every piece of persistent state lives in one MongoDB database:
 """
 
 import logging
+import os
+import sys
 
 import certifi
 from gridfs import GridFS
@@ -22,6 +24,46 @@ from app.config import settings
 
 
 logger = logging.getLogger(__name__)
+
+def _test_runner_active() -> bool:
+    """True when this process was started by a test runner.
+
+    uvicorn never imports unittest or pytest, so this is False in production.
+    """
+    return "unittest" in sys.modules or "pytest" in sys.modules
+
+
+def _resolve_target(uri: str, db_name: str) -> tuple[str, str]:
+    """Keep the test suite off whatever database the deployment is configured for.
+
+    tests/__init__.py redirects the suite to a throwaway database, but
+    ``python -m unittest discover tests`` loads the modules as top-level names
+    and never imports the package, so the bootstrap silently does not run. The
+    suite fakes only some collections -- audit_logs and the index declarations
+    were never faked -- so the gap meant ordinary test runs wrote rows and
+    created indexes on the real, shared cluster.
+
+    Rather than fail the documented command, redirect it and say so loudly. Set
+    ALLOW_TESTS_ON_CONFIGURED_DB=1 to opt out, e.g. for an integration run
+    deliberately pointed at a scratch cluster.
+    """
+    if not _test_runner_active():
+        return uri, db_name
+    if os.environ.get("ALLOW_TESTS_ON_CONFIGURED_DB") == "1":
+        return uri, db_name
+
+    safe_uri = os.environ.get("TEST_MONGODB_URI", "mongodb://localhost:27017")
+    safe_db = os.environ.get("TEST_MONGODB_DB_NAME", "campus_capture_test")
+    if (uri, db_name) != (safe_uri, safe_db):
+        logger.warning(
+            "test runner detected: using %s/%s instead of the configured database. "
+            "Run the suite as `python -m unittest discover -t . -s tests` to set "
+            "this up explicitly, or set ALLOW_TESTS_ON_CONFIGURED_DB=1 to override.",
+            safe_uri.split("@")[-1],
+            safe_db,
+        )
+    return safe_uri, safe_db
+
 
 def _uses_tls(uri: str) -> bool:
     lowered = uri.lower()
@@ -38,15 +80,19 @@ def _uses_tls(uri: str) -> bool:
 # unreachable DNS server or Atlas cluster made importing this module (and so
 # the whole app and every test module) raise ConfigurationError, instead of
 # starting degraded and reporting it on /health.
+_MONGODB_URI, _MONGODB_DB_NAME = _resolve_target(
+    settings.mongodb_uri, settings.mongodb_db_name
+)
+
 client: MongoClient = MongoClient(
-    settings.mongodb_uri,
+    _MONGODB_URI,
     connect=False,
     serverSelectionTimeoutMS=5000,
     tz_aware=True,
-    **({"tlsCAFile": certifi.where()} if _uses_tls(settings.mongodb_uri) else {}),
+    **({"tlsCAFile": certifi.where()} if _uses_tls(_MONGODB_URI) else {}),
 )
 
-db = client[settings.mongodb_db_name]
+db = client[_MONGODB_DB_NAME]
 
 users = db["users"]
 events = db["events"]
@@ -101,6 +147,10 @@ def ensure_indexes() -> None:
     """Create the indexes the application relies on. Safe to call repeatedly."""
     users.create_index([("email", ASCENDING)], unique=True, name="email_unique")
     users.create_index([("role", ASCENDING)], name="role")
+    # Serves the faculty-coordinator directory, which lists staff who published
+    # a mobile number. Sparse: most accounts have none, and the query that uses
+    # it always requires the field to be present.
+    users.create_index([("phone", ASCENDING)], name="phone", sparse=True)
     users.create_index(
         [("verification_token_hash", ASCENDING)],
         name="verification_token",
@@ -190,6 +240,11 @@ def ensure_indexes() -> None:
     audit_logs.create_index([("action", ASCENDING)], name="action")
     audit_logs.create_index([("actor_id", ASCENDING)], name="actor")
     audit_logs.create_index([("target_id", ASCENDING)], name="target")
+
+    # The settings document is a singleton keyed by `key`. Without a unique index
+    # two concurrent first-time saves can each upsert their own copy, after which
+    # find_one returns an arbitrary one and the limits appear to flip at random.
+    upload_config.create_index([("key", ASCENDING)], unique=True, name="key_unique")
 
     departments.create_index([("name", ASCENDING)], unique=True, name="name_unique")
     departments.create_index([("code", ASCENDING)], unique=True, name="code_unique", sparse=True)

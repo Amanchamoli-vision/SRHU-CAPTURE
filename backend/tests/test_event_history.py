@@ -186,6 +186,30 @@ EVENT_PAYLOAD = {
 }
 
 
+class FakeAttachments:
+    """The slice of event_media / event_documents the events router uses.
+
+    Only `insert_one` and `count_documents` with plain equality, which is all
+    `ensure_submittable` needs to decide whether an event carries the photo and
+    the document PRD requires before it may go to a Dean.
+    """
+
+    def __init__(self) -> None:
+        self.docs: list[dict] = []
+
+    def insert_one(self, document: dict):
+        _id = ObjectId()
+        self.docs.append({**document, "_id": _id})
+        return MagicMock(inserted_id=_id)
+
+    def count_documents(self, query: dict) -> int:
+        return sum(
+            1
+            for doc in self.docs
+            if all(doc.get(key) == value for key, value in query.items())
+        )
+
+
 class EventHistoryTests(unittest.TestCase):
     """Every status transition leaves an entry the teacher can read back.
 
@@ -197,6 +221,8 @@ class EventHistoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
         self.events = FakeEvents()
+        self.media = FakeAttachments()
+        self.documents = FakeAttachments()
 
         self.patches = [
             patch("app.routers.events.events", self.events),
@@ -205,6 +231,10 @@ class EventHistoryTests(unittest.TestCase):
             patch("app.routers.events.event_reports", MagicMock()),
             patch("app.routers.events.get_current_user", fake_current_user),
             patch("app.routers.events.email_service.is_configured", return_value=False),
+            # An event may only be submitted once it carries a photo and a
+            # document, so the counts behind that rule have to be faked too.
+            patch("app.routers.events.event_media", self.media),
+            patch("app.routers.events.event_documents", self.documents),
             # The teacher GET also lists media and documents; none here.
             patch("app.routers.events.list_media", return_value=[]),
             patch("app.routers.events.list_documents", return_value=[]),
@@ -222,15 +252,46 @@ class EventHistoryTests(unittest.TestCase):
     def as_dean(self):
         return {"Authorization": "Bearer dean"}
 
+    def attach_evidence(self, event_id: str) -> None:
+        """The one photo and one document an event needs before submission."""
+        self.media.insert_one({"event_id": event_id, "media_type": "image"})
+        self.documents.insert_one({"event_id": event_id})
+
+    def create_draft(self, **extra) -> str:
+        """A saved draft, the only thing POST /teacher/events creates."""
+        response = self.client.post(
+            "/teacher/events",
+            json={**EVENT_PAYLOAD, **extra, "save_as_draft": True},
+            headers=self.as_teacher(),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()["event"]["id"]
+
+    def create_pending_event(self, **extra) -> str:
+        """An event waiting for the Dean, created the way the wizard does it.
+
+        Save a draft, attach the photo and document, then submit. An event
+        cannot be created straight into the review queue: it would have no
+        files attached at the moment it is created, which is exactly what the
+        mandatory-upload rule forbids.
+        """
+        event_id = self.create_draft(**extra)
+        self.attach_evidence(event_id)
+        submitted = self.client.patch(
+            f"/teacher/events/{event_id}",
+            json={**EVENT_PAYLOAD, **extra, "save_as_draft": False},
+            headers=self.as_teacher(),
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        return event_id
+
     def history_of(self, event_id: str) -> list[dict]:
         response = self.client.get(f"/teacher/events/{event_id}", headers=self.as_teacher())
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["event"]["history"]
 
     def test_full_review_cycle_is_recorded_in_order(self) -> None:
-        created = self.client.post("/teacher/events", json=EVENT_PAYLOAD, headers=self.as_teacher())
-        self.assertEqual(created.status_code, 201, created.text)
-        event_id = created.json()["event"]["id"]
+        event_id = self.create_pending_event()
 
         rejected = self.client.patch(
             f"/dean/events/{event_id}/reject",
@@ -251,21 +312,22 @@ class EventHistoryTests(unittest.TestCase):
 
         self.assertEqual(
             [entry["action"] for entry in history],
-            ["submitted", "rejected", "resubmitted", "approved"],
+            ["created", "submitted", "rejected", "resubmitted", "approved"],
         )
         self.assertEqual(
             [entry["status"] for entry in history],
-            ["pending", "rejected", "pending", "approved"],
+            ["draft", "pending", "rejected", "pending", "approved"],
         )
         self.assertEqual(
             [entry["actor_role"] for entry in history],
-            ["teacher", "dean", "teacher", "dean"],
+            ["teacher", "teacher", "dean", "teacher", "dean"],
         )
 
         # The Dean's reason survives the later approval, trimmed, with who gave it.
-        self.assertEqual(history[1]["note"], "Venue is booked that week.")
-        self.assertEqual(history[1]["actor_name"], "Aparna Sharma")
-        self.assertEqual(history[1]["from_status"], "pending")
+        rejection = history[2]
+        self.assertEqual(rejection["note"], "Venue is booked that week.")
+        self.assertEqual(rejection["actor_name"], "Aparna Sharma")
+        self.assertEqual(rejection["from_status"], "pending")
 
         # ...even though the event's current reason has been cleared.
         event = self.client.get(f"/teacher/events/{event_id}", headers=self.as_teacher()).json()["event"]
@@ -276,9 +338,7 @@ class EventHistoryTests(unittest.TestCase):
             self.assertTrue(entry["created_at"])
 
     def test_request_changes_records_the_remarks(self) -> None:
-        event_id = self.client.post(
-            "/teacher/events", json=EVENT_PAYLOAD, headers=self.as_teacher()
-        ).json()["event"]["id"]
+        event_id = self.create_pending_event()
 
         response = self.client.patch(
             f"/dean/events/{event_id}/request-changes",
@@ -305,6 +365,7 @@ class EventHistoryTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 200, response.text)
 
+        self.attach_evidence(event_id)
         self.client.patch(f"/teacher/events/{event_id}", json=EVENT_PAYLOAD, headers=self.as_teacher())
 
         self.assertEqual(
@@ -313,9 +374,7 @@ class EventHistoryTests(unittest.TestCase):
         )
 
     def test_delivery_stages_are_recorded(self) -> None:
-        event_id = self.client.post(
-            "/teacher/events", json=EVENT_PAYLOAD, headers=self.as_teacher()
-        ).json()["event"]["id"]
+        event_id = self.create_pending_event()
         self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
 
         for stage in ("in_progress", "completed"):
@@ -341,11 +400,8 @@ class DeanTransitionTests(EventHistoryTests):
     test_delivery_stages_are_recorded = None
 
     def submit(self, **extra) -> str:
-        response = self.client.post(
-            "/teacher/events", json={**EVENT_PAYLOAD, **extra}, headers=self.as_teacher()
-        )
-        self.assertEqual(response.status_code, 201, response.text)
-        return response.json()["event"]["id"]
+        """An event in the Dean's queue, reached the way a teacher reaches it."""
+        return self.create_pending_event(**extra)
 
     def test_approve_twice_is_409_and_records_one_entry(self) -> None:
         event_id = self.submit()
@@ -356,7 +412,8 @@ class DeanTransitionTests(EventHistoryTests):
         self.assertEqual(second.status_code, 409)
         self.assertEqual(second.json()["detail"], "This event is already approved.")
         self.assertEqual(
-            [entry["action"] for entry in self.history_of(event_id)], ["submitted", "approved"]
+            [entry["action"] for entry in self.history_of(event_id)],
+            ["created", "submitted", "approved"],
         )
 
     def test_completed_event_cannot_be_rejected_or_sent_back(self) -> None:
@@ -382,17 +439,42 @@ class DeanTransitionTests(EventHistoryTests):
         self.assertEqual(approved.status_code, 409)
         self.assertEqual(self.events.docs[ObjectId(event_id)]["status"], "completed")
 
-    def test_rejected_event_cannot_be_approved_until_resubmitted(self) -> None:
+    def test_rejected_event_can_be_re_approved_by_the_dean(self) -> None:
+        # The Dean refused it, so the Dean can undo that without making the
+        # teacher resubmit -- which is what the "Re-approve" button has always
+        # offered and the server used to answer 409 to.
         event_id = self.submit()
         self.client.patch(
             f"/dean/events/{event_id}/reject", params={"rejection_reason": "No"}, headers=self.as_dean()
         )
+
         response = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()["detail"], "Only pending events can be approved.")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        event = response.json()["event"]
+        self.assertEqual(event["status"], "approved")
+        self.assertIsNone(event["rejection_reason"])
+
+        entries = self.history_of(event_id)
+        self.assertEqual(
+            [entry["action"] for entry in entries],
+            ["created", "submitted", "rejected", "approved"],
+        )
+        # from_status is what tells a re-approval apart from a first decision.
+        self.assertEqual(entries[-1]["from_status"], "rejected")
+
+    def test_re_approval_says_so_in_the_notification(self) -> None:
+        event_id = self.submit()
+        self.client.patch(
+            f"/dean/events/{event_id}/reject", params={"rejection_reason": "No"}, headers=self.as_dean()
+        )
+
+        response = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+
+        self.assertEqual(response.json()["message"], "Event re-approved successfully")
 
     def test_drafts_are_invisible_to_dean_decisions(self) -> None:
-        event_id = self.submit(save_as_draft=True)
+        event_id = self.create_draft()
         response = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
         self.assertEqual(response.status_code, 404)
 
@@ -469,22 +551,18 @@ class DeanTransitionTests(EventHistoryTests):
     def test_teacher_social_link_uses_the_dean_rules(self) -> None:
         bad = self.client.post(
             "/teacher/events",
-            json={**EVENT_PAYLOAD, "social_network_url": "javascript:alert(1)"},
+            json={**EVENT_PAYLOAD, "social_network_url": "javascript:alert(1)", "save_as_draft": True},
             headers=self.as_teacher(),
         )
         self.assertEqual(bad.status_code, 422)
 
         good = self.client.post(
             "/teacher/events",
-            json={**EVENT_PAYLOAD, "social_network_url": "www.instagram.com/p/abc"},
+            json={**EVENT_PAYLOAD, "social_network_url": "www.instagram.com/p/abc", "save_as_draft": True},
             headers=self.as_teacher(),
         )
         self.assertEqual(good.status_code, 201, good.text)
         self.assertEqual(good.json()["event"]["social_network_url"], "https://www.instagram.com/p/abc")
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class RevokeTests(DeanTransitionTests):
@@ -587,7 +665,7 @@ class RevokeTests(DeanTransitionTests):
 
         self.assertEqual(
             [entry["action"] for entry in self.history_of(event_id)],
-            ["submitted", "approved", "revoked", "resubmitted"],
+            ["created", "submitted", "approved", "revoked", "resubmitted"],
         )
 
     def test_revocation_reason_is_separate_from_rejection_reason(self) -> None:
@@ -597,3 +675,50 @@ class RevokeTests(DeanTransitionTests):
 
         self.assertEqual(event["revocation_reason"], "Venue withdrew")
         self.assertIsNone(event["rejection_reason"])
+
+    def test_revoked_event_can_be_re_approved(self) -> None:
+        # The other way back from a revocation: the Dean reconsiders, rather
+        # than the teacher resubmitting untouched work.
+        event_id = self.approve()
+        self.revoke(event_id)
+
+        response = self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+
+        self.assertEqual(response.status_code, 200, response.text)
+        event = response.json()["event"]
+        self.assertEqual(event["status"], "approved")
+        self.assertEqual(
+            [entry["action"] for entry in self.history_of(event_id)],
+            ["created", "submitted", "approved", "revoked", "approved"],
+        )
+
+    def test_re_approving_clears_the_revocation(self) -> None:
+        # A re-approved event still carrying revocation_reason reads as revoked
+        # on every screen that shows the reason.
+        event_id = self.approve()
+        self.revoke(event_id)
+
+        event = self.client.patch(
+            f"/dean/events/{event_id}/approve", headers=self.as_dean()
+        ).json()["event"]
+
+        self.assertIsNone(event["revocation_reason"])
+        self.assertIsNone(event["revoked_at"])
+
+    def test_re_approved_event_can_be_moved_through_the_stages_again(self) -> None:
+        event_id = self.approve()
+        self.revoke(event_id)
+        self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+
+        response = self.client.patch(
+            f"/dean/events/{event_id}/stage",
+            params={"stage": "in_progress"},
+            headers=self.as_dean(),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["event"]["status"], "in_progress")
+
+
+if __name__ == "__main__":
+    unittest.main()

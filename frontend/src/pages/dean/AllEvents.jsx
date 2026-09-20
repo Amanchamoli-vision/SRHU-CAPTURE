@@ -493,6 +493,7 @@ function AllEvents() {
   // Its own action now, not a rejection wearing a different label (PRD 18).
   const isRevoking = decision?.kind === "revoke";
   const isReapproving = decision?.kind === "approve" && decisionBucket === "rejected";
+  const isRestoringRevoked = isReapproving && decisionEvent?.status === "revoked";
   const decisionBusy = Boolean(processingId);
 
   // ============================================================
@@ -576,8 +577,8 @@ function AllEvents() {
                 type="text"
                 value={searchDraft}
                 onChange={(e) => setSearchDraft(e.target.value)}
-                placeholder="Search name, venue, or type…"
-                aria-label="Search events"
+                placeholder="Search name, venue, type or teacher…"
+                aria-label="Search events by name, venue, type or teacher"
                 className="input pl-10 pr-9"
               />
 
@@ -941,6 +942,8 @@ function AllEvents() {
             <p className="text-sm text-ink">
               {isRevoking
                 ? "This event is approved. Revoking withdraws that approval, invalidates any generated report, and notifies the teacher — who can then fix and resubmit it."
+                : isRestoringRevoked
+                ? "This event's approval was revoked. Re-approving restores it, clears the revocation reason, and puts the delivery stages back within reach."
                 : "This event is rejected. Re-approving it clears the existing rejection reason and notifies the teacher."}
             </p>
           </div>

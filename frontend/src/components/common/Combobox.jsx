@@ -25,6 +25,9 @@ function Combobox({
   hint,
   emptyHint,
   renderOption,
+  // Optional leading glyph, for forms whose other inputs carry one (the
+  // registration form). Omitted, the input keeps its usual padding.
+  icon,
 }) {
   const generatedId = useId();
   const inputId = id || generatedId;
@@ -96,6 +99,12 @@ function Combobox({
       </label>
 
       <div className="relative">
+        {icon && (
+          <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-muted">
+            {icon}
+          </span>
+        )}
+
         <input
           id={inputId}
           type="text"
@@ -111,7 +120,7 @@ function Combobox({
           placeholder={placeholder}
           disabled={disabled}
           aria-invalid={error ? "true" : undefined}
-          className="input min-h-10 w-full py-2"
+          className={`input min-h-10 w-full py-2 ${icon ? "pl-10" : ""}`}
           onChange={(event) => {
             onChange(event.target.value);
             setOpen(true);

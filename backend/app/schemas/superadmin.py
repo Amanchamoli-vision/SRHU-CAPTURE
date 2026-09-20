@@ -1,4 +1,9 @@
+from typing import Any
+
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+
+from app.config import settings
+from app.utils.security import password_byte_error
 
 
 class CreateDeanRequest(BaseModel):
@@ -14,24 +19,72 @@ class CreateDeanRequest(BaseModel):
         return normalized
 
 
+# The single definition of every configurable upload bound. The Pydantic fields
+# below derive their ge/le from this, and GET /superadmin/upload-limits serves it
+# to the browser, so the ranges cannot drift between the form and the API.
+LIMIT_BOUNDS: dict[str, dict[str, object]] = {
+    "max_photos_per_event": {"min": 1, "max": 100, "unit": "count"},
+    "max_photo_size_mb": {"min": 1, "max": 100, "unit": "mb"},
+    "max_photo_total_mb": {"min": 1, "max": 1000, "unit": "mb", "nullable": True},
+    "max_videos_per_event": {"min": 1, "max": 50, "unit": "count", "nullable": True},
+    "max_video_size_mb": {"min": 1, "max": 1000, "unit": "mb"},
+    "max_video_total_mb": {"min": 1, "max": 2000, "unit": "mb"},
+    "max_documents_per_event": {"min": 1, "max": 200, "unit": "count"},
+    "max_documents_total_mb": {"min": 1, "max": 500, "unit": "mb"},
+}
+
+# Per-file ceilings the deployment must be able to physically accept. Documents
+# have no per-file cap by design (PRD 9), so their combined budget is also the
+# largest single document, which is why it appears here.
+PER_FILE_LIMIT_FIELDS = (
+    "max_photo_size_mb",
+    "max_video_size_mb",
+    "max_documents_total_mb",
+)
+
+
+def _bounded(name: str, description: str, *, nullable: bool = False) -> Any:
+    """Build a Field from LIMIT_BOUNDS so the range lives in exactly one place."""
+    bound = LIMIT_BOUNDS[name]
+    kwargs: dict[str, Any] = {
+        "ge": bound["min"],
+        "le": bound["max"],
+        "description": description,
+    }
+    if nullable:
+        kwargs["default"] = None
+    return Field(**kwargs)
+
+
 class UploadLimitsUpdateRequest(BaseModel):
-    max_photos_per_event: int = Field(
-        ge=1, le=100, description="Max number of photos allowed per event"
+    max_photos_per_event: int = _bounded(
+        "max_photos_per_event", "Max number of photos allowed per event"
     )
-    max_photo_size_mb: int = Field(
-        ge=1, le=100, description="Max size per photo in MB"
+    max_photo_size_mb: int = _bounded(
+        "max_photo_size_mb", "Max size per photo in MB"
     )
-    max_photo_total_mb: int | None = Field(
-        default=None, ge=1, le=1000, description="Max total combined size for photos in MB"
+    max_photo_total_mb: int | None = _bounded(
+        "max_photo_total_mb",
+        "Max total combined size for photos in MB (null = no combined budget)",
+        nullable=True,
     )
-    max_videos_per_event: int | None = Field(
-        default=None, ge=1, le=50, description="Max number of videos allowed per event"
+    max_videos_per_event: int | None = _bounded(
+        "max_videos_per_event",
+        "Max number of videos allowed per event (null = no count cap)",
+        nullable=True,
     )
-    max_video_size_mb: int = Field(
-        ge=1, le=1000, description="Max size per video in MB"
+    max_video_size_mb: int = _bounded(
+        "max_video_size_mb", "Max size per video in MB"
     )
-    max_video_total_mb: int = Field(
-        ge=1, le=2000, description="Max total combined size for videos in MB"
+    max_video_total_mb: int = _bounded(
+        "max_video_total_mb", "Max total combined size for videos in MB"
+    )
+    max_documents_per_event: int = _bounded(
+        "max_documents_per_event", "Max number of documents allowed per event"
+    )
+    max_documents_total_mb: int = _bounded(
+        "max_documents_total_mb",
+        "Max total combined size for documents in MB; also the largest single document",
     )
 
     @model_validator(mode="after")
@@ -47,6 +100,18 @@ class UploadLimitsUpdateRequest(BaseModel):
             raise ValueError(
                 "Max single video size cannot be greater than total video size limit"
             )
+
+        # The per-file caps configured here replace the global backstop on the
+        # upload path (stream_upload receives them as max_bytes), so a value above
+        # MAX_UPLOAD_SIZE_MB would promise teachers an upload the deployment
+        # cannot physically accept.
+        ceiling = settings.max_upload_size_mb
+        for field in PER_FILE_LIMIT_FIELDS:
+            value = getattr(self, field)
+            if value is not None and value > ceiling:
+                raise ValueError(
+                    f"{field} cannot exceed the deployment upload ceiling of {ceiling} MB"
+                )
         return self
 
 
@@ -74,6 +139,23 @@ class UpdateUserProfileRequest(BaseModel):
 
 class ResetUserPasswordRequest(BaseModel):
     new_password: str | None = Field(default=None, min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def check_password(cls, value: str | None) -> str | None:
+        """Reject a password bcrypt cannot fully use (over 72 UTF-8 bytes).
+
+        max_length counts characters, so 30 Hindi letters or emoji pass it and
+        then raise ValueError inside hash_password -- which this route does not
+        catch, turning a bad input into a 500. Every other schema that accepts
+        a chosen password runs this same check.
+        """
+        if value is None:
+            return None
+        error = password_byte_error(value)
+        if error:
+            raise ValueError(error)
+        return value
 
 
 class CreateDepartmentRequest(BaseModel):

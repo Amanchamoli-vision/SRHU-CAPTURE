@@ -149,8 +149,11 @@ Anita Rawat,anita.rawat@srhu.edu.in,Physics
             "role": "teacher",
         }
 
+        # The route now resolves every id up front with users.find_one, so that
+        # one bad id is reported as a skip instead of aborting the request after
+        # earlier teachers' passwords have already been replaced.
         with patch("app.utils.auth.get_current_user", return_value=SUPERADMIN), \
-             patch("app.routers.superadmin.find_user_or_404", return_value=teacher_doc), \
+             patch("app.routers.superadmin.users.find_one", return_value=teacher_doc), \
              patch("app.routers.superadmin.users.update_one"), \
              patch("app.services.email_service.send_teacher_credentials_email") as mock_email, \
              patch("app.services.audit_service.audit_logs.insert_one"):

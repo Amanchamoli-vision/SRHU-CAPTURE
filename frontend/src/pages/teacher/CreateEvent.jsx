@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson, apiUpload, isAbortError } from "../../services/api";
 import { fetchCurrentUser, signOut } from "../../services/auth";
-import { canTeacherEditEvent } from "../../utils/constants";
+import { canTeacherEditEvent, getRefusalReason } from "../../utils/constants";
 import {
   compareHHmm,
   localDateKey,
@@ -16,15 +16,15 @@ import {
 } from "../../utils/draftStorage";
 import { readEventFields } from "../../utils/eventFields";
 import {
-  DEFAULT_UPLOAD_LIMITS,
   DOC_ACCEPT,
   IMAGE_ACCEPT,
+  VIDEO_ACCEPT,
   MAX_DOC_TOTAL,
   formatMb,
   usedBytes,
   validatePick,
 } from "../../utils/uploadRules";
-import { fetchUploadLimits } from "../../services/settings";
+import useUploadLimits from "../../hooks/useUploadLimits";
 import { checkUploadNames } from "../../services/directory";
 import Combobox from "../../components/common/Combobox";
 import EventSummary from "../../components/common/EventSummary";
@@ -176,10 +176,24 @@ const snapshotOf = (data) => JSON.stringify(data);
 
 function CreateEvent() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
 
   const draftIdParam = searchParams.get("draftId");
   const editEventIdParam = searchParams.get("editEventId");
+
+  /**
+   * Where leaving the wizard goes.
+   *
+   * Every page that opens the wizard passes `state.from` (see
+   * hooks/useOriginState), so Back returns to the exact view the teacher came
+   * from -- filter and all. The fallbacks cover a direct URL visit, where
+   * there is no origin to return to: editing an existing event or draft came
+   * from a list, a blank form from the dashboard.
+   */
+  const originPath =
+    location.state?.from ||
+    (draftIdParam || editEventIdParam ? "/teacher/my-events" : "/teacher/dashboard");
 
   const [step, setStep] = useState(1);
   const [maxStepReached, setMaxStepReached] = useState(1);
@@ -251,19 +265,9 @@ function CreateEvent() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmError, setConfirmError] = useState("");
   const [submitted, setSubmitted] = useState(null); // the saved event
-  const [uploadLimits, setUploadLimits] = useState(DEFAULT_UPLOAD_LIMITS);
-
-  useEffect(() => {
-    let mounted = true;
-    fetchUploadLimits().then((limits) => {
-      if (mounted && limits) {
-        setUploadLimits(limits);
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  // Shared hook rather than a local fetch: it also revalidates when this tab is
+  // focused, so a limit an admin changes elsewhere reaches an open wizard.
+  const { limits: uploadLimits } = useUploadLimits();
 
   // The event id is also held in a ref: several files picked at once each need
   // it, and React state would still be null for all of them.
@@ -312,8 +316,16 @@ function CreateEvent() {
   const formSnapshot = snapshotOf(formData);
   const formDirty = formSnapshot !== savedSnapshot;
   const detailsComplete = Object.keys(detailsErrorsOf(formData)).length === 0;
-  // Only a rejected event that is being resubmitted; a draft is not one.
+  // Any saved event that is not a draft: submitting it again replaces a live
+  // submission, so Save Draft is not offered.
   const resubmitting = Boolean(serverEvent) && serverEvent.status !== "draft";
+
+  // Narrower, and the only thing the feedback banner may key off: an event the
+  // Dean actually refused. `resubmitting` alone showed a pending event a
+  // "Dean's rejection feedback" panel reading "No explicit rejection reason
+  // provided." -- about a decision nobody had made yet.
+  const refusalReason = getRefusalReason(serverEvent);
+  const wasRevoked = serverEvent?.status === "revoked";
 
   // --------------------------------------------------
   // Load user, and any draft or event being edited
@@ -884,6 +896,26 @@ function CreateEvent() {
 
   const handleBack = () => goToStep(Math.max(step - 1, 1));
 
+  /**
+   * The header arrow: one step back, and only once out of steps does it leave.
+   *
+   * It used to be a fixed link to the dashboard, so from step 4 of an edit
+   * opened from My Events it threw away three steps and the list behind them
+   * in a single click. The wizard's steps are component state rather than
+   * history entries, so the browser's own Back cannot walk them either --
+   * this control is the only thing that can.
+   */
+  const handleHeaderBack = () => {
+    if (step > 1) {
+      handleBack();
+      return;
+    }
+    navigate(originPath);
+  };
+
+  const headerBackLabel =
+    step > 1 ? `Back to ${STEPS[step - 2].label}` : "Back";
+
   // --------------------------------------------------
   // Save draft
   // --------------------------------------------------
@@ -1086,7 +1118,7 @@ function CreateEvent() {
       title: "Edit &",
       accent: "Resubmit",
       subtitle:
-        "Update the rejected event as advised by the Dean, then resubmit it for approval.",
+        "Update the event as advised by the Dean, then resubmit it for approval.",
     },
     draft: {
       eyebrow: "Draft Mode",
@@ -1122,7 +1154,13 @@ function CreateEvent() {
       active="create"
       profile={
         currentUser
-          ? { id: currentUser.id, name: currentUser.name || currentUser.email }
+          ? {
+              // The whole user, not a two-field copy: the rail footer reads
+              // designation and department off it too, and a trimmed object
+              // left this one page showing a bare name.
+              ...currentUser,
+              name: currentUser.name || currentUser.email,
+            }
           : null
       }
       onLogout={handleLogout}
@@ -1137,9 +1175,9 @@ function CreateEvent() {
 
         {/* Dean's feedback on a rejected event — the one thing that has to be
             read before anything below it is touched. */}
-        {resubmitting && (
+        {refusalReason && (
           <div
-            style={{ "--track": trackOf("rejected") }}
+            style={{ "--track": trackOf(serverEvent.status) }}
             className="reveal mb-4 rounded-2xl border p-4"
             data-tint="rejected"
           >
@@ -1148,10 +1186,12 @@ function CreateEvent() {
                 <IconAlertTriangle />
               </span>
               <div className="min-w-0">
-                <h2 className="h3 text-ink">Dean's rejection feedback</h2>
-                <p className="prose-muted mt-1.5 text-sm">
-                  {serverEvent.rejection_reason || "No explicit rejection reason provided."}
-                </p>
+                <h2 className="h3 text-ink">
+                  {wasRevoked
+                    ? "Why the Dean withdrew the approval"
+                    : "Dean's rejection feedback"}
+                </h2>
+                <p className="prose-muted mt-1.5 text-sm">{refusalReason}</p>
               </div>
             </div>
           </div>
@@ -1177,14 +1217,16 @@ function CreateEvent() {
           {/* --------------------------------------- title + step rail */}
           <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b hairline px-4 py-3.5 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
-              <Link
-                to="/teacher/dashboard"
+              <button
+                type="button"
+                onClick={handleHeaderBack}
+                disabled={busy}
                 className="icon-btn icon-btn-sm shrink-0"
-                aria-label="Back to Dashboard"
-                title="Back to Dashboard"
+                aria-label={headerBackLabel}
+                title={headerBackLabel}
               >
                 <IconArrowLeft />
-              </Link>
+              </button>
               <div className="min-w-0">
                 <p className="eyebrow text-[11px]">{heroCopy.eyebrow}</p>
                 <h1 className="truncate font-display text-xl font-bold leading-tight text-ink" title={heroCopy.subtitle}>
@@ -1615,7 +1657,7 @@ function CreateEvent() {
 
               <UploadPanel
                 kind="video"
-                accept="video/*"
+                accept={VIDEO_ACCEPT}
                 items={videos}
                 uploads={videoUploads}
                 max={uploadLimits.max_videos_per_event}
@@ -1745,7 +1787,7 @@ function CreateEvent() {
             {step === 1 ? (
               <button
                 type="button"
-                onClick={() => navigate("/teacher/my-events")}
+                onClick={() => navigate(originPath)}
                 disabled={busy}
                 className="btn btn-ghost btn-sm"
               >

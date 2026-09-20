@@ -29,6 +29,7 @@ class RegisterEndpointTests(unittest.TestCase):
         self.payload = {
             "name": " Asha  Rana ",
             "email": "Asha@Example.COM",
+            "designation": " Assistant   Professor ",
             "password": "secret1",
         }
 
@@ -62,6 +63,7 @@ class RegisterEndpointTests(unittest.TestCase):
         document = self.users.insert_one.call_args[0][0]
         self.assertEqual(document["email"], "asha@example.com")
         self.assertEqual(document["name"], "Asha Rana")
+        self.assertEqual(document["designation"], "Assistant Professor")
         self.assertEqual(document["role"], "teacher")
         self.assertFalse(document["email_verified"])
         self.assertNotIn("password", document)
@@ -189,6 +191,46 @@ class RegisterEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.users.insert_one.assert_not_called()
+
+    def test_designation_is_required(self) -> None:
+        payload = {key: value for key, value in self.payload.items() if key != "designation"}
+
+        response = self.client.post("/auth/register", json=payload)
+
+        self.assertEqual(response.status_code, 422)
+        self.users.insert_one.assert_not_called()
+
+    def test_blank_designation_is_rejected_before_insert(self) -> None:
+        """`min_length=1` alone would let "   " through, which normalizes to nothing."""
+        response = self.client.post(
+            "/auth/register",
+            json={**self.payload, "designation": "   "},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.users.insert_one.assert_not_called()
+
+    def test_designation_over_120_characters_is_rejected(self) -> None:
+        response = self.client.post(
+            "/auth/register",
+            json={**self.payload, "designation": "P" * 121},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.users.insert_one.assert_not_called()
+
+    def test_a_designation_outside_the_suggested_list_is_kept(self) -> None:
+        """The form suggests the common ranks; it does not restrict them."""
+        response = self.client.post(
+            "/auth/register",
+            json={**self.payload, "designation": "Emeritus Professor of Ayurveda"},
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(
+            self.users.insert_one.call_args[0][0]["designation"],
+            "Emeritus Professor of Ayurveda",
+        )
 
     def test_register_reports_503_when_smtp_not_configured(self) -> None:
         """Missing SMTP settings must degrade this route, not crash the service."""

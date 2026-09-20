@@ -82,6 +82,11 @@ export default function SuperAdminShell({
   const initials = initialsOf(profile?.name, profile?.email);
   const displayName = profile?.name || "Super Admin";
 
+  // Deans and superadmins are provisioned rather than self-registered, so most
+  // carry no designation and fall back to the role -- which is all this line
+  // used to be able to say for anyone.
+  const accountSubtitle = profile?.designation?.trim() || "Super Admin";
+
   const account = (compact = false) => (
     <>
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
@@ -89,7 +94,7 @@ export default function SuperAdminShell({
       </span>
       <span className={`min-w-0 leading-tight ${compact ? "hidden md:block" : ""}`}>
         <span className="block truncate text-sm font-semibold text-ink">{displayName}</span>
-        <span className="block text-[11px] text-muted">Super Admin</span>
+        <span className="block truncate text-[11px] text-muted">{accountSubtitle}</span>
       </span>
     </>
   );

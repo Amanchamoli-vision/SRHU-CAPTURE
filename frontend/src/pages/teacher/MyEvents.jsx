@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson } from "../../services/api";
+import { useOriginState } from "../../hooks/useOriginState";
 import { fetchCurrentUser, signOut } from "../../services/auth";
-import { canTeacherEditEvent } from "../../utils/constants";
+import { canTeacherEditEvent, getRefusalReason } from "../../utils/constants";
 import { localDateKey, localDateKeyOffset } from "../../utils/dates";
 import {
   getTeacherDrafts,
@@ -13,7 +14,12 @@ import {
 import TeacherShell from "../../components/teacher/TeacherShell";
 import Modal from "../../components/teacher/Modal";
 import StatusChip from "../../components/teacher/StatusChip";
-import { isApprovedStatus, isPendingStatus, trackOf } from "../../components/teacher/status";
+import {
+  isApprovedStatus,
+  isPendingStatus,
+  isRefusedStatus,
+  trackOf,
+} from "../../components/teacher/status";
 import {
   IconAlertTriangle,
   IconArrowRight,
@@ -64,12 +70,13 @@ const COLUMNS = [
  * Everything a teacher can do to one of their events. Shared by the desktop
  * table and the mobile card list so the two can never drift apart.
  */
-function EventActions({ item, canDelete, onDuplicate, onDelete }) {
+function EventActions({ item, canDelete, onDuplicate, onDelete, originState }) {
   return (
     <>
       {item.isDraft && (
         <Link
           to={`/teacher/create-event?draftId=${item.id}`}
+          state={originState}
           title="Continue editing draft"
           className="btn btn-brand btn-xs"
         >
@@ -78,9 +85,10 @@ function EventActions({ item, canDelete, onDuplicate, onDelete }) {
         </Link>
       )}
 
-      {!item.isDraft && item.status === "rejected" && (
+      {!item.isDraft && isRefusedStatus(item.status) && (
         <Link
           to={`/teacher/create-event?editEventId=${item.id}`}
+          state={originState}
           title="Edit and resubmit event"
           className="btn btn-danger btn-xs"
         >
@@ -89,13 +97,14 @@ function EventActions({ item, canDelete, onDuplicate, onDelete }) {
         </Link>
       )}
 
-      {/* Editable until the Dean approves it. Rejected events already have
-          their own Resubmit action above. */}
+      {/* Editable until the Dean approves it. Refused events -- rejected or
+          revoked -- already have their own Resubmit action above. */}
       {!item.isDraft &&
-        item.status !== "rejected" &&
+        !isRefusedStatus(item.status) &&
         canTeacherEditEvent(item) && (
           <Link
             to={`/teacher/create-event?editEventId=${item.id}`}
+            state={originState}
             title="Edit event"
             className="btn btn-ghost btn-xs"
           >
@@ -143,6 +152,7 @@ function EventActions({ item, canDelete, onDuplicate, onDelete }) {
 function MyEvents() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const originState = useOriginState();
 
   const activeFilter = searchParams.get("filter") || "all";
 
@@ -221,7 +231,10 @@ function MyEvents() {
   };
 
   const handleTabClick = (tabKey) => {
-    setSearchParams({ filter: tabKey });
+    // Replace, not push: a filter is a view of this page, not a place of its
+    // own, and pushing one entry per click buried the page the teacher
+    // arrived from under a pile of stale filter states.
+    setSearchParams({ filter: tabKey }, { replace: true });
   };
 
   const handleClearFilters = () => {
@@ -229,7 +242,7 @@ function MyEvents() {
     setDateFilter("all_time");
     setCustomFromDate("");
     setCustomToDate("");
-    setSearchParams({ filter: "all" });
+    setSearchParams({ filter: "all" }, { replace: true });
   };
 
   const isFiltered =
@@ -246,7 +259,7 @@ function MyEvents() {
       const newDraft = duplicateEventAsDraft(profile.id, targetEvent);
       setSuccessMessage(`Event "${targetEvent.event_name || targetEvent.eventName}" duplicated as draft.`);
       setTimeout(() => {
-        navigate(`/teacher/create-event?draftId=${newDraft.id}`);
+        navigate(`/teacher/create-event?draftId=${newDraft.id}`, { state: originState });
       }, 600);
     } catch (err) {
       console.error("Duplicate error:", err);
@@ -294,7 +307,10 @@ function MyEvents() {
     // Approved includes events the Dean has since marked in progress or
     // completed; each row's status pill still names the exact stage.
     approved: events.filter((e) => isApprovedStatus(e.status)).length,
-    rejected: events.filter((e) => e.status === "rejected").length,
+    // Revoked counts here too: the Dean's own Rejected tab buckets the two
+    // together (STATUS_BUCKETS in the events router), and a revoked event
+    // otherwise appeared under "All" and nowhere else.
+    rejected: events.filter((e) => isRefusedStatus(e.status)).length,
   };
 
   // --- Filtering Conditions ---
@@ -315,7 +331,7 @@ function MyEvents() {
       return isPendingStatus(item.status);
     }
     if (activeFilter === "approved") return isApprovedStatus(item.status);
-    if (activeFilter === "rejected") return item.status === "rejected";
+    if (activeFilter === "rejected") return isRefusedStatus(item.status);
     return true;
   };
 
@@ -485,7 +501,11 @@ function MyEvents() {
               </div>
             )}
 
-            <Link to="/teacher/create-event" className="btn btn-primary btn-sm shrink-0">
+            <Link
+              to="/teacher/create-event"
+              state={originState}
+              className="btn btn-primary btn-sm shrink-0"
+            >
               <IconPlus />
               <span className="hidden sm:inline">New Event</span>
             </Link>
@@ -562,7 +582,11 @@ function MyEvents() {
                   Clear filters
                 </button>
               ) : (
-                <Link to="/teacher/create-event" className="btn btn-primary btn-sm mt-5">
+                <Link
+                  to="/teacher/create-event"
+                  state={originState}
+                  className="btn btn-primary btn-sm mt-5"
+                >
                   <IconPlus />
                   Create an event
                 </Link>
@@ -579,12 +603,13 @@ function MyEvents() {
                 {filteredItems.map((item) => {
                   const { meta } = decodeEventMetadata(item.description);
                   const department = item.department || meta.department;
-                  const isRejected = item.status === "rejected";
+                  const isRejected = isRefusedStatus(item.status);
+                  const refusalReason = getRefusalReason(item);
 
                   return (
                     <li
                       key={item.id}
-                      style={isRejected ? { "--track": trackOf("rejected") } : undefined}
+                      style={isRejected ? { "--track": trackOf(item.status) } : undefined}
                       className={`px-4 py-3.5 ${isRejected ? "bg-[color-mix(in_srgb,var(--track)_6%,transparent)]" : ""}`}
                     >
                       <p className="truncate font-display text-sm font-semibold text-ink">
@@ -607,10 +632,12 @@ function MyEvents() {
                         </span>
                       </div>
 
-                      {isRejected && item.rejection_reason && (
-                        <p className="mt-1.5 text-xs" style={{ color: trackOf("rejected") }}>
-                          <span className="font-semibold">Rejection reason:</span>{" "}
-                          {item.rejection_reason}
+                      {isRejected && refusalReason && (
+                        <p className="mt-1.5 text-xs" style={{ color: trackOf(item.status) }}>
+                          <span className="font-semibold">
+                            {item.status === "revoked" ? "Revocation reason:" : "Rejection reason:"}
+                          </span>{" "}
+                          {refusalReason}
                         </p>
                       )}
 
@@ -620,6 +647,7 @@ function MyEvents() {
                           canDelete={canDeleteItem(item)}
                           onDuplicate={handleDuplicate}
                           onDelete={setDeletingEvent}
+                          originState={originState}
                         />
                       </div>
                     </li>
@@ -645,12 +673,13 @@ function MyEvents() {
                   {filteredItems.map((item) => {
                     const { description: cleanDesc, meta } = decodeEventMetadata(item.description);
                     const department = item.department || meta.department;
-                    const isRejected = item.status === "rejected";
+                    const isRejected = isRefusedStatus(item.status);
+                    const refusalReason = getRefusalReason(item);
 
                     return (
                       <tr
                         key={item.id}
-                        style={isRejected ? { "--track": trackOf("rejected") } : undefined}
+                        style={isRejected ? { "--track": trackOf(item.status) } : undefined}
                         className={`group transition hover:bg-raised/35 ${
                           isRejected ? "bg-[color-mix(in_srgb,var(--track)_5%,transparent)]" : ""
                         }`}
@@ -669,13 +698,13 @@ function MyEvents() {
                             {cleanDesc || "No description"}
                           </p>
 
-                          {isRejected && item.rejection_reason && (
+                          {isRejected && refusalReason && (
                             <p
                               className="line-clamp-2 text-xs"
-                              style={{ color: trackOf("rejected") }}
-                              title={item.rejection_reason}
+                              style={{ color: trackOf(item.status) }}
+                              title={refusalReason}
                             >
-                              <span className="font-semibold">Reason:</span> {item.rejection_reason}
+                              <span className="font-semibold">Reason:</span> {refusalReason}
                             </p>
                           )}
                         </td>
@@ -706,6 +735,7 @@ function MyEvents() {
                               canDelete={canDeleteItem(item)}
                               onDuplicate={handleDuplicate}
                               onDelete={setDeletingEvent}
+                              originState={originState}
                             />
                           </div>
                         </td>

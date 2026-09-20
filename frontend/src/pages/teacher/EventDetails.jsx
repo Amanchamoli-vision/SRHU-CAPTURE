@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiJson } from "../../services/api";
+import { useOriginState } from "../../hooks/useOriginState";
 import { fetchCurrentUser, signOut } from "../../services/auth";
-import { canTeacherEditEvent } from "../../utils/constants";
+import { canTeacherEditEvent, getRefusalReason } from "../../utils/constants";
 import { formatDateRange, formatTime12h } from "../../utils/dates";
 import { readEventFields } from "../../utils/eventFields";
 import { buildTimeline } from "../../utils/eventHistory";
@@ -17,7 +18,7 @@ import ProgressTimeline from "../../components/teacher/ProgressTimeline";
 import EventMediaSections from "../../components/common/EventMediaSections";
 import useMediaRefresh from "../../components/common/useMediaRefresh";
 import StatusChip from "../../components/teacher/StatusChip";
-import { isApprovedStatus, trackOf } from "../../components/teacher/status";
+import { isApprovedStatus, isRefusedStatus, trackOf } from "../../components/teacher/status";
 import {
   IconActivity,
   IconAlertTriangle,
@@ -130,6 +131,8 @@ function EventDetails() {
     setDocuments(docData || []);
   });
 
+  const originState = useOriginState();
+
   const handleLogout = async () => {
     await signOut();
     navigate("/login");
@@ -141,7 +144,7 @@ function EventDetails() {
       const newDraft = duplicateEventAsDraft(profile.id, event);
       setActionNotice("Event duplicated as new draft.");
       setTimeout(() => {
-        navigate(`/teacher/create-event?draftId=${newDraft.id}`);
+        navigate(`/teacher/create-event?draftId=${newDraft.id}`, { state: originState });
       }, 700);
     } catch (err) {
       console.error("Duplicate error:", err);
@@ -217,14 +220,17 @@ function EventDetails() {
     ? [...timeline].reverse().find((entry) => entry.action === "approved") || null
     : null;
   const hadRejection = timeline.some(
-    (entry) => entry.action === "rejected" || entry.action === "changes_requested"
+    (entry) =>
+      entry.action === "rejected" ||
+      entry.action === "revoked" ||
+      entry.action === "changes_requested"
   );
 
-  const canDelete =
-    event.status === "draft" ||
-    event.status === "pending" ||
-    event.status === "submitted" ||
-    event.status === "rejected";
+  // The same window the API enforces (TEACHER_EDITABLE_STATUSES) and My Events
+  // already used. The hand-written list this replaces left out under_review
+  // and revoked, hiding Delete on events the server would have deleted.
+  const canDelete = canTeacherEditEvent(event);
+  const refusalReason = getRefusalReason(event);
 
   const facts = [
     {
@@ -309,9 +315,10 @@ function EventDetails() {
               </button>
             )}
 
-            {event.status === "rejected" && (
+            {isRefusedStatus(event.status) && (
               <Link
                 to={`/teacher/create-event?editEventId=${event.id}`}
+                state={originState}
                 className="btn btn-danger btn-xs"
               >
                 <IconRefresh />
@@ -319,10 +326,12 @@ function EventDetails() {
               </Link>
             )}
 
-            {/* Editable until the Dean approves it. */}
-            {event.status !== "rejected" && canTeacherEditEvent(event) && (
+            {/* Editable until the Dean approves it. A refused event has its
+                own Edit & Resubmit above. */}
+            {!isRefusedStatus(event.status) && canTeacherEditEvent(event) && (
               <Link
                 to={`/teacher/create-event?editEventId=${event.id}`}
+                state={originState}
                 className="btn btn-ghost btn-xs"
               >
                 <IconEdit />
@@ -401,30 +410,40 @@ function EventDetails() {
         </section>
 
         {/* --------------------------------------------------- Dean remarks */}
-        {event.rejection_reason && (
+        {/* The Dean must give a reason for either kind of refusal, and the
+            teacher has to be able to read it -- a revocation reason used to be
+            written, stored, and then shown nowhere at all. */}
+        {refusalReason && (
           <section
-            style={{ "--track": trackOf("rejected") }}
+            style={{ "--track": trackOf(event.status) }}
             data-tint="rejected"
             className="reveal mt-6 overflow-hidden rounded-2xl border"
           >
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4"
                  style={{ borderColor: "color-mix(in srgb, var(--track) 22%, transparent)" }}>
               <div className="flex items-center gap-2.5">
-                <IconAlertTriangle className="h-5 w-5" style={{ color: trackOf("rejected") }} />
-                <h2 className="h3 text-base text-ink">Reviewer / Dean Remarks</h2>
+                <IconAlertTriangle className="h-5 w-5" style={{ color: trackOf(event.status) }} />
+                <h2 className="h3 text-base text-ink">
+                  {event.status === "revoked"
+                    ? "Why the approval was withdrawn"
+                    : "Reviewer / Dean Remarks"}
+                </h2>
               </div>
 
-              <Link
-                to={`/teacher/create-event?editEventId=${event.id}`}
-                className="btn btn-danger btn-xs"
-              >
-                <IconRefresh />
-                Edit &amp; Resubmit
-              </Link>
+              {canTeacherEditEvent(event) && (
+                <Link
+                  to={`/teacher/create-event?editEventId=${event.id}`}
+                  state={originState}
+                  className="btn btn-danger btn-xs"
+                >
+                  <IconRefresh />
+                  Edit &amp; Resubmit
+                </Link>
+              )}
             </div>
 
             <p className="whitespace-pre-line px-6 py-5 text-sm leading-6 text-ink">
-              {event.rejection_reason}
+              {refusalReason}
             </p>
           </section>
         )}

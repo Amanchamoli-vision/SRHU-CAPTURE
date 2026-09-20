@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiJson } from "../../services/api";
+import { useOriginState } from "../../hooks/useOriginState";
 import { fetchCurrentUser, signOut } from "../../services/auth";
-import { canTeacherEditEvent } from "../../utils/constants";
+import { canTeacherEditEvent, getRefusalReason } from "../../utils/constants";
 import {
   getTeacherDrafts,
   deleteTeacherDraft,
@@ -15,7 +16,12 @@ import Modal from "../../components/teacher/Modal";
 import Lifecycle from "../../components/teacher/Lifecycle";
 import StatusChip from "../../components/teacher/StatusChip";
 import StatCard from "../../components/common/StatCard";
-import { isApprovedStatus, isPendingStatus, trackOf } from "../../components/teacher/status";
+import {
+  isApprovedStatus,
+  isPendingStatus,
+  isRefusedStatus,
+  trackOf,
+} from "../../components/teacher/status";
 import {
   IconActivity,
   IconAlertTriangle,
@@ -37,6 +43,7 @@ const TABLE_COLUMNS = ["Event", "Date", "Venue", "Status", "Action"];
 
 function TeacherDashboard() {
   const navigate = useNavigate();
+  const originState = useOriginState();
 
   const [profile, setProfile] = useState(null);
   const [events, setEvents] = useState([]);
@@ -106,7 +113,7 @@ function TeacherDashboard() {
       const newDraft = duplicateEventAsDraft(profile.id, targetEvent);
       setActionNotice(`Event "${targetEvent.event_name || targetEvent.eventName}" duplicated as draft.`);
       setTimeout(() => {
-        navigate(`/teacher/create-event?draftId=${newDraft.id}`);
+        navigate(`/teacher/create-event?draftId=${newDraft.id}`, { state: originState });
       }, 700);
     } catch (err) {
       console.error("Duplicate error:", err);
@@ -140,7 +147,9 @@ function TeacherDashboard() {
   const totalEvents = events.length + drafts.length;
   const pendingEvents = events.filter((event) => isPendingStatus(event.status)).length;
   const approvedEvents = events.filter((event) => isApprovedStatus(event.status)).length;
-  const rejectedEvents = events.filter((event) => event.status === "rejected").length;
+  // Revoked belongs here: it is the Dean refusing the event, and leaving it
+  // out meant a revoked event was in total_events and in no tile at all.
+  const rejectedEvents = events.filter((event) => isRefusedStatus(event.status)).length;
 
   // Combine and sort recent events
   const recentCombinedList = [
@@ -238,7 +247,11 @@ function TeacherDashboard() {
           accent="Portal"
           subtitle={`Welcome back, ${profile?.name || "Teacher"}. Manage your campus events and proposals from one place.`}
           actions={
-            <Link to="/teacher/create-event" className="btn btn-primary">
+            <Link
+              to="/teacher/create-event"
+              state={originState}
+              className="btn btn-primary"
+            >
               <IconPlus />
               Create New Event
             </Link>
@@ -291,7 +304,11 @@ function TeacherDashboard() {
               <p className="prose-muted mt-1 text-sm">
                 No events submitted or saved yet.
               </p>
-              <Link to="/teacher/create-event" className="btn btn-primary mt-6">
+              <Link
+                to="/teacher/create-event"
+                state={originState}
+                className="btn btn-primary mt-6"
+              >
                 <IconPlus />
                 Create Your First Event
               </Link>
@@ -320,6 +337,7 @@ function TeacherDashboard() {
                         onDuplicate={handleDuplicate}
                         onDelete={setDeletingEvent}
                         onTrack={setTrackingEvent}
+                        originState={originState}
                       />
                     </div>
                   </li>
@@ -379,6 +397,7 @@ function TeacherDashboard() {
                                 onDuplicate={handleDuplicate}
                                 onDelete={setDeletingEvent}
                                 onTrack={setTrackingEvent}
+                                originState={originState}
                               />
                             </div>
                           </td>
@@ -466,9 +485,10 @@ function TeacherDashboard() {
               Close
             </button>
 
-            {trackingEvent?.status === "rejected" && (
+            {isRefusedStatus(trackingEvent?.status) && (
               <Link
                 to={`/teacher/create-event?editEventId=${trackingEvent.id}`}
+                state={originState}
                 className="btn btn-danger btn-sm"
               >
                 <IconEdit />
@@ -485,23 +505,25 @@ function TeacherDashboard() {
           </>
         }
       >
-        {trackingEvent?.status === "rejected" && (
+        {isRefusedStatus(trackingEvent?.status) && (
           <div
             className="mb-6 flex items-start gap-3 rounded-xl border p-3.5"
             style={{
-              "--track": trackOf("rejected"),
+              "--track": trackOf(trackingEvent.status),
               borderColor: "color-mix(in srgb, var(--track) 30%, transparent)",
               background: "color-mix(in srgb, var(--track) 9%, transparent)",
             }}
           >
             <IconAlertTriangle
               className="mt-0.5 h-4 w-4 shrink-0"
-              style={{ color: trackOf("rejected") }}
+              style={{ color: trackOf(trackingEvent.status) }}
             />
             <div>
-              <p className="text-xs font-semibold text-ink">Rejection reason</p>
+              <p className="text-xs font-semibold text-ink">
+                {trackingEvent.status === "revoked" ? "Revocation reason" : "Rejection reason"}
+              </p>
               <p className="prose-muted mt-0.5 text-xs">
-                {trackingEvent.rejection_reason || "No explicit rejection reason provided."}
+                {getRefusalReason(trackingEvent) || "No explicit reason provided."}
               </p>
             </div>
           </div>
@@ -519,7 +541,7 @@ const NotSet = () => <span className="italic text-muted/70">Not set</span>;
  * The five things a teacher can do to a row. Shared by the phone card list and
  * the desktop table so the two can never offer different actions.
  */
-function RowActions({ item, onDuplicate, onDelete, onTrack }) {
+function RowActions({ item, onDuplicate, onDelete, onTrack, originState }) {
   // Editable until the Dean approves it; mirrors TEACHER_EDITABLE_STATUSES in
   // backend/app/models/documents.py (the server enforces it).
   const canEdit = item.isDraft || canTeacherEditEvent(item);
@@ -537,6 +559,7 @@ function RowActions({ item, onDuplicate, onDelete, onTrack }) {
     <>
       <Link
         to={viewTo}
+        state={originState}
         title={item.isDraft ? "View & edit draft" : "View event details"}
         aria-label={item.isDraft ? "View and edit draft" : "View event details"}
         className="icon-btn icon-btn-sm"
@@ -547,6 +570,7 @@ function RowActions({ item, onDuplicate, onDelete, onTrack }) {
       {canEdit ? (
         <Link
           to={editTo}
+          state={originState}
           title="Edit event"
           aria-label="Edit event"
           className="icon-btn icon-btn-sm hover:border-emberink/50 hover:text-emberink"

@@ -210,6 +210,7 @@ def register(payload: RegistrationRequest, request: Request, background_tasks: B
         email=email,
         password_hash=password_hash,
         role="teacher",
+        designation=payload.designation,
         email_verified=not verification_required,
     )
 
@@ -290,32 +291,55 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
             detail="Your account has an invalid role. Please contact the administrator.",
         )
 
+    # The password is checked BEFORE anything is written, so a mistyped one
+    # leaves the link usable and the person can simply try again. Verifying
+    # first and refusing afterwards would burn the token on a typo.
+    #
+    # Why a password at all: the link travels through a mail system, sits in
+    # browser history, and may land in a shared or departmental inbox. On its
+    # own it proves someone can read the mailbox -- enough to confirm the
+    # address, not enough to hand over the account. The password chosen at
+    # registration is what turns a verification into a session. Someone who
+    # cannot supply it uses Forgot password, which verifies the address too.
+    sign_in = bool(payload.password)
+    if sign_in and not verify_password(payload.password, user.get("password_hash")):
+        logger.info("email_verification_password_mismatch email=%s", user["email"])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=VERIFY_PASSWORD_MISMATCH_MESSAGE,
+        )
+
     now = utc_now()
+    marks = {
+        "email_verified": True,
+        "email_verified_at": now,
+        # Burned on use: a link that has been read cannot be replayed.
+        "verification_token_hash": None,
+        "verification_expires_at": None,
+        "updated_at": now,
+    }
+    if sign_in:
+        marks["last_sign_in_at"] = now
+
     users.update_one(
         {"_id": user["_id"], "verification_token_hash": token_hash},
-        {
-            "$set": {
-                "email_verified": True,
-                "email_verified_at": now,
-                "verification_expires_at": None,
-                "last_sign_in_at": now,
-                "updated_at": now,
-            }
-        },
+        {"$set": marks},
     )
 
-    user["email_verified"] = True
-    user["email_verified_at"] = now
-    user["last_sign_in_at"] = now
+    user.update(marks)
 
-    logger.info("email_verified_and_logged_in email=%s role=%s", user["email"], user.get("role"))
-    session = _session_response(user)
-    return {
+    verified = {
         "message": "Your email has been verified successfully!",
         "email": user["email"],
         "already_verified": False,
-        **session,
     }
+
+    if not sign_in:
+        logger.info("email_verified email=%s session=not_issued", user["email"])
+        return verified
+
+    logger.info("email_verified_and_logged_in email=%s role=%s", user["email"], user.get("role"))
+    return {**verified, **_session_response(user)}
 
 
 @router.post("/resend-verification")

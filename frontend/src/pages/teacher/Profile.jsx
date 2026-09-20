@@ -10,6 +10,7 @@ import {
 import TeacherShell from "../../components/teacher/TeacherShell";
 import LogoutConfirmModal from "../../components/common/LogoutConfirmModal";
 import EditProfileModal from "../../components/common/EditProfileModal";
+import PasswordField from "../../components/common/PasswordField";
 import { useAuth } from "../../context/AuthContext";
 import {
   initialsOf,
@@ -66,6 +67,7 @@ const ACTION_CLASS =
 
 export default function TeacherProfile() {
   const navigate = useNavigate();
+  const originState = useOriginState();
   const { user: authUser } = useAuth();
 
   const [profile, setProfile] = useState(null);
@@ -249,6 +251,11 @@ export default function TeacherProfile() {
       track: trackOfRole(role),
     },
     {
+      label: "Designation",
+      value: profile?.designation?.trim() || "Not specified",
+      Icon: IconShield,
+    },
+    {
       label: "Department",
       value: profile?.department?.trim() || "Not specified",
       Icon: IconBuilding,
@@ -419,44 +426,30 @@ export default function TeacherProfile() {
             </div>
 
             <form onSubmit={handleChangePassword} className="grid gap-3 sm:grid-cols-3">
-              <div className="field">
-                <label htmlFor="pw-current">
-                  {mustChange ? "Temporary password" : "Current password"}
-                </label>
-                <input
-                  id="pw-current"
-                  type="password"
-                  className="input"
-                  autoComplete="current-password"
-                  value={pwForm.current}
-                  onChange={(e) => setPwForm((f) => ({ ...f, current: e.target.value }))}
-                  disabled={pwSaving}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="pw-next">New password</label>
-                <input
-                  id="pw-next"
-                  type="password"
-                  className="input"
-                  autoComplete="new-password"
-                  value={pwForm.next}
-                  onChange={(e) => setPwForm((f) => ({ ...f, next: e.target.value }))}
-                  disabled={pwSaving}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="pw-confirm">Confirm new password</label>
-                <input
-                  id="pw-confirm"
-                  type="password"
-                  className="input"
-                  autoComplete="new-password"
-                  value={pwForm.confirm}
-                  onChange={(e) => setPwForm((f) => ({ ...f, confirm: e.target.value }))}
-                  disabled={pwSaving}
-                />
-              </div>
+              <PasswordField
+                id="pw-current"
+                label={mustChange ? "Temporary password" : "Current password"}
+                autoComplete="current-password"
+                value={pwForm.current}
+                onChange={(e) => setPwForm((f) => ({ ...f, current: e.target.value }))}
+                disabled={pwSaving}
+              />
+              <PasswordField
+                id="pw-next"
+                label="New password"
+                autoComplete="new-password"
+                value={pwForm.next}
+                onChange={(e) => setPwForm((f) => ({ ...f, next: e.target.value }))}
+                disabled={pwSaving}
+              />
+              <PasswordField
+                id="pw-confirm"
+                label="Confirm new password"
+                autoComplete="new-password"
+                value={pwForm.confirm}
+                onChange={(e) => setPwForm((f) => ({ ...f, confirm: e.target.value }))}
+                disabled={pwSaving}
+              />
 
               {pwError && (
                 <p className="text-sm font-medium text-err sm:col-span-3" role="alert">
@@ -627,7 +620,12 @@ export default function TeacherProfile() {
 
               <div className="grid grid-cols-2 gap-1 lg:grid-cols-1">
                 {navActions.map((action) => (
-                  <Link key={action.key} to={action.to} className={`${ACTION_CLASS} group`}>
+                  <Link
+                    key={action.key}
+                    to={action.to}
+                    state={originState}
+                    className={`${ACTION_CLASS} group`}
+                  >
                     <span className="icon-tile h-9 w-9 rounded-lg">
                       <action.Icon className="h-4 w-4" />
                     </span>

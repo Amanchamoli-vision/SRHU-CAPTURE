@@ -123,6 +123,7 @@ def new_user_document(
     email_verified: bool = False,
     must_change_password: bool = False,
     phone: str | None = None,
+    designation: str | None = None,
     department: str | None = None,
     is_active: bool = True,
 ) -> dict[str, Any]:
@@ -135,6 +136,10 @@ def new_user_document(
         # A 10-digit mobile, or None. Opting in is what puts a member of staff
         # into the faculty-coordinator directory teachers pick from (PRD 5).
         "phone": phone,
+        # Academic rank, collected at registration. None on accounts created
+        # before it was added, and on Deans and superadmins, who are
+        # provisioned rather than self-registered.
+        "designation": designation,
         "department": department,
         "is_active": is_active,
         "email_verified": email_verified,

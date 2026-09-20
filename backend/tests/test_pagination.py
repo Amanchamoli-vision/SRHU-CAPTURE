@@ -18,10 +18,20 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.models.documents import new_event_document  # noqa: E402
+from tests.fake_users import FakeUsers  # noqa: E402
 from tests.test_event_history import FakeEvents  # noqa: E402
 
 DEAN = {"id": "dean1", "role": "dean", "name": "Dr. Dean"}
 TEACHER = {"id": "teacher1", "role": "teacher", "name": "T"}
+
+# The Dean's search resolves a typed name to the teachers who own events, so
+# the route reads `users` as well as `events`. Patched here too -- unpatched,
+# the lookup would go to whatever MONGODB_URI points at, which for anyone with
+# a populated .env is the real cluster.
+TEACHER_ACCOUNTS = (
+    {"_id": "teacher1", "name": "Ravi Kumar", "email": "ravi@srhu.edu.in", "role": "teacher"},
+    {"_id": "teacher2", "name": "Meena Joshi", "email": "meena@srhu.edu.in", "role": "teacher"},
+)
 
 client = TestClient(app)
 
@@ -45,8 +55,9 @@ def seeded(count: int, *, teacher_id: str = "teacher1", status: str = "pending")
     return store
 
 
-def dean_list(store, query: str = ""):
+def dean_list(store, query: str = "", accounts=TEACHER_ACCOUNTS):
     with patch("app.routers.events.get_current_user", return_value=DEAN), \
+            patch("app.routers.events.users", FakeUsers(*accounts)), \
             patch("app.routers.events.events", store):
         return client.get(f"/dean/events{query}", headers={"Authorization": "Bearer t"})
 
@@ -362,3 +373,88 @@ class SuperAdminUserListPagingTests(unittest.TestCase):
         self.assertEqual(counts["dean"], 5)
         self.assertEqual(counts["superadmin"], 2)
 
+
+
+class DeanSearchFieldTests(unittest.TestCase):
+    """Which fields the Dean / Super Admin search box actually looks at.
+
+    Both pages that own a search box over GET /dean/events tell the user what
+    it covers -- "Search name, venue, type or teacher". Each field below is
+    one half of that promise; two of them were not kept.
+    """
+
+    TEACHERS = (
+        {"_id": "teacher1", "name": "Ravi Kumar", "email": "ravi@srhu.edu.in", "role": "teacher"},
+        {"_id": "teacher2", "name": "Meena Joshi", "email": "meena@srhu.edu.in", "role": "teacher"},
+    )
+
+    def setUp(self) -> None:
+        self.store = FakeEvents()
+        for teacher_id, name, location, event_type, organizer in [
+            ("teacher1", "Robotics Hackathon", "Main Auditorium", "Workshop", "Dept of CSE"),
+            ("teacher1", "Annual Sports Meet", "Sports Ground", "Sports", "Phys Ed"),
+            ("teacher2", "Yoga Day", "Lawn", "Cultural", "Ravi Kumar"),
+        ]:
+            self.store.insert_one(
+                new_event_document(
+                    teacher_id=teacher_id,
+                    event_name=name,
+                    event_date="2099-10-15",
+                    event_type=event_type,
+                    location=location,
+                    description="Body",
+                    social_network_url=None,
+                    status="pending",
+                    organizer=organizer,
+                )
+            )
+
+    def names(self, query: str) -> list[str]:
+        response = dean_list(self.store, f"?q={query}", accounts=self.TEACHERS)
+        self.assertEqual(response.status_code, 200, response.text)
+        return sorted(event["event_name"] for event in response.json()["events"])
+
+    def test_search_matches_the_event_type(self) -> None:
+        """Regression: "Workshop" used to find only events with it in the *name*."""
+        self.assertEqual(self.names("Workshop"), ["Robotics Hackathon"])
+        self.assertEqual(self.names("cultural"), ["Yoga Day"])
+
+    def test_search_matches_the_submitting_teacher(self) -> None:
+        """Regression: a teacher's name matched only events that *named* them
+        as organizer -- the opposite of what the Super Admin's box offers."""
+        self.assertEqual(
+            self.names("Meena"),
+            ["Yoga Day"],
+        )
+
+    def test_teacher_match_is_by_ownership_not_just_the_organizer_text(self) -> None:
+        # "Ravi Kumar" owns two events and is written as the organizer of a
+        # third that belongs to someone else. All three are his by one reading
+        # or the other, and the search returns all three.
+        self.assertEqual(
+            self.names("Ravi"),
+            ["Annual Sports Meet", "Robotics Hackathon", "Yoga Day"],
+        )
+
+    def test_search_matches_the_teacher_email(self) -> None:
+        self.assertEqual(
+            self.names("meena%40srhu"),
+            ["Yoga Day"],
+        )
+
+    def test_a_teacher_who_owns_nothing_does_not_widen_the_search(self) -> None:
+        stranger = ({"_id": "teacher9", "name": "Nobody", "email": "no@srhu.edu.in"},)
+        response = dean_list(self.store, "?q=Nobody", accounts=stranger)
+        self.assertEqual(response.json()["total"], 0)
+
+    def test_name_venue_and_organizer_still_match(self) -> None:
+        self.assertEqual(self.names("hackathon"), ["Robotics Hackathon"])
+        self.assertEqual(self.names("lawn"), ["Yoga Day"])
+        self.assertEqual(self.names("CSE"), ["Robotics Hackathon"])
+
+    def test_counts_respect_a_type_search(self) -> None:
+        response = dean_list(self.store, "?q=Sports", accounts=self.TEACHERS)
+        body = response.json()
+        # "Sports" is both a type and a word in another event's name.
+        self.assertEqual(body["counts"]["all"], 1)
+        self.assertEqual(body["total"], 1)

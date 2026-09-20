@@ -63,12 +63,15 @@ class VerifyEmailTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def verify(self, token: str = "t" * 43):
-        return self.client.post("/auth/verify-email", json={"token": token})
+    def verify(self, token: str = "t" * 43, password: str | None = None):
+        body = {"token": token}
+        if password is not None:
+            body["password"] = password
+        return self.client.post("/auth/verify-email", json=body)
 
-    def test_first_click_verifies_and_returns_session(self) -> None:
+    def test_first_click_with_the_password_verifies_and_returns_session(self) -> None:
         self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH, role="teacher")
-        response = self.verify()
+        response = self.verify(password=PASSWORD)
 
         self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
@@ -81,7 +84,34 @@ class VerifyEmailTests(unittest.TestCase):
         changes = self.users.update_one.call_args[0][1]["$set"]
         self.assertTrue(changes["email_verified"])
         self.assertIsNone(changes["verification_expires_at"])
-        self.assertNotIn("verification_token_hash", changes)
+        # Burned on use, so the link cannot be replayed.
+        self.assertIsNone(changes["verification_token_hash"])
+
+    def test_the_link_alone_confirms_the_address_but_grants_no_session(self) -> None:
+        """Holding the link proves the mailbox, not the person.
+
+        A verification link reaches shared inboxes, mail scanners and browser
+        history. It used to return a full session on its own, so anyone who
+        saw it was signed in as that account.
+        """
+        self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH, role="teacher")
+        response = self.verify()
+
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertNotIn("access_token", data)
+        self.assertNotIn("user", data)
+        self.assertFalse(data["already_verified"])
+        self.assertTrue(self.users.update_one.call_args[0][1]["$set"]["email_verified"])
+
+    def test_a_wrong_password_is_refused_and_leaves_the_link_usable(self) -> None:
+        """A typo must not burn the one-time link."""
+        self.users.find_one.return_value = stored_user(password_hash=PASSWORD_HASH, role="teacher")
+        response = self.verify(password="not-the-password")
+
+        self.assertEqual(response.status_code, 401, response.text)
+        self.assertIn("password", response.json()["detail"].lower())
+        self.users.update_one.assert_not_called()
 
     def test_second_click_returns_already_verified(self) -> None:
         """StrictMode, a double click or a link scanner must not show "invalid"."""

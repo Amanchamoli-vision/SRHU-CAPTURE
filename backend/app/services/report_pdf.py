@@ -10,6 +10,7 @@ count.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from io import BytesIO
@@ -22,6 +23,8 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import (
     FrameBG,
@@ -37,7 +40,88 @@ from reportlab.platypus import (
 from app.config import settings
 
 
-LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "srhu-logo.png"
+logger = logging.getLogger(__name__)
+
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
+LOGO_PATH = ASSETS / "srhu-logo.png"
+
+
+# ============================================================
+# DEVANAGARI
+#
+# The report is set in Helvetica, a Latin-1 Type 1 font. Hindi text in an
+# event name, venue or description was not dropped loudly -- ReportLab
+# rendered every Devanagari letter as a black box, so an official record of a
+# Hindi-named event went out with its name unreadable and nothing failed.
+#
+# Noto Sans Devanagari carries the Devanagari block but NOT the Latin letters,
+# so it cannot simply replace Helvetica. Instead it is registered alongside,
+# and `rich()` below wraps only the Devanagari runs in it -- which also keeps
+# mixed text such as "Science दिवस 2026" correct in both scripts.
+# ============================================================
+
+DEVANAGARI_FONT = "NotoSansDevanagari"
+DEVANAGARI_FONT_BOLD = "NotoSansDevanagari-Bold"
+
+# Devanagari, Devanagari Extended and the Vedic Extensions.
+_DEVANAGARI = re.compile("[\\u0900-\\u097F\\u1CD0-\\u1CFF\\uA8E0-\\uA8FF]+")
+
+
+def _register_devanagari() -> bool:
+    """Register the bundled Devanagari faces. False when they are not present.
+
+    A missing font file must not break report generation: the report is still
+    correct for the Latin-script events that are the overwhelming majority, so
+    this degrades to the old behaviour and says so in the log.
+    """
+    faces = (
+        (DEVANAGARI_FONT, ASSETS / "NotoSansDevanagari-Regular.ttf"),
+        (DEVANAGARI_FONT_BOLD, ASSETS / "NotoSansDevanagari-Bold.ttf"),
+    )
+    for name, path in faces:
+        if not path.exists():
+            logger.warning(
+                "devanagari_font_missing path=%s -- Hindi text in reports will "
+                "render as boxes",
+                path,
+            )
+            return False
+    try:
+        for name, path in faces:
+            pdfmetrics.registerFont(TTFont(name, str(path)))
+        pdfmetrics.registerFontFamily(
+            DEVANAGARI_FONT, normal=DEVANAGARI_FONT, bold=DEVANAGARI_FONT_BOLD
+        )
+    except Exception:  # pragma: no cover - depends on the font file
+        logger.exception("devanagari_font_registration_failed")
+        return False
+    return True
+
+
+_DEVANAGARI_READY = _register_devanagari()
+
+
+def rich(value, *, bold: bool = False) -> str:
+    """XML-escape text for a Paragraph, in a font that can render it.
+
+    Latin stays in the paragraph's own font; each Devanagari run is wrapped in
+    the Noto face. Use this anywhere the value comes from a teacher -- an event
+    name, venue, organiser, person's name or description.
+    """
+    text = "" if value is None else str(value)
+    if not _DEVANAGARI_READY or not _DEVANAGARI.search(text):
+        return escape(text)
+
+    face = DEVANAGARI_FONT_BOLD if bold else DEVANAGARI_FONT
+    out: list[str] = []
+    position = 0
+    for match in _DEVANAGARI.finditer(text):
+        out.append(escape(text[position:match.start()]))
+        out.append(f'<font name="{face}">{escape(match.group())}</font>')
+        position = match.end()
+    out.append(escape(text[position:]))
+    return "".join(out)
+
 
 # The crest's own blue, so the letterhead and the logo read as one mark.
 NAVY = colors.HexColor("#1D3F7A")
@@ -109,7 +193,9 @@ def verbatim_markup(text: str) -> str:
     """
     lines = []
     for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = escape(line.replace("\t", "    "))
+        # rich() rather than escape(): a description written in Hindi has to
+        # come out in Hindi, not as a column of black boxes.
+        line = rich(line.replace("\t", "    "))
         # Keep every space after the first in a run, and any leading indent.
         line = re.sub(r"(?<= ) ", "&nbsp;", line)
         line = re.sub(r"^ ", "&nbsp;", line)
@@ -283,7 +369,7 @@ def _letterhead(styles) -> list:
 
 def _key_value_table(rows, styles) -> Table:
     data = [
-        [Paragraph(escape(label), styles["label"]), Paragraph(value, styles["value"])]
+        [Paragraph(rich(label), styles["label"]), Paragraph(value, styles["value"])]
         for label, value in rows
     ]
     table = Table(data, colWidths=[48 * mm, CONTENT_WIDTH - 48 * mm])
@@ -414,8 +500,8 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
 
     # 1. Event details
     details = [
-        ("Event Name", escape(str(event.get("event_name") or ""))),
-        ("Event Type", escape(str(event.get("event_type") or ""))),
+        ("Event Name", rich(event.get("event_name"))),
+        ("Event Type", rich(event.get("event_type"))),
         (
             "Event Date",
             escape(format_date_range(event.get("event_date"), event.get("end_date"))),
@@ -429,11 +515,11 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
     )
     if time_range:
         details.append(("Time", escape(time_range)))
-    details.append(("Venue", escape(str(event.get("location") or ""))))
+    details.append(("Venue", rich(event.get("location"))))
     for key, label in METADATA_LABELS:
         value = str(meta.get(key) or "").strip()
         if value:
-            details.append((label, escape(value)))
+            details.append((label, rich(value)))
 
     # Promoted columns first, blob second, so both old and new events render.
     for column, blob_key, label in (
@@ -442,10 +528,10 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
     ):
         value = str(event.get(column) or meta.get(blob_key) or "").strip()
         if value:
-            details.append((label, escape(value)))
+            details.append((label, rich(value)))
     details.append((
         "Submitted by",
-        escape(str(teacher.get("name") or "Not available"))
+        rich(teacher.get("name") or "Not available")
         + (f"<br/><font color='#5B6475'>{escape(teacher['email'])}</font>" if teacher.get("email") else ""),
     ))
     story += [Paragraph("1. Event Details", styles["section"]), _key_value_table(details, styles)]
@@ -482,7 +568,7 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
         Paragraph("4. Approval", styles["section"]),
         _key_value_table([
             ("Status", "<b>Approved</b>"),
-            ("Approved by", escape(f"{approved_by} (Dean)" if approved_by != "Dean" else "Dean")),
+            ("Approved by", rich(f"{approved_by} (Dean)" if approved_by != "Dean" else "Dean")),
             ("Approved on", escape(approved_on or "Not recorded")),
         ], styles),
         _signature_block(styles),

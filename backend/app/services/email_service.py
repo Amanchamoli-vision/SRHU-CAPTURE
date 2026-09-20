@@ -323,6 +323,7 @@ def send_event_status_email(
     *,
     event_id: str | None = None,
     stage: str | None = None,
+    reapproved: bool = False,
 ) -> None:
     labels = {
         "approved": ("Event approved", "has been approved by the Dean."),
@@ -337,6 +338,13 @@ def send_event_status_email(
     }
     if status == "progress":
         heading, sentence = stage_labels.get(stage or "", ("Event update", "has been updated."))
+    elif status == "approved" and reapproved:
+        # The Dean reconsidered a refusal. Saying "approved" here would read as
+        # a first decision to a teacher who was told days ago it was refused.
+        heading, sentence = (
+            "Event re-approved",
+            "has been re-approved by the Dean after being refused.",
+        )
     else:
         heading, sentence = labels.get(status, ("Event update", "has been updated."))
 

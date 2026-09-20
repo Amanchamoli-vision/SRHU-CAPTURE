@@ -125,11 +125,11 @@ export function onAuthStateChange(callback) {
 // Email-based flows (verification + password reset over SMTP)
 // ------------------------------------------------------------------
 
-export async function register({ name, email, password }) {
+export async function register({ name, email, designation, password }) {
   return apiJson("/auth/register", {
     method: "POST",
     auth: false,
-    body: { name, email, password },
+    body: { name, email, designation, password },
   });
 }
 

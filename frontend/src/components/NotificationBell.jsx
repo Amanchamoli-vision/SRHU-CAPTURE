@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiJson } from "../services/api";
+import { useOriginState } from "../hooks/useOriginState";
 import {
   clearAllNotifications,
   deleteNotification,
@@ -37,6 +38,9 @@ import {
 const TYPE_META = {
   approved: { Icon: IconCheckCircle, track: trackOf("approved"), label: "Approved" },
   rejected: { Icon: IconXCircle, track: trackOf("rejected"), label: "Rejected" },
+  // The server emits this whenever a Dean revokes an approval; without an
+  // entry here it fell through to the generic bell with no label of its own.
+  revoked: { Icon: IconXCircle, track: trackOf("revoked"), label: "Revoked" },
   needs_changes: { Icon: IconAlertTriangle, track: trackOf("pending"), label: "Changes" },
   progress: { Icon: IconActivity, track: trackOf("in_progress"), label: "Progress" },
   published: { Icon: IconLayers, track: trackOf("published"), label: "Published" },
@@ -49,7 +53,7 @@ const FALLBACK_META = { Icon: IconBell, track: "#64748B", label: "Other" };
 
 /** The filter tabs each role gets — only the kinds that role can receive. */
 const FILTERS = {
-  teacher: ["all", "approved", "rejected", "needs_changes", "progress", "reminder"],
+  teacher: ["all", "approved", "rejected", "revoked", "needs_changes", "progress", "reminder"],
   dean: ["all", "submitted", "resubmitted"],
   superadmin: ["all", "submitted", "approved", "rejected"],
 };
@@ -83,6 +87,7 @@ const lastReminderCheck = new Map(); // userId -> timestamp
  */
 export default function NotificationBell({ currentUser, onNew }) {
   const navigate = useNavigate();
+  const originState = useOriginState();
   const wrapRef = useRef(null);
   const knownIds = useRef(null);
   // The latest callback, without restarting the poll every time the parent
@@ -290,7 +295,8 @@ export default function NotificationBell({ currentUser, onNew }) {
     markRead(notif);
     setOpen(false);
     setHistoryOpen(false);
-    navigate(`/teacher/create-event?editEventId=${notif.event_id}`);
+    // Back from the wizard returns to the page the bell was opened on.
+    navigate(`/teacher/create-event?editEventId=${notif.event_id}`, { state: originState });
   };
 
   const filteredHistory = notifications.filter((n) => {
@@ -308,7 +314,9 @@ export default function NotificationBell({ currentUser, onNew }) {
     const canEdit =
       role === "teacher" &&
       notif.event_id &&
-      (notif.notification_type === "rejected" || notif.notification_type === "needs_changes");
+      (notif.notification_type === "rejected" ||
+        notif.notification_type === "revoked" ||
+        notif.notification_type === "needs_changes");
 
     return (
       <li key={notif.id} className="border-b hairline last:border-b-0">

@@ -33,10 +33,19 @@ def update_my_profile(
         "updated_at": utc_now(),
     }
 
-    # Department and Mobile Number apply to Teacher and Dean roles only (not Super Admin)
+    # Department and Mobile Number apply to Teacher and Dean roles only (not Super Admin).
+    #
+    # Only fields the caller actually sent are written. Writing them
+    # unconditionally made this PATCH behave like a PUT: a request carrying
+    # just `name` erased the mobile number -- which is what lists someone in
+    # the faculty-coordinator directory -- and their department. The superadmin
+    # equivalent in superadmin.py has always guarded them this way.
     if user.get("role") in ("teacher", "dean"):
-        update_fields["phone"] = payload.phone
-        update_fields["department"] = payload.department
+        provided = payload.model_fields_set
+        if "phone" in provided:
+            update_fields["phone"] = payload.phone
+        if "department" in provided:
+            update_fields["department"] = payload.department
 
     updated = users.find_one_and_update(
         {"_id": to_object_id(user["id"])},

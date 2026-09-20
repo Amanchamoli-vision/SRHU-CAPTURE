@@ -5,6 +5,8 @@ existing router -- events.py is about the events themselves, users.py about the
 caller's own account.
 """
 
+import re
+
 from fastapi import APIRouter, Header, HTTPException, Query, status
 
 from app.database import faculty_coordinators, users
@@ -97,8 +99,16 @@ def _coordinator_entries(search: str) -> list[dict]:
     """
     entries: list[dict] = []
 
+    # The search runs in the query, not over the whole collection in Python.
+    # This endpoint backs an autocomplete, so it is called on keystrokes; it
+    # used to read every account with a phone number and every contact card on
+    # each one, then filter the result in memory.
+    name_filter: dict = {}
+    if search:
+        name_filter = {"name": {"$regex": re.escape(search), "$options": "i"}}
+
     staff = users.find(
-        {"phone": {"$nin": [None, ""]}},
+        {"phone": {"$nin": [None, ""]}, **name_filter},
         {"name": 1, "phone": 1},
     )
     for row in serialize_many(staff):
@@ -110,7 +120,7 @@ def _coordinator_entries(search: str) -> list[dict]:
                 "source": "user",
             })
 
-    cards = faculty_coordinators.find({}, {"name": 1, "phone": 1})
+    cards = faculty_coordinators.find(name_filter, {"name": 1, "phone": 1})
     for row in serialize_many(cards):
         if row.get("name") and row.get("phone"):
             entries.append({
@@ -130,10 +140,6 @@ def _coordinator_entries(search: str) -> list[dict]:
             continue
         seen.add(key)
         deduped.append(entry)
-
-    if search:
-        needle = search.casefold()
-        deduped = [e for e in deduped if needle in e["name"].casefold()]
 
     deduped.sort(key=lambda e: e["name"].casefold())
     return deduped

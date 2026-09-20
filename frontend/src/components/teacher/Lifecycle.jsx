@@ -5,28 +5,45 @@ import { STATUS_TRACK } from "./status";
 // status straight to "pending", so a separate "Submitted" node could never be
 // the current one and has gone. "In progress" and "Completed" stay: the Dean
 // moves an approved event through them from the event page, and the teacher is
-// emailed and notified at each move. A rejected event can reach neither until
-// it is resubmitted, so for one the rail ends at "Rejected".
-const STEPS = (isRejected) =>
-  isRejected
-    ? [
-        { id: "draft", label: "Created" },
-        { id: "pending", label: "Pending review" },
-        { id: "rejected", label: "Rejected" },
-      ]
-    : [
-        { id: "draft", label: "Created" },
-        { id: "pending", label: "Pending review" },
-        { id: "approved", label: "Approved" },
-        { id: "in_progress", label: "In progress" },
-        { id: "completed", label: "Completed" },
-      ];
+// emailed and notified at each move. A refused event can reach neither until
+// it comes back round, so each refusal ends its own rail: "Rejected" straight
+// after Pending review, "Revoked" after the Approved it had already reached.
+const HAPPY_PATH = [
+  { id: "draft", label: "Created" },
+  { id: "pending", label: "Pending review" },
+  { id: "approved", label: "Approved" },
+  { id: "in_progress", label: "In progress" },
+  { id: "completed", label: "Completed" },
+];
+
+const STEPS = (status) => {
+  if (status === "rejected") {
+    return [HAPPY_PATH[0], HAPPY_PATH[1], { id: "rejected", label: "Rejected" }];
+  }
+
+  // A revocation comes *after* an approval, so the rail keeps the Approved
+  // node the event genuinely passed through. Ending it at "Rejected" would
+  // claim the Dean never approved it.
+  if (status === "revoked") {
+    return [
+      HAPPY_PATH[0],
+      HAPPY_PATH[1],
+      HAPPY_PATH[2],
+      { id: "revoked", label: "Revoked" },
+    ];
+  }
+
+  return HAPPY_PATH;
+};
 
 /** How far along the rail a given status sits. */
 function indexFor(status) {
   if (status === "draft") return 0;
   if (status === "approved" || status === "published" || status === "rejected") return 2;
   if (status === "in_progress") return 3;
+  // Fourth node of the revoked trail above -- not "Pending review", which is
+  // what this used to fall through to while the chip beside it read "Revoked".
+  if (status === "revoked") return 3;
   if (status === "completed") return 4;
   return 1; // pending, or the legacy submitted / under_review: waiting on the Dean
 }
@@ -37,8 +54,7 @@ function indexFor(status) {
  */
 export default function Lifecycle({ status = "pending" }) {
   status = String(status || "pending").toLowerCase();
-  const isRejected = status === "rejected";
-  const steps = STEPS(isRejected);
+  const steps = STEPS(status);
   const current = indexFor(status);
 
   return (
@@ -55,7 +71,7 @@ export default function Lifecycle({ status = "pending" }) {
         const track = STATUS_TRACK[step.id] || STATUS_TRACK.pending;
 
         const done = isPast || (isCurrent && (step.id === "approved" || step.id === "completed"));
-        const failed = isCurrent && step.id === "rejected";
+        const failed = isCurrent && (step.id === "rejected" || step.id === "revoked");
 
         let nodeStyle = { borderColor: "rgb(var(--c-line) / .15)" };
         if (isPast) {

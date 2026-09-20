@@ -128,7 +128,19 @@ def enforce(checks: list[tuple[Rule, str]]) -> None:
 # Limits per endpoint
 # ----------------------------------------------------------------------
 
-LOGIN_PER_IP_EMAIL = Rule("login:ip+email", 10, MINUTE)
+# Guessing against ONE account, counted per account and nothing else.
+#
+# This rule deliberately does not include the client IP. Every IP-keyed limit
+# is only as trustworthy as the proxy configuration behind it (see
+# FORWARDED_ALLOW_IPS in run.py): if a caller can influence what the server
+# believes their address is, an IP-keyed rule gives them a fresh budget on
+# every request. Keying the tight rule on the mailbox alone means the number
+# of guesses one account can receive is capped whatever the header says.
+LOGIN_PER_EMAIL = Rule("login:email", 10, MINUTE)
+
+# Spraying many accounts from one source. IP-keyed, so it is the rule that
+# depends on the proxy configuration -- which is why it is the loose one and
+# the per-email rule above is the tight one.
 LOGIN_PER_IP = Rule("login:ip", 30, MINUTE)
 
 # Endpoints that send email: a victim's inbox and the SMTP quota are the
@@ -140,11 +152,10 @@ TOKEN_USE_PER_IP = Rule("token-use:ip", 20, 15 * MINUTE)
 
 
 def limit_login(request: Request, email: str) -> None:
-    ip = client_ip(request)
     enforce(
         [
-            (LOGIN_PER_IP_EMAIL, f"{ip}|{normalize_email_key(email)}"),
-            (LOGIN_PER_IP, ip),
+            (LOGIN_PER_EMAIL, normalize_email_key(email)),
+            (LOGIN_PER_IP, client_ip(request)),
         ]
     )
 

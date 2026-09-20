@@ -23,19 +23,48 @@ def index_calls(mock) -> list[tuple]:
     return [(call.args, call.kwargs) for call in mock.create_index.call_args_list]
 
 
+# Every collection ensure_indexes() touches. Kept complete on purpose: anything
+# missing here is a collection the suite creates indexes on for real, against
+# whatever MONGODB_URI happens to be configured.
+INDEXED_COLLECTIONS = (
+    "users",
+    "events",
+    "event_media",
+    "event_documents",
+    "event_reports",
+    "event_types",
+    "faculty_coordinators",
+    "notifications",
+    "audit_logs",
+    "departments",
+    "upload_config",
+)
+
+
+def patched_collections(**overrides):
+    """Patch every indexed collection, letting a test keep a handle on some."""
+    mocks = {name: overrides.get(name, MagicMock()) for name in INDEXED_COLLECTIONS}
+    patches = [patch.object(database, name, mock) for name, mock in mocks.items()]
+    patches.append(patch("app.services.event_types.seed_default_event_types"))
+    return mocks, patches
+
+
+def run_ensure_indexes(**overrides):
+    mocks, patches = patched_collections(**overrides)
+    for item in patches:
+        item.start()
+    try:
+        database.ensure_indexes()
+    finally:
+        for item in reversed(patches):
+            item.stop()
+    return mocks
+
+
 class TtlIndexTests(unittest.TestCase):
     def test_notifications_declare_an_expires_at_ttl(self) -> None:
         notifications = MagicMock()
-        with patch.object(database, "notifications", notifications), \
-                patch.object(database, "users", MagicMock()), \
-                patch.object(database, "events", MagicMock()), \
-                patch.object(database, "event_media", MagicMock()), \
-                patch.object(database, "event_documents", MagicMock()), \
-                patch.object(database, "event_reports", MagicMock()), \
-                patch.object(database, "event_types", MagicMock()), \
-                patch.object(database, "faculty_coordinators", MagicMock()), \
-                patch("app.services.event_types.seed_default_event_types"):
-            database.ensure_indexes()
+        run_ensure_indexes(notifications=notifications)
 
         ttl = [
             kwargs for _args, kwargs in index_calls(notifications)
@@ -50,16 +79,7 @@ class TtlIndexTests(unittest.TestCase):
         # within a minute of deploying. expires_at is only ever set going
         # forward, so old rows survive.
         notifications = MagicMock()
-        with patch.object(database, "notifications", notifications), \
-                patch.object(database, "users", MagicMock()), \
-                patch.object(database, "events", MagicMock()), \
-                patch.object(database, "event_media", MagicMock()), \
-                patch.object(database, "event_documents", MagicMock()), \
-                patch.object(database, "event_reports", MagicMock()), \
-                patch.object(database, "event_types", MagicMock()), \
-                patch.object(database, "faculty_coordinators", MagicMock()), \
-                patch("app.services.event_types.seed_default_event_types"):
-            database.ensure_indexes()
+        run_ensure_indexes(notifications=notifications)
 
         for args, kwargs in index_calls(notifications):
             if "expireAfterSeconds" in kwargs:
@@ -107,3 +127,21 @@ class ReadMarkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SettingsIndexTests(unittest.TestCase):
+    def test_upload_config_key_is_unique(self) -> None:
+        """The settings document is a singleton.
+
+        Without a unique index two concurrent first-time saves each upsert their
+        own copy, and find_one then returns an arbitrary one.
+        """
+        upload_config = MagicMock()
+        run_ensure_indexes(upload_config=upload_config)
+
+        unique = [
+            kwargs for _args, kwargs in index_calls(upload_config)
+            if kwargs.get("name") == "key_unique"
+        ]
+        self.assertEqual(len(unique), 1)
+        self.assertTrue(unique[0]["unique"])

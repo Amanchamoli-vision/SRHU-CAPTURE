@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 from datetime import date, timedelta
 
@@ -51,8 +50,6 @@ from app.services.event_fields import (
     with_legacy_metadata,
 )
 from app.services.storage_service import (
-    MAX_EVENT_DOCUMENTS,
-    MAX_EVENT_PHOTOS,
     absolutize,
     check_file_signature,
     delete_event_cascade,
@@ -134,6 +131,34 @@ def ensure_teacher_can_edit(event: dict) -> None:
         )
 
 
+def ensure_submittable(event: dict) -> None:
+    """Refuse to put an event in front of a Dean without its evidence.
+
+    PRD: at least one photo and at least one supporting document. Every route
+    that moves an event into `pending` must call this -- it used to live inline
+    in the PATCH handler only, so POST /teacher/events (save_as_draft=false)
+    and PATCH .../resubmit both reached the Dean's queue with nothing attached.
+
+    It previously also skipped itself whenever PYTEST_CURRENT_TEST was set, or
+    when a request sent X-Enforce-Upload-Validation. Both are gone: production
+    request handling must not branch on the test environment, and a validation
+    rule must not be switchable from a header.
+    """
+    event_key = str(event["_id"])
+
+    if event_media.count_documents({"event_id": event_key, "media_type": "image"}) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one photo is required before submitting the event for approval.",
+        )
+
+    if event_documents.count_documents({"event_id": event_key}) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one document is required before submitting the event for approval.",
+        )
+
+
 # Statuses a Dean decision (approve / reject / request changes) may start
 # from. "pending" is what every submission is stored as; "submitted" and
 # "under_review" are reserved lifecycle values that mean the same thing to a
@@ -148,6 +173,18 @@ STATUS_BUCKETS = {
 }
 
 DEAN_REVIEWABLE_STATUSES = ("pending", "submitted", "under_review")
+
+# Statuses a Dean may approve *out of* -- a refusal being reconsidered. A
+# rejected event, or one approved and then revoked, goes straight back to
+# approved without waiting for the teacher to resubmit: the Dean refused it,
+# so the Dean can undo that. Mirrors canApprove()/getApproveLabel() in
+# frontend/src/utils/constants.js -- the button has always offered this.
+REAPPROVABLE_STATUSES = ("rejected", "revoked")
+
+# How many accounts a free-text search may resolve to when matching events by
+# their submitting teacher. A guard against a one-character query turning into
+# an `$in` of every user, not a limit anyone should reach by searching a name.
+TEACHER_SEARCH_MATCH_LIMIT = 200
 
 # Statuses from which /resubmit puts an event (back) in the review queue.
 # A revoked event must be resubmittable, or revoking strands it permanently.
@@ -252,7 +289,10 @@ def find_dean_visible_event_or_404(event_id: str, *, allow_archived: bool = Fals
 # the odd one out: it starts from an approved event, not a pending one, which
 # is exactly why folding it into "reject" left it unreachable (PRD 18).
 DEAN_VERBS = {
-    "approve": (DEAN_REVIEWABLE_STATUSES, "Only pending events can be approved."),
+    "approve": (
+        DEAN_REVIEWABLE_STATUSES + REAPPROVABLE_STATUSES,
+        "Only a pending, rejected or revoked event can be approved.",
+    ),
     "reject": (DEAN_REVIEWABLE_STATUSES, "Only pending events can be rejected."),
     "request changes": (
         DEAN_REVIEWABLE_STATUSES,
@@ -320,6 +360,34 @@ def _decision_text(query_value: str | None, body: DeanDecisionBody | None, field
     return (body_value or "").strip()
 
 
+def attach_teachers(event_list: list[dict]) -> None:
+    """Add `teacher_name` and `teacher_email` to each listed event, in place.
+
+    An event stores only `teacher_id`, but the `q` filter above matches the
+    submitting teacher by name and email -- so without this a Dean could search
+    a teacher's name on a page that asks the server and find events, then type
+    the same words into a page that filters its own rows and find nothing.
+
+    One batched lookup, not one per row.
+    """
+    ids = {
+        object_id
+        for object_id in (to_object_id(item.get("teacher_id")) for item in event_list)
+        if object_id is not None
+    }
+    if not ids:
+        return
+
+    by_id = {
+        str(document["_id"]): document
+        for document in users.find({"_id": {"$in": list(ids)}}, {"name": 1, "email": 1})
+    }
+    for item in event_list:
+        teacher = by_id.get(str(item.get("teacher_id") or ""))
+        item["teacher_name"] = (teacher or {}).get("name")
+        item["teacher_email"] = (teacher or {}).get("email")
+
+
 def list_media(request: Request, event_id: str) -> list[dict]:
     cursor = event_media.find({"event_id": event_id}).sort("created_at", ASCENDING)
     return [absolutize(request, item, "media_url") for item in serialize_many(cursor)]
@@ -372,10 +440,18 @@ def _send_status_email(
     remarks: str | None,
     event_id: str | None = None,
     stage: str | None = None,
+    reapproved: bool = False,
 ) -> None:
     try:
         email_service.send_event_status_email(
-            to_email, name, event_name, email_status, remarks, event_id=event_id, stage=stage
+            to_email,
+            name,
+            event_name,
+            email_status,
+            remarks,
+            event_id=event_id,
+            stage=stage,
+            reapproved=reapproved,
         )
     except email_service.EmailDeliveryError:
         logger.warning("event_status_email_failed status=%s", email_status)
@@ -391,6 +467,7 @@ def notify_teacher(
     data: dict | None = None,
     remarks: str | None = None,
     stage: str | None = None,
+    reapproved: bool = False,
 ) -> None:
     """Create the in-app notification and queue the matching email."""
     teacher_id = event.get("teacher_id", "")
@@ -418,6 +495,7 @@ def notify_teacher(
             remarks,
             event.get("id"),
             stage,
+            reapproved,
         )
 
 
@@ -515,7 +593,10 @@ def dean_dashboard_stats(
         "total_events": sum(status_counts.values()),
         "pending_events": total("pending", "submitted", "under_review"),
         "approved_events": total("approved", "published", "in_progress", "completed"),
-        "rejected_events": total("rejected"),
+        # Revoked is bucketed with rejected everywhere else (STATUS_BUCKETS, and
+        # getStatusBucket in the frontend), so counting only "rejected" here left
+        # the card disagreeing with the tab right below it.
+        "rejected_events": total("rejected", "revoked"),
     }
 
 
@@ -631,11 +712,41 @@ def get_all_events(
         # Escaped: a teacher searching for "C++ Workshop" must not have the
         # "+" read as a quantifier, and an unescaped "(" would 500.
         pattern = re.escape(search)
-        query["$or"] = [
+        clauses = [
             {"event_name": {"$regex": pattern, "$options": "i"}},
             {"location": {"$regex": pattern, "$options": "i"}},
             {"organizer": {"$regex": pattern, "$options": "i"}},
+            # The category, which both search boxes over this endpoint offer
+            # ("Search name, venue, or type"). Without it, typing "Workshop"
+            # found only events with the word in their *name*.
+            {"event_type": {"$regex": pattern, "$options": "i"}},
         ]
+
+        # The submitting teacher, by name or email. The events collection
+        # stores only `teacher_id`, so the name the Super Admin's table shows
+        # (and its "Search event, venue or teacher" box invites) has to be
+        # resolved to ids first -- otherwise searching a teacher matched
+        # nothing, or worse, only the unrelated events that happen to name
+        # them as the *organizer*.
+        #
+        # Capped: a one-letter search would otherwise build an $in of every
+        # account. 200 is far past what a useful search returns.
+        teacher_ids = [
+            str(document["_id"])
+            for document in users.find(
+                {
+                    "$or": [
+                        {"name": {"$regex": pattern, "$options": "i"}},
+                        {"email": {"$regex": pattern, "$options": "i"}},
+                    ]
+                },
+                {"_id": 1},
+            ).limit(TEACHER_SEARCH_MATCH_LIMIT)
+        ]
+        if teacher_ids:
+            clauses.append({"teacher_id": {"$in": teacher_ids}})
+
+        query["$or"] = clauses
 
     # Counts for the status tabs, under the same non-status filters, so the
     # numbers on the tabs match what selecting one would show.
@@ -657,6 +768,7 @@ def get_all_events(
         events, query, "created_at", DESCENDING, skip, limit
     )
     many_with_legacy_metadata(event_list)
+    attach_teachers(event_list)
 
     return {
         "success": True,
@@ -755,7 +867,12 @@ def approve_event(
         verb="approve",
         changes={
             "status": "approved",
+            # Both refusal trails are cleared: approving out of "revoked" while
+            # leaving revocation_reason set would leave the event reading as
+            # revoked on every screen that shows the reason.
             "rejection_reason": None,
+            "revocation_reason": None,
+            "revoked_at": None,
             "reviewed_at": utc_now(),
         },
         history_action="approved",
@@ -763,25 +880,38 @@ def approve_event(
         user=user,
     )
 
+    # A re-approval is the same transition with a different story, and the
+    # history entry just pushed is the only place the previous status survives
+    # -- reading it back beats a second query for it.
+    previous_status = (approved_event.get("history") or [{}])[-1].get("from_status")
+    reapproved = previous_status in REAPPROVABLE_STATUSES
+
     # --- Notification Trigger ---
     notify_teacher(
         background_tasks,
         approved_event,
         notification_type="approved",
-        title="Event Approved",
+        title="Event Re-approved" if reapproved else "Event Approved",
         message=(
             f'Your "{approved_event.get("event_name", "event")}"'
-            " event has been approved by the Dean."
+            + (
+                " event has been re-approved by the Dean."
+                if reapproved
+                else " event has been approved by the Dean."
+            )
         ),
         data={
             "event_name": approved_event.get("event_name", ""),
             "event_date": approved_event.get("event_date", ""),
         },
+        reapproved=reapproved,
     )
 
     return {
         "success": True,
-        "message": "Event approved successfully",
+        "message": (
+            "Event re-approved successfully" if reapproved else "Event approved successfully"
+        ),
         "event": approved_event,
     }
 
@@ -1139,7 +1269,11 @@ def update_event_stage(
             ),
         )
 
-    existing = find_event_or_404(event_id)
+    # The same visibility rule every other Dean decision uses: a draft or an
+    # archived event is reported as missing. Reading the event with the plain
+    # lookup let a shelved event be moved through the delivery stages -- and
+    # notified the teacher about it.
+    existing = find_dean_visible_event_or_404(event_id)
 
     # Delivery stages only make sense once the event has been approved.
     if existing.get("status") not in DEAN_PROGRESS_STAGES:
@@ -1322,6 +1456,20 @@ def create_teacher_event(
     user = get_current_user(authorization)
     require_role(user, "teacher")
 
+    # An event that does not exist yet cannot have photos or documents attached,
+    # so creating one straight into the review queue would always mean putting
+    # an event with no evidence in front of a Dean -- the rule the PATCH and
+    # resubmit routes enforce. The wizard already works the supported way:
+    # save a draft, attach the files, then submit.
+    if not payload.save_as_draft:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Save the event first, attach at least one photo and one document, "
+                "then submit it for approval."
+            ),
+        )
+
     # A draft is held back from the dean until the teacher submits it; anything
     # else goes straight into the review queue.
     new_status = "draft" if payload.save_as_draft else "pending"
@@ -1399,10 +1547,6 @@ def update_teacher_event(
     authorization: str | None = Header(
         default=None
     ),
-    x_enforce_upload_validation: str | None = Header(
-        default=None,
-        alias="X-Enforce-Upload-Validation",
-    ),
 ):
     """Edit an event that is still in the teacher's hands.
 
@@ -1439,27 +1583,8 @@ def update_teacher_event(
             detail="Event date cannot be in the past",
         )
 
-    should_validate_uploads = not payload.save_as_draft and (
-        "PYTEST_CURRENT_TEST" not in os.environ or x_enforce_upload_validation == "true"
-    )
-    if should_validate_uploads:
-        photo_count = event_media.count_documents(
-            {"event_id": str(event["_id"]), "media_type": "image"}
-        )
-        if photo_count < 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="At least one photo is required before submitting the event for approval.",
-            )
-
-        doc_count = event_documents.count_documents(
-            {"event_id": str(event["_id"])}
-        )
-        if doc_count < 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="At least one document is required before submitting the event for approval.",
-            )
+    if not payload.save_as_draft:
+        ensure_submittable(event)
 
     changes = {
         "event_name": payload.event_name,
@@ -1473,7 +1598,12 @@ def update_teacher_event(
         "end_time": payload.end_time,
         "organizer": payload.organizer,
         "coordinator_contact": payload.coordinator_contact,
+        # Editing is how a teacher answers a refusal, so both refusal trails go
+        # -- matching teacher_resubmit_event. Leaving revocation_reason behind
+        # left an edited event still reading as revoked.
         "rejection_reason": None,
+        "revocation_reason": None,
+        "revoked_at": None,
     }
 
     history = None
@@ -1493,7 +1623,7 @@ def update_teacher_event(
 
         if previous_status == "draft":
             action = "submitted"
-        elif previous_status == "rejected":
+        elif previous_status in REAPPROVABLE_STATUSES:
             action = "resubmitted"
         else:
             action = "updated"  # edited while still waiting in the queue
@@ -1595,6 +1725,11 @@ def teacher_resubmit_event(
     # one that is already waiting would just notify every Dean again.
     if previous_status not in RESUBMITTABLE_STATUSES:
         raise conflict("This event is already waiting for the Dean's review.")
+
+    # Same evidence rule as editing-and-submitting: this route reaches the
+    # Dean's queue too, and without the check a draft with nothing attached
+    # could be pushed straight into review.
+    ensure_submittable(event)
 
     # A draft reaching the Dean for the first time is "submitted"; an event
     # coming back after a refusal -- rejected or revoked -- is "resubmitted".
@@ -1806,8 +1941,14 @@ def get_teacher_event_media(
 
 @router.get("/upload-limits")
 @router.get("/teacher/upload-limits")
-def get_active_upload_limits():
-    """Returns the current configurable upload limits for photos and videos."""
+def get_active_upload_limits(authorization: str | None = Header(default=None)):
+    """The current configurable upload limits for photos, videos and documents.
+
+    Signed in only, like every other route in this module. It used to take no
+    authorization at all, which published the deployment's configuration to
+    anyone who asked.
+    """
+    get_current_user(authorization)
     return {
         "success": True,
         "limits": get_public_upload_limits(),
@@ -2009,11 +2150,15 @@ def upload_teacher_event_document(
 
     info = inspect_document(file)
     cap_query = {"event_id": event_key}
-    _ensure_under_cap(event_documents, cap_query, MAX_EVENT_DOCUMENTS, "document")
+
+    # Superadmin-configurable, same as photos and videos above.
+    limits = get_upload_limits()
+    doc_cap = limits["max_documents_per_event"]
+    _ensure_under_cap(event_documents, cap_query, doc_cap, "document")
 
     # Documents have no per-file cap (PRD 9): any number is fine as long as
     # they fit the combined budget, so the budget is also the per-file ceiling.
-    cap_bytes = settings.max_documents_total_bytes
+    cap_bytes = limits["max_documents_total_bytes"]
 
     buffer, size = stream_upload(file, cap_bytes, what="Documents")
     try:
@@ -2044,9 +2189,11 @@ def upload_teacher_event_document(
         original_name=file.filename,
     )
 
+    # Caps are enforced twice by convention: once before the upload and again
+    # after the insert, so both call sites must read the same configured value.
     _record_upload(
         event_documents, document, stored, event, cap_query,
-        MAX_EVENT_DOCUMENTS, "document", cap_bytes,
+        doc_cap, "document", cap_bytes,
     )
 
     return {
@@ -2241,6 +2388,37 @@ def mark_notification_read(
     }
 
 
+# Declared BEFORE /notifications/{notification_id}. FastAPI matches routes in
+# registration order, so with the by-id route first "clear-all" was bound as a
+# notification id, failed to parse as an ObjectId, and both /clear-all aliases
+# answered 404 "Notification not found" -- dead endpoints that looked alive.
+@router.delete("/notifications/clear-all")
+@router.delete(
+    "/teacher/notifications/clear-all"
+)
+@router.delete("/notifications")
+@router.delete(
+    "/teacher/notifications"
+)
+def clear_all_notifications(
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Delete all notifications owned by the caller."""
+    user = get_current_user(authorization)
+
+    result = notifications.delete_many(
+        {"user_id": user["id"]}
+    )
+
+    return {
+        "success": True,
+        "message": "All notifications cleared",
+        "deleted_count": result.deleted_count,
+    }
+
+
 @router.delete("/notifications/{notification_id}")
 @router.delete(
     "/teacher/notifications/{notification_id}"
@@ -2274,32 +2452,5 @@ def delete_notification(
     return {
         "success": True,
         "message": "Notification deleted",
-    }
-
-
-@router.delete("/notifications")
-@router.delete(
-    "/teacher/notifications"
-)
-@router.delete("/notifications/clear-all")
-@router.delete(
-    "/teacher/notifications/clear-all"
-)
-def clear_all_notifications(
-    authorization: str | None = Header(
-        default=None
-    ),
-):
-    """Delete all notifications owned by the caller."""
-    user = get_current_user(authorization)
-
-    result = notifications.delete_many(
-        {"user_id": user["id"]}
-    )
-
-    return {
-        "success": True,
-        "message": "All notifications cleared",
-        "deleted_count": result.deleted_count,
     }
 

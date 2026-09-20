@@ -137,14 +137,9 @@ _MAGIC_CHECKS = {
     ".pptx": lambda h: h.startswith(_ZIP),
 }
 
-# Per-event caps, matching the create-event wizard. Sourced from settings so
-# they can be tuned per deployment; re-exported under the old names because
-# app/routers/events.py imports them from here.
-MAX_EVENT_PHOTOS = settings.max_photos_per_event
-MAX_EVENT_DOCUMENTS = settings.max_documents_per_event
-# Videos are capped by combined size, not by count (PRD 11). Kept only so the
-# existing import in the events router keeps resolving.
-MAX_EVENT_VIDEOS = None
+# Per-event caps used to live here as import-time snapshots of `settings`, which
+# meant they ignored whatever the Super Admin had configured. Every caller now
+# reads app.services.upload_config_service.get_upload_limits() instead.
 
 _READ_CHUNK = 1024 * 1024
 
@@ -216,7 +211,12 @@ def inspect_media(upload: UploadFile) -> dict:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Unsupported media file. Allowed: JPEG, PNG, WebP, GIF and HEIC photos, "
+                # HEIC is deliberately not listed: it is in LEGACY_SERVABLE_TYPES
+                # so photos uploaded before the whitelist still render, but
+                # MEDIA_TYPES has no .heic entry, so a new one is refused.
+                # Naming it here told iPhone users the format was accepted at
+                # the very moment it was being rejected.
+                "Unsupported media file. Allowed: JPEG, PNG, WebP and GIF photos, "
                 "and MP4, WebM and MOV videos"
             ),
         )
@@ -288,7 +288,16 @@ def stream_upload(
     The caller is responsible for closing the returned buffer, which also
     removes the temporary file.
     """
-    limit = settings.max_upload_size_bytes if max_bytes is None else max_bytes
+    # A caller's cap narrows the global backstop, it never widens it. The
+    # per-file limits the Super Admin configures arrive here as max_bytes, and
+    # without the min() they would replace settings.max_upload_size_bytes
+    # outright -- letting Settings authorise a file larger than this deployment
+    # can actually accept.
+    limit = (
+        settings.max_upload_size_bytes
+        if max_bytes is None
+        else min(max_bytes, settings.max_upload_size_bytes)
+    )
 
     declared_size = getattr(upload, "size", None)
     if isinstance(declared_size, int) and declared_size > limit:

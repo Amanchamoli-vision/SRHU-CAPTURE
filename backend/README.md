@@ -17,13 +17,13 @@ copy .env.example .env      # then edit the values
 
 Required settings in `.env`:
 
-| Variable | Purpose |
-| --- | --- |
-| `MONGODB_URI` | Connection string, e.g. `mongodb://localhost:27017` |
-| `MONGODB_DB_NAME` | Database name (default `campus_capture`) |
-| `JWT_SECRET_KEY` | Long random secret used to sign login tokens (32+ chars recommended) |
-| `FRONTEND_URL` | Public origin of the React app, used in email links and CORS |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL` | Mail server used for all outbound email |
+| Variable                                                                            | Purpose                                                              |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `MONGODB_URI`                                                                     | Connection string, e.g.`mongodb://localhost:27017`                 |
+| `MONGODB_DB_NAME`                                                                 | Database name (default`campus_capture`)                            |
+| `JWT_SECRET_KEY`                                                                  | Long random secret used to sign login tokens (32+ chars recommended) |
+| `FRONTEND_URL`                                                                    | Public origin of the React app, used in email links and CORS         |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL` | Mail server used for all outbound email                              |
 
 Optional: `REQUIRE_EMAIL_VERIFICATION=false` lets new accounts sign in without
 confirming their email (handy before SMTP is configured). `SMTP_USE_SSL=true`
@@ -65,21 +65,32 @@ run more than once:
 ## Useful commands
 
 ```powershell
-.venv\Scripts\python -m unittest discover tests      # unit tests (no DB or SMTP needed)
-.venv\Scripts\python scripts\smtp_diagnostic.py      # check SMTP reachability + credentials
+.venv\Scripts\python -m unittest discover -t . -s tests   # unit tests
+.venv\Scripts\python scripts\smtp_diagnostic.py           # check SMTP reachability + credentials
 ```
+
+The suite never touches the database in `.env`. `tests/__init__.py` redirects it
+to a throwaway local one, and `app/database.py` applies the same redirect even
+when the package is not imported (`unittest discover tests`, without `-t .`,
+loads the test modules as top-level names and skips it). Point it elsewhere with
+`TEST_MONGODB_URI` / `TEST_MONGODB_DB_NAME`, or set
+`ALLOW_TESTS_ON_CONFIGURED_DB=1` to opt out deliberately.
+
+This matters because the tests fake only some collections: `audit_logs` and the
+index declarations were never faked, so before this a plain test run wrote rows
+and created indexes on whatever cluster `.env` pointed at.
 
 `GET /health` reports whether MongoDB answers and whether SMTP is configured.
 
 ## Collections
 
-| Collection | Contents |
-| --- | --- |
-| `users` | `name`, `email` (unique), `password_hash`, `role` (`teacher` / `dean` / `superadmin`), verification and reset token hashes |
-| `events` | Event submissions keyed by `teacher_id` with the lifecycle `status` |
-| `event_media`, `event_documents` | Metadata for uploads; bytes live in the `uploads` GridFS bucket and are served from `/files/{id}` |
-| `notifications` | In-app notifications per `user_id` |
-| `event_reports` | One generated report per `event_id` |
+| Collection                           | Contents                                                                                                                                 |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`                            | `name`, `email` (unique), `password_hash`, `role` (`teacher` / `dean` / `superadmin`), verification and reset token hashes |
+| `events`                           | Event submissions keyed by`teacher_id` with the lifecycle `status`                                                                   |
+| `event_media`, `event_documents` | Metadata for uploads; bytes live in the`uploads` GridFS bucket and are served from `/files/{id}`                                     |
+| `notifications`                    | In-app notifications per`user_id`                                                                                                      |
+| `event_reports`                    | One generated report per`event_id`                                                                                                     |
 
 ## Deploying: backend on Railway, frontend on Vercel
 
@@ -106,17 +117,17 @@ Railway's MongoDB template.
 3. *Settings → Networking → Generate Domain*, e.g. `srhu-capture-api.up.railway.app`.
 4. *Variables*:
 
-| Variable | Value |
-| --- | --- |
-| `MONGODB_URI` | Atlas / Railway connection string |
-| `MONGODB_DB_NAME` | `campus_capture` |
-| `JWT_SECRET_KEY` | a new long random string (not the local one) |
-| `FRONTEND_URL` | the Vercel URL, e.g. `https://srhu-capture.vercel.app` |
-| `CORS_ORIGIN_REGEX` | `^https://srhu-capture(-[a-z0-9-]+)?\.vercel\.app$` (admits preview deployments; replaces the LAN default) |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | the same SMTP settings as your local `.env` |
-| `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | From address |
-| `REQUIRE_EMAIL_VERIFICATION` | `true` |
-| `R2_*` | optional, see `.env.example`; without them uploads go to GridFS |
+| Variable                                                       | Value                                                                                                        |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `MONGODB_URI`                                                | Atlas / Railway connection string                                                                            |
+| `MONGODB_DB_NAME`                                            | `campus_capture`                                                                                           |
+| `JWT_SECRET_KEY`                                             | a new long random string (not the local one)                                                                 |
+| `FRONTEND_URL`                                               | the Vercel URL, e.g.`https://srhu-capture.vercel.app`                                                      |
+| `CORS_ORIGIN_REGEX`                                          | `^https://srhu-capture(-[a-z0-9-]+)?\.vercel\.app$` (admits preview deployments; replaces the LAN default) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | the same SMTP settings as your local`.env`                                                                 |
+| `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`                        | From address                                                                                                 |
+| `REQUIRE_EMAIL_VERIFICATION`                                 | `true`                                                                                                     |
+| `R2_*`                                                       | optional, see`.env.example`; without them uploads go to GridFS                                             |
 
 Do not set `PORT`: Railway provides it, and `run.py` uses it, turns auto-reload
 off and trusts Railway's proxy headers so file links come out as `https://`.

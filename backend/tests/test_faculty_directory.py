@@ -9,6 +9,7 @@ that nothing else ever appears in a response.
 from __future__ import annotations
 
 import copy
+import re
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -34,6 +35,14 @@ def _matches(doc: dict, query: dict) -> bool:
         if isinstance(wanted, dict):
             if "$nin" in wanted and value in wanted["$nin"]:
                 return False
+            # The coordinator search runs in the query now, not in Python over
+            # the whole collection, so the fake has to understand it.
+            if "$regex" in wanted:
+                flags = re.I if "i" in wanted.get("$options", "") else 0
+                if not isinstance(value, str) or not re.search(
+                    wanted["$regex"], value, flags
+                ):
+                    return False
         elif value != wanted:
             return False
     return True

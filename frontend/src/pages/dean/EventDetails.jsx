@@ -42,8 +42,9 @@ import {
   getApproveLabel,
   getNextStage,
   getPreviousStage,
+  getRefusalReason,
   getStatusBucket,
-  isRejected,
+  isRefused,
 } from "../../utils/constants";
 import { formatDateRange, formatTime12h } from "../../utils/dates";
 import { readEventFields } from "../../utils/eventFields";
@@ -589,7 +590,12 @@ function EventDetails() {
   const meta = readEventFields(event);
   const cleanDescription = meta.description;
 
-  const rejected = isRejected(event.status);
+  // Bucket-wide, like getApproveLabel: a revoked event is a refused event,
+  // and keying this off `=== "rejected"` is why its reason panel never
+  // rendered and its confirmation dialog said "approve" under a button
+  // labelled "Re-approve".
+  const rejected = isRefused(event.status);
+  const refusalReason = getRefusalReason(event);
   // An archived event stays readable so it can be reviewed before restoring
   // or deleting, but every decision on it is refused by the server — so the
   // controls that would 404 are replaced by the one action that applies.
@@ -601,6 +607,7 @@ function EventDetails() {
   // Its own action now, not a rejection wearing a different label (PRD 18).
   const isRevoking = decisionKind === "revoke";
   const isReapproving = decisionKind === "approve" && rejected;
+  const isRestoringRevoked = isReapproving && event.status === "revoked";
 
   const formatStamp = (value) => {
     if (!value) return "date not recorded";
@@ -1048,11 +1055,11 @@ function EventDetails() {
             </section>
 
             {/* ---- Rejection reason ---- */}
-            {rejected && event.rejection_reason && (
+            {rejected && refusalReason && (
               <section
                 className="overflow-hidden rounded-2xl border"
                 data-tint=""
-                style={{ "--track": trackOf("rejected") }}
+                style={{ "--track": trackOf(event.status) }}
               >
                 <div
                   className="flex items-center gap-2.5 border-b px-6 py-4"
@@ -1062,13 +1069,15 @@ function EventDetails() {
                 >
                   <IconAlertTriangle
                     className="h-5 w-5 shrink-0"
-                    style={{ color: trackOf("rejected") }}
+                    style={{ color: trackOf(event.status) }}
                   />
-                  <h2 className="h3 text-base text-ink">Rejection reason</h2>
+                  <h2 className="h3 text-base text-ink">
+                    {event.status === "revoked" ? "Revocation reason" : "Rejection reason"}
+                  </h2>
                 </div>
 
                 <p className="whitespace-pre-wrap px-6 py-5 text-sm leading-6 text-ink">
-                  {event.rejection_reason}
+                  {refusalReason}
                 </p>
               </section>
             )}
@@ -1327,6 +1336,8 @@ function EventDetails() {
             <p className="text-sm text-ink">
               {isRevoking
                 ? "This event is approved. Revoking withdraws that approval, invalidates any generated report, and notifies the teacher — who can then fix and resubmit it."
+                : isRestoringRevoked
+                ? "This event's approval was revoked. Re-approving restores it, clears the revocation reason, and puts the delivery stages back within reach."
                 : "This event is rejected. Re-approving it clears the existing rejection reason and notifies the teacher."}
             </p>
           </div>

@@ -11,6 +11,21 @@ def _normalize_name(value: str) -> str:
     return normalized
 
 
+def _normalize_designation(value: str) -> str:
+    """Collapse whitespace in an academic designation and require a value.
+
+    Free text rather than a whitelist: the registration form suggests the
+    common ranks but keeps whatever is typed, because visiting, emeritus and
+    administrative titles are real and a closed list would simply lock those
+    people out of registering. Only the shape is checked here -- a `min_length`
+    on the field alone would accept "   ", which normalizes to nothing.
+    """
+    normalized = " ".join(value.split())
+    if not normalized:
+        raise ValueError("Designation must not be empty")
+    return normalized
+
+
 def _check_new_password(value: str) -> str:
     """Reject a new password bcrypt would silently truncate (over 72 UTF-8 bytes).
 
@@ -27,12 +42,20 @@ def _check_new_password(value: str) -> str:
 class RegistrationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     email: EmailStr
+    # Academic rank ("Assistant Professor", "Head of Department", ...). Capped
+    # at the same length as `department`, the field it sits beside on a profile.
+    designation: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=6, max_length=128)
 
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
         return _normalize_name(value)
+
+    @field_validator("designation")
+    @classmethod
+    def normalize_designation(cls, value: str) -> str:
+        return _normalize_designation(value)
 
     @field_validator("password")
     @classmethod

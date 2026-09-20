@@ -4,22 +4,40 @@
  * Pure functions, deliberately: the wizard's pick handler was already long,
  * and these rules are the part most worth testing on their own.
  *
- * Mirrors the server's limits (backend/app/config.py). The server is the
- * authority — this exists so a teacher learns about a limit before spending
- * minutes uploading, not after.
+ * The server is the authority — this exists so a teacher learns about a limit
+ * before spending minutes uploading, not after. The fallback values live in
+ * services/settings.js, the single frontend copy; callers pass the fetched
+ * `limits` and these constants only cover the moment before the first response.
  */
+import { DEFAULT_UPLOAD_LIMITS } from "./uploadLimits";
+
+export { DEFAULT_UPLOAD_LIMITS };
+
+const MB = 1024 * 1024;
 
 /** PRD 7: ten photos, 20 MB each, four formats. */
-export const MAX_IMAGE_COUNT = 10;
-export const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+export const MAX_IMAGE_COUNT = DEFAULT_UPLOAD_LIMITS.max_photos_per_event;
+export const MAX_IMAGE_SIZE = DEFAULT_UPLOAD_LIMITS.max_photo_size_mb * MB;
 export const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 export const ALLOWED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "gif"];
 
 /** PRD 11: one combined budget, no cap on how many files it is split across. */
-export const MAX_VIDEO_TOTAL = 200 * 1024 * 1024;
+export const MAX_VIDEO_TOTAL = DEFAULT_UPLOAD_LIMITS.max_video_total_mb * MB;
+
+/**
+ * The three the server stores (MEDIA_TYPES in storage_service.py).
+ *
+ * This list has to mirror the server's. Accepting anything `video/*` meant a
+ * .mkv or .avi passed the browser check, uploaded in full — up to the whole
+ * video budget, over whatever connection the teacher has — and was only then
+ * refused with "Unsupported media file", which is the exact outcome these
+ * rules exist to prevent.
+ */
+export const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
+export const ALLOWED_VIDEO_EXTENSIONS = ["mp4", "webm", "mov"];
 
 /** PRD 9: combined budget only — any number of documents, no per-file cap. */
-export const MAX_DOC_TOTAL = 15 * 1024 * 1024;
+export const MAX_DOC_TOTAL = DEFAULT_UPLOAD_LIMITS.max_documents_total_mb * MB;
 export const ALLOWED_DOC_EXTENSIONS = [
   "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv",
 ];
@@ -34,16 +52,12 @@ export const IMAGE_ACCEPT = [
   ...ALLOWED_IMAGE_TYPES,
 ].join(",");
 
-export const DOC_ACCEPT = ALLOWED_DOC_EXTENSIONS.map((ext) => `.${ext}`).join(",");
+export const VIDEO_ACCEPT = [
+  ...ALLOWED_VIDEO_EXTENSIONS.map((ext) => `.${ext}`),
+  ...ALLOWED_VIDEO_TYPES,
+].join(",");
 
-export const DEFAULT_UPLOAD_LIMITS = {
-  max_photos_per_event: 10,
-  max_photo_size_mb: 20,
-  max_photo_total_mb: null,
-  max_videos_per_event: null,
-  max_video_size_mb: 200,
-  max_video_total_mb: 200,
-};
+export const DOC_ACCEPT = ALLOWED_DOC_EXTENSIONS.map((ext) => `.${ext}`).join(",");
 
 export const formatMb = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
 
@@ -70,7 +84,10 @@ export function limitFor(kind, limits = null) {
     const mb = limits?.max_video_total_mb;
     return mb != null ? mb * 1024 * 1024 : MAX_VIDEO_TOTAL;
   }
-  if (kind === "document") return MAX_DOC_TOTAL;
+  if (kind === "document") {
+    const mb = limits?.max_documents_total_mb;
+    return mb != null ? mb * MB : MAX_DOC_TOTAL;
+  }
   if (kind === "image") {
     const mb = limits?.max_photo_total_mb;
     return mb != null ? mb * 1024 * 1024 : null;
@@ -140,8 +157,12 @@ export function validatePick({
         continue;
       }
     } else if (isVideo) {
-      if (!file.type.startsWith("video/")) {
-        rejections.push(`"${file.name}" is not a video.`);
+      const typeOk = ALLOWED_VIDEO_TYPES.includes(file.type);
+      const extOk = ALLOWED_VIDEO_EXTENSIONS.includes(extension);
+      // Some pickers report an empty type; the extension then decides. Same
+      // shape as the image branch above.
+      if (!(typeOk || (!file.type && extOk))) {
+        rejections.push(`"${file.name}" is not an MP4, WebM or MOV video.`);
         continue;
       }
     } else if (isDocument) {

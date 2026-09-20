@@ -44,6 +44,19 @@ export function describeEntry(entry) {
     };
   }
 
+  // An approval that came out of a refusal is a re-approval. from_status is
+  // the only thing that tells the two apart -- the backend records both as
+  // the "approved" action, since re-approving is the same transition.
+  if (
+    entry.action === "approved" &&
+    (entry.from_status === "rejected" || entry.from_status === "revoked")
+  ) {
+    return {
+      label: entry.from_status === "revoked" ? "Approval restored" : "Re-approved",
+      tone: "approved",
+    };
+  }
+
   return ACTION_META[entry.action] || { label: "Status updated", tone: entry.status };
 }
 
@@ -90,6 +103,21 @@ function inferHistory(event) {
       created_at: event.reviewed_at || event.updated_at,
       actor_role: "dean",
       note: event.rejection_reason || null,
+    });
+  } else if (status === "revoked") {
+    // It must have been approved first, or it could not have been revoked.
+    entries.push({
+      action: "approved",
+      status: "approved",
+      created_at: event.reviewed_at || event.updated_at,
+      actor_role: "dean",
+    });
+    entries.push({
+      action: "revoked",
+      status: "revoked",
+      created_at: event.revoked_at || event.updated_at,
+      actor_role: "dean",
+      note: event.revocation_reason || null,
     });
   } else if (APPROVED_OR_BEYOND.includes(status)) {
     entries.push({

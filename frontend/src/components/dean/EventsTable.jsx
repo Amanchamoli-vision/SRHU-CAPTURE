@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 
 import StatusChip from "../teacher/StatusChip";
 import { trackOf } from "../teacher/status";
-import { getStatusBucket } from "../../utils/constants";
+import { getRefusalReason, getStatusBucket } from "../../utils/constants";
 import { IconInbox, IconRotateCcw } from "../teacher/icons";
 
 /**
@@ -72,7 +72,7 @@ function EventsTable({
                 return (
                   <li
                     key={event.id}
-                    style={rejected ? { "--track": trackOf("rejected") } : undefined}
+                    style={rejected ? { "--track": trackOf(event.status) } : undefined}
                     className={`px-4 py-3.5 ${
                       rejected
                         ? "bg-[color-mix(in_srgb,var(--track)_6%,transparent)]"
@@ -102,10 +102,10 @@ function EventsTable({
                       </span>
                     </div>
 
-                    {rejected && event.rejection_reason && (
-                      <p className="mt-1.5 text-xs" style={{ color: trackOf("rejected") }}>
+                    {rejected && getRefusalReason(event) && (
+                      <p className="mt-1.5 text-xs" style={{ color: trackOf(event.status) }}>
                         <span className="font-semibold">Reason:</span>{" "}
-                        {event.rejection_reason}
+                        {getRefusalReason(event)}
                       </p>
                     )}
 
@@ -138,7 +138,7 @@ function EventsTable({
                   return (
                     <tr
                       key={event.id}
-                      style={rejected ? { "--track": trackOf("rejected") } : undefined}
+                      style={rejected ? { "--track": trackOf(event.status) } : undefined}
                       className={`group transition hover:bg-raised/35 ${
                         rejected
                           ? "bg-[color-mix(in_srgb,var(--track)_5%,transparent)]"
@@ -155,14 +155,14 @@ function EventsTable({
                           {event.event_name || "Untitled Event"}
                         </Link>
 
-                        {rejected && event.rejection_reason && (
+                        {rejected && getRefusalReason(event) && (
                           <p
-                            title={event.rejection_reason}
+                            title={getRefusalReason(event)}
                             className="max-w-full truncate text-xs"
-                            style={{ color: trackOf("rejected") }}
+                            style={{ color: trackOf(event.status) }}
                           >
                             <span className="font-semibold">Reason:</span>{" "}
-                            {event.rejection_reason}
+                            {getRefusalReason(event)}
                           </p>
                         )}
                       </td>

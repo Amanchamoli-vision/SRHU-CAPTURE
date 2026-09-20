@@ -807,6 +807,16 @@ input::-ms-clear {
     color: rgb(var(--c-err));
   }
 
+  /* The explanatory line under a control. Six call sites in the Super Admin
+     settings form used this class before it existed, so those hints rendered at
+     full body size. It completes the .field / .field > label / .field-error /
+     .req family rather than scattering utilities through the markup. */
+  .field-hint {
+    font-size: .78rem;
+    line-height: 1.45;
+    color: rgb(var(--c-muted));
+  }
+
   select.input {
     appearance: none;
     -webkit-appearance: none;

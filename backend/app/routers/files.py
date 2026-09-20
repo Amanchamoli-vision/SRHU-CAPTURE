@@ -60,7 +60,10 @@ def parse_range(header: str | None, length: int) -> tuple[int, int] | None:
     if first == "":
         # Suffix form "bytes=-N": the final N bytes.
         suffix = int(last)
-        if suffix == 0:
+        # `length == 0` is checked here as well as below: without it an empty
+        # file produced (0, -1), and so a 206 carrying the nonsense header
+        # "Content-Range: bytes 0--1/0".
+        if suffix == 0 or length == 0:
             raise HTTPException(
                 status_code=416,  # Range Not Satisfiable
                 headers={"Content-Range": f"bytes */{length}"},

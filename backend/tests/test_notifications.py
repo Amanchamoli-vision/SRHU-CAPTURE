@@ -13,7 +13,7 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from tests.test_event_history import EVENT_PAYLOAD, FakeEvents  # noqa: E402
+from tests.test_event_history import EVENT_PAYLOAD, FakeAttachments, FakeEvents  # noqa: E402
 
 
 # The event-types service binds its collection at import time, so a test that
@@ -150,6 +150,9 @@ class NotificationRoutingTests(unittest.TestCase):
         self.notifications = FakeNotifications()
 
         self.events = FakeEvents()
+        self.media = FakeAttachments()
+        self.documents = FakeAttachments()
+
         self.patches = [
             patch("app.routers.events.events", self.events),
             patch("app.routers.events.event_reports", MagicMock()),
@@ -157,6 +160,10 @@ class NotificationRoutingTests(unittest.TestCase):
             patch("app.routers.events.users", FakeUsers()),
             patch("app.routers.events.get_current_user", fake_current_user),
             patch("app.routers.events.email_service.is_configured", return_value=False),
+            # An event may only be submitted once it carries a photo and a
+            # document; these stand in for the counts behind that rule.
+            patch("app.routers.events.event_media", self.media),
+            patch("app.routers.events.event_documents", self.documents),
         ]
         for item in self.patches:
             item.start()
@@ -166,12 +173,33 @@ class NotificationRoutingTests(unittest.TestCase):
             item.stop()
 
     def submit(self, draft: bool = False) -> str:
-        payload = {**EVENT_PAYLOAD, "save_as_draft": draft}
+        """A draft, or an event in the Dean's queue.
+
+        An event cannot be created straight into the queue: it would carry no
+        photo or document at the moment it was created, which is what the
+        mandatory-upload rule forbids. The wizard saves a draft, attaches the
+        files, then submits, and so does this.
+        """
+        teacher = {"Authorization": "Bearer teacher"}
         response = self.client.post(
-            "/teacher/events", json=payload, headers={"Authorization": "Bearer teacher"}
+            "/teacher/events",
+            json={**EVENT_PAYLOAD, "save_as_draft": True},
+            headers=teacher,
         )
         self.assertEqual(response.status_code, 201, response.text)
-        return response.json()["event"]["id"]
+        event_id = response.json()["event"]["id"]
+        if draft:
+            return event_id
+
+        self.media.insert_one({"event_id": event_id, "media_type": "image"})
+        self.documents.insert_one({"event_id": event_id})
+        submitted = self.client.patch(
+            f"/teacher/events/{event_id}",
+            json={**EVENT_PAYLOAD, "save_as_draft": False},
+            headers=teacher,
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        return event_id
 
     def types_for(self, user_id: str) -> list[str]:
         return [n["notification_type"] for n in self.notifications.for_user(user_id)]

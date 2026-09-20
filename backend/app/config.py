@@ -4,6 +4,25 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Localhost and the private LAN ranges -- 10.0.0.0/8, 172.16.0.0/12,
+# 192.168.0.0/16 and the carrier-grade NAT / Tailscale range 100.64.0.0/10
+# (100.64-100.127.x.x; the rest of 100.* is public address space).
+#
+# For development only: put it in a local .env as CORS_ORIGIN_REGEX when you
+# need to open the site from a phone or another laptop on the same Wi-Fi.
+# Never set it on a public deployment -- combined with allow_credentials it
+# trusts any page served from a private address or from localhost.
+LAN_CORS_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost|127\.0\.0\.1"
+    r"|10(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}"
+    r"|172\.(1[6-9]|2\d|3[01])(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
+    r"|192\.168(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
+    r"|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
+    r")(:\d{1,5})?$"
+)
+
+
 class Settings(BaseSettings):
     """Application settings, read from the environment and the backend .env file.
 
@@ -71,6 +90,9 @@ class Settings(BaseSettings):
     # should be free to choose.
     max_photos_per_event: int = 10
     max_photo_size_mb: int = 20
+    # Videos are budgeted by combined size, but a single oversized file still has
+    # to be refused before it is spooled, so it carries a per-file cap too.
+    max_video_size_mb: int = 200
     max_video_total_mb: int = 200
     max_documents_total_mb: int = 15
     # No per-document size cap; this only stops an unbounded number of tiny
@@ -98,22 +120,19 @@ class Settings(BaseSettings):
     frontend_url: str
     # Optional extra origins, for example an alternate local development address.
     cors_origins: str | None = None
-    # Origins matched by pattern. The default admits localhost and the private
-    # LAN ranges only -- 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and the
-    # carrier-grade NAT / Tailscale range 100.64.0.0/10 (100.64-100.127.x.x; the
-    # rest of 100.* is public address space). In production set it to something
-    # like ^https://srhu-capture(-[a-z0-9-]+)?\.vercel\.app$ to also admit
-    # Vercel preview deployments, or to an empty value to allow FRONTEND_URL
-    # and CORS_ORIGINS only.
-    cors_origin_regex: str | None = (
-        r"^https?://("
-        r"localhost|127\.0\.0\.1"
-        r"|10(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}"
-        r"|172\.(1[6-9]|2\d|3[01])(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
-        r"|192\.168(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
-        r"|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){2}"
-        r")(:\d{1,5})?$"
-    )
+    # Origins matched by pattern, on top of FRONTEND_URL and CORS_ORIGINS.
+    #
+    # Empty by default, so a deployment admits only the origins it was told
+    # about. LAN_CORS_ORIGIN_REGEX below is the development pattern: set
+    # CORS_ORIGIN_REGEX to it in a local .env to reach the API from a phone on
+    # the same Wi-Fi. It is not the default because shipping it meant every
+    # production deployment also trusted every private-network and localhost
+    # origin, with allow_credentials on.
+    #
+    # In production set it to something like
+    # ^https://srhu-capture(-[a-z0-9-]+)?\.vercel\.app$ to admit Vercel
+    # preview deployments, or leave it empty.
+    cors_origin_regex: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

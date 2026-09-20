@@ -10,7 +10,7 @@ import unittest
 os.environ.setdefault("JWT_SECRET_KEY", "unit-test-secret-key-0123456789")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
 
-from app.config import Settings  # noqa: E402
+from app.config import LAN_CORS_ORIGIN_REGEX, Settings  # noqa: E402
 from app.database import _uses_tls  # noqa: E402
 
 
@@ -30,12 +30,19 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings_for().smtp_missing_variables, ["SMTP_HOST"])
         self.assertEqual(settings_for(smtp_host="smtp.gmail.com").smtp_missing_variables, [])
 
-    def test_cors_regex_can_be_switched_off(self) -> None:
-        self.assertTrue(settings_for().cors_origin_regex)
-        self.assertEqual(settings_for(cors_origin_regex="").cors_origin_regex, "")
+    def test_no_cors_regex_by_default(self) -> None:
+        """A deployment admits only the origins it was configured with.
 
-    def test_default_cors_regex_admits_only_local_and_private_ranges(self) -> None:
-        pattern = re.compile(settings_for().cors_origin_regex)
+        The localhost / private-LAN pattern used to be the built-in default,
+        so every production deployment also trusted any page served from a
+        private address. It is now opt-in as LAN_CORS_ORIGIN_REGEX.
+        """
+        self.assertIsNone(settings_for().cors_origin_regex)
+        self.assertEqual(settings_for(cors_origin_regex="").cors_origin_regex, "")
+        self.assertTrue(settings_for(cors_origin_regex=LAN_CORS_ORIGIN_REGEX).cors_origin_regex)
+
+    def test_lan_cors_regex_admits_only_local_and_private_ranges(self) -> None:
+        pattern = re.compile(LAN_CORS_ORIGIN_REGEX)
         allowed = [
             "http://localhost:5173",
             "http://127.0.0.1:5173",

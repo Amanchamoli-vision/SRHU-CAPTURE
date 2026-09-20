@@ -2,10 +2,17 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { register, resendVerification } from "../../services/auth";
 import AuthLayout, { AuthAlert } from "../../components/auth/AuthLayout";
+import Combobox from "../../components/common/Combobox";
 import EyeIcon from "../../components/common/EyeIcon";
+import {
+  DESIGNATION_OPTIONS,
+  MAX_DESIGNATION_LENGTH,
+  normalizeDesignation,
+} from "../../utils/designations";
 import {
   IconAlertTriangle,
   IconArrowRight,
+  IconAward,
   IconCheckCircle,
   IconKey,
   IconMail,
@@ -35,6 +42,7 @@ const STRENGTH = [
 function Register() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [designation, setDesignation] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -102,6 +110,18 @@ function Register() {
       return;
     }
 
+    const cleanDesignation = normalizeDesignation(designation);
+
+    if (!cleanDesignation) {
+      setError("Please enter your designation.");
+      return;
+    }
+
+    if (cleanDesignation.length > MAX_DESIGNATION_LENGTH) {
+      setError(`Designation must be at most ${MAX_DESIGNATION_LENGTH} characters.`);
+      return;
+    }
+
     if (password.length < 6) {
       setError("Password must be at least 6 characters.");
       return;
@@ -120,6 +140,7 @@ function Register() {
       const result = await register({
         name: name.trim(),
         email: email.trim(),
+        designation: cleanDesignation,
         password,
       });
 
@@ -133,6 +154,7 @@ function Register() {
       // Clear form
       setName("");
       setEmail("");
+      setDesignation("");
       setPassword("");
       setConfirmPassword("");
     } catch (err) {
@@ -240,6 +262,21 @@ function Register() {
             />
           </div>
         </div>
+
+        <Combobox
+          id="designation"
+          label="Designation"
+          required
+          value={designation}
+          onChange={setDesignation}
+          onSelect={(option) => setDesignation(option.name)}
+          options={DESIGNATION_OPTIONS}
+          placeholder="e.g. Assistant Professor"
+          disabled={loading}
+          icon={<IconAward className="h-4 w-4" />}
+          hint="Pick one from the list, or type your own."
+          emptyHint="No match — your own wording will be saved."
+        />
 
         <div className="field">
           <label htmlFor="password">

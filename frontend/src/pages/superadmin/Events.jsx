@@ -258,7 +258,7 @@ export default function SuperAdminEvents() {
               type="search"
               value={searchDraft}
               onChange={(e) => setSearchDraft(e.target.value)}
-              placeholder="Search event, venue or teacher"
+              placeholder="Search event, venue, type or teacher"
               className="input pl-10"
             />
           </label>

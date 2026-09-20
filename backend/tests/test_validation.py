@@ -256,10 +256,14 @@ class ResubmitLapsedEventTests(unittest.TestCase):
 
         from app.main import app
         from app.models.documents import new_event_document
-        from tests.test_event_history import FakeEvents
+        from tests.test_event_history import FakeAttachments, FakeEvents
 
         self.client = TestClient(app)
         self.store = FakeEvents()
+        # A rejected event being resubmitted already carries the photo and the
+        # document it needed to be submitted the first time.
+        self.media = FakeAttachments()
+        self.documents = FakeAttachments()
         document = new_event_document(
             teacher_id="teacher1",
             event_name="Lapsed Summit",
@@ -272,6 +276,8 @@ class ResubmitLapsedEventTests(unittest.TestCase):
         )
         result = self.store.insert_one(document)
         self.event_id = str(result.inserted_id)
+        self.media.insert_one({"event_id": self.event_id, "media_type": "image"})
+        self.documents.insert_one({"event_id": self.event_id})
 
     def patch(self, **overrides):
         from unittest.mock import patch as mock_patch
@@ -288,6 +294,8 @@ class ResubmitLapsedEventTests(unittest.TestCase):
             "app.routers.events.get_current_user",
             return_value={"id": "teacher1", "role": "teacher", "name": "T"},
         ), mock_patch("app.routers.events.events", self.store), \
+                mock_patch("app.routers.events.event_media", self.media), \
+                mock_patch("app.routers.events.event_documents", self.documents), \
                 mock_patch("app.routers.events.announce_to_deans"), \
                 mock_patch("app.routers.events.invalidate_report"):
             return self.client.patch(

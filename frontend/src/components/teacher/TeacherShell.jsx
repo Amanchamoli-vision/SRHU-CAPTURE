@@ -83,6 +83,18 @@ export default function TeacherShell({
 
   const initial = (profile?.name || "T").charAt(0).toUpperCase();
 
+  /**
+   * The line under the name: the academic rank the teacher registered with.
+   *
+   * Designation is collected on the registration form and comes back on
+   * /users/me, but nothing read it -- this line showed the department, and
+   * fell back to the literal word "Teacher" for the many accounts with no
+   * department set. Department stays as the middle fallback so an account
+   * that has one but no designation still says something useful.
+   */
+  const accountSubtitle =
+    profile?.designation?.trim() || profile?.department?.trim() || "Teacher";
+
   return (
     <div className={`hv-root ${locked ? "flex h-screen flex-col overflow-hidden" : "min-h-screen"}`}>
       <a href="#main" className="skip-link">Skip to content</a>
@@ -152,7 +164,7 @@ export default function TeacherShell({
                   {profile?.name || "Teacher"}
                 </span>
                 <span className="block text-[11px] text-muted truncate max-w-[120px]">
-                  {profile?.department || "Teacher"}
+                  {accountSubtitle}
                 </span>
               </span>
             </Link>
@@ -211,7 +223,7 @@ export default function TeacherShell({
                 {profile?.name || "Teacher"}
               </span>
               <span className="block text-[11px] text-muted truncate">
-                {profile?.department || "Teacher"}
+                {accountSubtitle}
               </span>
             </span>
           </Link>
@@ -275,7 +287,7 @@ export default function TeacherShell({
                   {profile?.name || "Teacher"}
                 </span>
                 <span className="block text-[11px] text-muted truncate">
-                  {profile?.department || "Teacher"}
+                  {accountSubtitle}
                 </span>
               </span>
             </Link>

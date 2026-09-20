@@ -3,10 +3,12 @@ import io
 import logging
 import re
 from datetime import datetime, timedelta
+from typing import Any
 
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Depends,
     File,
     Form,
     Header,
@@ -19,7 +21,8 @@ from fastapi import (
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 
-from app.database import audit_logs, departments, event_media, events, upload_config, users
+from app.config import settings
+from app.database import audit_logs, departments, event_media, events, users
 from app.models.documents import (
     USER_PRIVATE_FIELDS,
     new_department_document,
@@ -43,18 +46,28 @@ from app.services.storage_service import delete_user_cascade
 from app.services.upload_config_service import (
     CONFIG_KEY,
     DEFAULT_UPLOAD_LIMITS,
+    get_config_metadata,
+    get_limit_bounds,
     get_public_upload_limits,
     reset_upload_limits,
     update_upload_limits,
 )
-from app.utils.auth import get_superadmin_user, public_user
+from app.utils.auth import get_superadmin_user, public_user, superadmin_dep
 from app.utils.security import generate_temporary_password, hash_password
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
 
+# The dependency is declared on the router so it runs before the request body
+# is bound on *every* route here. While each handler called the role check as
+# its first statement, Pydantic validated first, and an unauthenticated caller
+# got a 422 echoing the whole schema -- and their own input -- back at them.
+#
+# Handlers that need the actor (for the audit log) also take it as a parameter;
+# FastAPI caches a dependency per request, so that resolves to one lookup.
 router = APIRouter(
     prefix="/superadmin",
-    tags=["Superadmin"]
+    tags=["Superadmin"],
+    dependencies=[Depends(superadmin_dep)],
 )
 logger = logging.getLogger(__name__)
 
@@ -300,6 +313,27 @@ def _send_dean_credentials(email: str, name: str, temporary_password: str) -> No
         logger.warning("dean_credentials_email_failed")
 
 
+def _send_credentials(
+    email: str, name: str, temporary_password: str, role: str | None = None
+) -> None:
+    """Send someone the password an admin just set for them.
+
+    Both templates link to the plain login page and carry the password in the
+    body, never in the URL. Never raises: it runs as a background task, where
+    an escaping exception would be logged as an unhandled error long after the
+    response went out.
+    """
+    send = (
+        email_service.send_dean_credentials_email
+        if role == "dean"
+        else email_service.send_teacher_credentials_email
+    )
+    try:
+        send(email, name, temporary_password)
+    except email_service.EmailDeliveryError:
+        logger.warning("credentials_email_failed role=%s", role)
+
+
 # ============================================================
 # MAKE TEACHER -> DEAN
 # ============================================================
@@ -435,72 +469,103 @@ def delete_user(
 # UPLOAD LIMITS SETTINGS
 # ============================================================
 
-@router.get("/upload-limits")
-def get_superadmin_upload_limits(
-    authorization: str | None = Header(default=None)
-):
-    get_superadmin_user(authorization)
+def _resolve_actor_name(user_id: str | None) -> str | None:
+    """Turn a stored ``updated_by`` id into something worth showing an admin."""
+    if not user_id:
+        return None
+    try:
+        actor = users.find_one({"_id": to_object_id(user_id)}, {"name": 1, "email": 1})
+    except Exception:  # a stale or malformed id is not worth failing the read
+        return None
+    if not actor:
+        return None
+    return actor.get("name") or actor.get("email")
 
-    limits = get_public_upload_limits()
-    doc = upload_config.find_one({"key": CONFIG_KEY})
+
+def _limits_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """Only the fields that actually moved, as {field: {from, to}}.
+
+    Logging the submitted payload alone left the audit trail unable to answer
+    "who loosened the video cap, and from what?".
+    """
+    return {
+        field: {"from": before.get(field), "to": value}
+        for field, value in after.items()
+        if before.get(field) != value
+    }
+
+
+def _limits_response(result: dict[str, Any], message: str) -> dict[str, Any]:
+    return {
+        "success": True,
+        "message": message,
+        "limits": result["limits"],
+        "updated_at": result["updated_at"],
+        "updated_by": result["updated_by"],
+        "updated_by_name": _resolve_actor_name(result["updated_by"]),
+    }
+
+
+@router.get("/upload-limits")
+def get_superadmin_upload_limits(superadmin: dict = Depends(superadmin_dep)):
+    metadata = get_config_metadata()
 
     return {
         "success": True,
-        "limits": limits,
+        "limits": get_public_upload_limits(),
         "defaults": DEFAULT_UPLOAD_LIMITS,
-        "updated_at": doc.get("updated_at") if doc else None,
-        "updated_by": doc.get("updated_by") if doc else None,
+        # Served so the form validates against the same numbers the API enforces
+        # instead of its own copy of them.
+        "bounds": get_limit_bounds(),
+        # The largest single file this deployment can accept at all, whatever the
+        # per-file limits below are set to.
+        "deployment_ceiling_mb": settings.max_upload_size_mb,
+        "updated_at": metadata["updated_at"],
+        "updated_by": metadata["updated_by"],
+        "updated_by_name": _resolve_actor_name(metadata["updated_by"]),
     }
 
 
 @router.put("/upload-limits")
 def update_superadmin_upload_limits(
     payload: UploadLimitsUpdateRequest,
-    authorization: str | None = Header(default=None)
+    superadmin: dict = Depends(superadmin_dep),
 ):
-    superadmin = get_superadmin_user(authorization)
-
-    updated = update_upload_limits(payload.model_dump(), superadmin["id"])
+    before = get_public_upload_limits()
+    result = update_upload_limits(payload.model_dump(), superadmin["id"])
 
     log_audit_event(
         actor=superadmin,
         action="upload_limits_updated",
         target_type="system_config",
-        details=payload.model_dump(),
+        target_id=CONFIG_KEY,
+        details={
+            "changed": _limits_diff(before, result["limits"]),
+            "source": "settings_page",
+        },
     )
 
-    return {
-        "success": True,
-        "message": "Upload limits updated successfully",
-        "limits": updated,
-    }
+    return _limits_response(result, "Upload limits updated successfully")
 
 
 @router.post("/upload-limits/reset")
-def reset_superadmin_upload_limits(
-    authorization: str | None = Header(default=None)
-):
-    superadmin = get_superadmin_user(authorization)
-
-    reset_limits = reset_upload_limits(superadmin["id"])
+def reset_superadmin_upload_limits(superadmin: dict = Depends(superadmin_dep)):
+    before = get_public_upload_limits()
+    result = reset_upload_limits(superadmin["id"])
 
     log_audit_event(
         actor=superadmin,
         action="upload_limits_reset",
         target_type="system_config",
-        details={"limits": reset_limits},
+        target_id=CONFIG_KEY,
+        details={
+            "changed": _limits_diff(before, result["limits"]),
+            "source": "settings_page",
+        },
     )
 
-    return {
-        "success": True,
-        "message": "Upload limits reset to system defaults",
-        "limits": reset_limits,
-    }
+    return _limits_response(result, "Upload limits reset to system defaults")
 
-
-# ============================================================
-# USER MANAGEMENT EXTENSIONS (DEACTIVATION, PROFILE, RESET)
-# ============================================================
 
 @router.patch("/users/{user_id}/toggle-active")
 def toggle_user_active(
@@ -607,6 +672,15 @@ def reset_user_password(
     superadmin = get_superadmin_user(authorization)
     user = find_user_or_404(user_id)
 
+    # A superadmin may reset their own password here, but not another
+    # superadmin's: that would be a silent account takeover between peers.
+    # delete_user and toggle_user_active already refuse the same way.
+    if user.get("role") == "superadmin" and superadmin.get("id") != str(user["_id"]):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Another superadmin's password cannot be reset. They can use Forgot password.",
+        )
+
     new_password = payload.new_password or generate_temporary_password()
     password_hash = hash_password(new_password)
 
@@ -625,11 +699,17 @@ def reset_user_password(
 
     email_queued = False
     if email_service.is_configured():
+        # The credentials template, NOT send_password_reset_email: that one
+        # builds {frontend}/reset-password?token=<arg>, so passing the new
+        # password put it in a URL -- leaked to mail gateways, browser history
+        # and Referer -- and produced a link that could never work, because no
+        # reset_token_hash matches a password.
         background_tasks.add_task(
-            email_service.send_password_reset_email,
+            _send_credentials,
             user["email"],
             user.get("name") or "there",
             new_password,
+            user.get("role"),
         )
         email_queued = True
 
@@ -891,19 +971,57 @@ def delete_department(
 # ACCREDITATION CSV EXPORT (NAAC / NIRF)
 # ============================================================
 
+# Characters a spreadsheet treats as the start of a formula rather than text.
+# Excel and LibreOffice both evaluate such a cell on open, so a teacher who
+# names an event =cmd|'/c calc'!A1 would have it run on the machine of whoever
+# opens the accreditation export. Neutralised here rather than at input,
+# because the value is legitimate text everywhere else in the product.
+_CSV_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_cell(value: Any) -> str:
+    """One CSV cell, safe to open in Excel or LibreOffice.
+
+    A leading formula character is prefixed with an apostrophe, which every
+    spreadsheet reads as "the rest of this cell is literal text". Embedded
+    newlines are kept: csv.writer quotes them correctly.
+    """
+    text = "" if value is None else str(value)
+    if text.startswith(_CSV_FORMULA_LEAD):
+        return "'" + text
+    return text
+
 @router.get("/events/export")
 def export_events_csv(
     authorization: str | None = Header(default=None),
-    status: str | None = Query(default=None),
+    # Named event_status, not status: `status` would shadow the fastapi.status
+    # module imported at the top of this file, so any HTTPException raised here
+    # would fail with AttributeError on a str. alias keeps the query-string
+    # name the frontend already sends.
+    event_status: str | None = Query(default=None, alias="status"),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
+    include_drafts: bool = Query(default=False),
+    include_archived: bool = Query(default=False),
 ):
     superadmin = get_superadmin_user(authorization)
 
+    # Drafts are a teacher's private scratchpad and archived events were
+    # deliberately shelved; neither belongs in an accreditation return unless
+    # asked for explicitly. Every other read path already hides both.
     query: dict[str, Any] = {}
-    if status and status.strip().lower() != "all":
-        query["status"] = status.strip().lower()
+    if not include_drafts:
+        query["status"] = {"$ne": "draft"}
+    if not include_archived:
+        query["archived_at"] = None
+
+    if event_status and event_status.strip().lower() != "all":
+        # An explicit status filter replaces the draft exclusion above, so
+        # ?status=draft with include_drafts=false still returns nothing.
+        wanted = event_status.strip().lower()
+        if include_drafts or wanted != "draft":
+            query["status"] = wanted
     if event_type and event_type.strip().lower() != "all":
         query["event_type"] = event_type.strip()
     if from_date or to_date:
@@ -949,23 +1067,23 @@ def export_events_csv(
     for ev in event_docs:
         teacher = teacher_map.get(str(ev.get("teacher_id")), {})
         writer.writerow([
-            str(ev.get("_id", "")),
-            ev.get("event_name", ""),
-            ev.get("event_type", ""),
-            ev.get("status", ""),
-            ev.get("event_date", ""),
-            ev.get("end_date", "") or "",
-            ev.get("start_time", "") or "",
-            ev.get("end_time", "") or "",
-            ev.get("location", "") or "",
-            ev.get("organizer", "") or "",
-            ev.get("coordinator_name", "") or "",
-            ev.get("coordinator_contact", "") or "",
-            teacher.get("name", ""),
-            teacher.get("email", ""),
-            teacher.get("department", "") or "",
-            str(ev.get("created_at", "")),
-            ev.get("description", "") or "",
+            csv_cell(ev.get("_id", "")),
+            csv_cell(ev.get("event_name", "")),
+            csv_cell(ev.get("event_type", "")),
+            csv_cell(ev.get("status", "")),
+            csv_cell(ev.get("event_date", "")),
+            csv_cell(ev.get("end_date", "")),
+            csv_cell(ev.get("start_time", "")),
+            csv_cell(ev.get("end_time", "")),
+            csv_cell(ev.get("location", "")),
+            csv_cell(ev.get("organizer", "")),
+            csv_cell(ev.get("coordinator_name", "")),
+            csv_cell(ev.get("coordinator_contact", "")),
+            csv_cell(teacher.get("name", "")),
+            csv_cell(teacher.get("email", "")),
+            csv_cell(teacher.get("department", "")),
+            csv_cell(ev.get("created_at", "")),
+            csv_cell(ev.get("description", "")),
         ])
 
     csv_content = output.getvalue()
@@ -1132,15 +1250,21 @@ def _parse_teachers_csv(content: str) -> list[dict]:
 @router.post("/teachers/bulk-onboard")
 def bulk_onboard_teachers(
     payload: BulkOnboardTeachersRequest,
+    background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None),
 ):
-    """Bulk create teacher accounts with auto-generated temporary passwords and send credentials."""
+    """Bulk create teacher accounts with auto-generated temporary passwords and send credentials.
+
+    Credential emails are queued, not sent inline: this endpoint accepts up to
+    500 teachers and a full SMTP session costs seconds, so sending them in the
+    loop meant tens of minutes inside one request. The accounts were created
+    either way, so the caller saw a gateway timeout over a finished job.
+    """
     superadmin_user = get_superadmin_user(authorization)
 
     created_count = 0
     skipped: list[dict] = []
-    email_failures: list[dict] = []
-    email_sent_count = 0
+    email_queued_count = 0
     created_teachers: list[dict] = []
 
     for item in payload.teachers:
@@ -1188,16 +1312,10 @@ def bulk_onboard_teachers(
         })
 
         if payload.send_email:
-            try:
-                email_service.send_teacher_credentials_email(email, name, temp_password)
-                email_sent_count += 1
-            except Exception as e:
-                logger.warning("bulk_teacher_email_failed recipient=%s error=%s", email, e)
-                email_failures.append({
-                    "email": email,
-                    "name": name,
-                    "reason": str(e),
-                })
+            background_tasks.add_task(
+                _send_credentials, email, name, temp_password, "teacher"
+            )
+            email_queued_count += 1
 
     log_audit_event(
         actor=superadmin_user,
@@ -1207,8 +1325,7 @@ def bulk_onboard_teachers(
         details={
             "created_count": created_count,
             "skipped_count": len(skipped),
-            "email_sent_count": email_sent_count,
-            "email_failed_count": len(email_failures),
+            "email_queued_count": email_queued_count,
         },
     )
 
@@ -1217,16 +1334,26 @@ def bulk_onboard_teachers(
         "total_processed": len(payload.teachers),
         "created_count": created_count,
         "skipped_count": len(skipped),
-        "email_sent_count": email_sent_count,
-        "email_failed_count": len(email_failures),
+        # Delivery now happens after this response, so per-recipient success is
+        # no longer knowable here; _send_credentials logs the failures. The
+        # temporary passwords below are the admin's fallback either way.
+        "email_sent_count": email_queued_count,
+        "email_failed_count": 0,
         "skipped": skipped,
-        "email_failures": email_failures,
+        "email_failures": [],
         "created_teachers": created_teachers,
     }
 
 
+# A roster CSV of 500 teachers is a few tens of kilobytes. This is the point
+# past which the upload is certainly not one, and it exists so the whole file
+# is not pulled into memory unbounded the way `await file.read()` did.
+MAX_TEACHER_CSV_BYTES = 2 * 1024 * 1024
+
+
 @router.post("/teachers/bulk-onboard-file")
 async def bulk_onboard_teachers_file(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     send_email: bool = Form(default=True),
     authorization: str | None = Header(default=None),
@@ -1234,7 +1361,16 @@ async def bulk_onboard_teachers_file(
     """Accept a CSV file directly for bulk teacher onboarding."""
     get_superadmin_user(authorization)
 
-    content_bytes = await file.read()
+    content_bytes = await file.read(MAX_TEACHER_CSV_BYTES + 1)
+    if len(content_bytes) > MAX_TEACHER_CSV_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                "That file is too large for a teacher roster. "
+                f"The limit is {MAX_TEACHER_CSV_BYTES // (1024 * 1024)} MB."
+            ),
+        )
+
     try:
         content_text = content_bytes.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -1251,26 +1387,46 @@ async def bulk_onboard_teachers_file(
         teachers=[BulkOnboardTeacherItem(**t) for t in parsed],
         send_email=send_email,
     )
-    return bulk_onboard_teachers(payload, authorization)
+    return bulk_onboard_teachers(payload, background_tasks, authorization)
 
 
 @router.post("/teachers/send-credentials")
 def send_credentials_to_teachers(
     payload: SendCredentialsRequest,
+    background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None),
 ):
-    """Regenerate a unique temporary password and send login credentials email for selected teachers."""
+    """Regenerate a unique temporary password and send login credentials email for selected teachers.
+
+    Every id is resolved before anything is written. Resolving inside the write
+    loop meant one unknown id raised 404 *after* earlier teachers' passwords had
+    already been replaced and their sessions ended -- and the response carrying
+    the only copy of those new passwords was discarded with the error, leaving
+    real people locked out of accounts whose password existed nowhere.
+    """
     superadmin_user = get_superadmin_user(authorization)
 
-    sent_count = 0
-    failures: list[dict] = []
+    # Resolve first, mutate second. An id that does not resolve, or does not
+    # belong to a teacher, is reported as a skip rather than failing the batch.
+    resolved: list[dict] = []
+    skipped: list[dict] = []
+    for user_id in payload.user_ids:
+        object_id = to_object_id(user_id)
+        doc = users.find_one({"_id": object_id}) if object_id else None
+        if not doc:
+            skipped.append({"user_id": user_id, "reason": "No such user"})
+        elif doc.get("role") != "teacher":
+            skipped.append({
+                "user_id": user_id,
+                "email": doc.get("email"),
+                "reason": f"Not a teacher (role: {doc.get('role')})",
+            })
+        else:
+            resolved.append(doc)
+
     updated_teachers: list[dict] = []
 
-    for user_id in payload.user_ids:
-        doc = find_user_or_404(user_id)
-        if doc.get("role") != "teacher":
-            continue
-
+    for doc in resolved:
         temp_password = generate_temporary_password(12)
         users.update_one(
             {"_id": doc["_id"]},
@@ -1292,26 +1448,33 @@ def send_credentials_to_teachers(
             "temporary_password": temp_password,
         })
 
-        try:
-            email_service.send_teacher_credentials_email(email, name, temp_password)
-            sent_count += 1
-        except Exception as e:
-            logger.warning("send_credentials_failed recipient=%s error=%s", email, e)
-            failures.append({"email": email, "name": name, "reason": str(e)})
+        # Queued, not sent inline: a full SMTP session takes seconds, and this
+        # endpoint accepts up to 500 ids. Sending them in the request loop put
+        # the caller behind minutes of SMTP and timed the request out long
+        # before the passwords above could be reported back.
+        background_tasks.add_task(_send_credentials, email, name, temp_password, "teacher")
 
     log_audit_event(
         actor=superadmin_user,
         action="teachers_credentials_sent",
         target_type="teachers_batch",
         target_id=f"batch_{len(payload.user_ids)}",
-        details={"sent_count": sent_count, "failed_count": len(failures)},
+        details={
+            "queued_count": len(updated_teachers),
+            "skipped_count": len(skipped),
+        },
     )
 
     return {
         "success": True,
-        "sent_count": sent_count,
-        "failed_count": len(failures),
-        "failures": failures,
+        # The passwords were reset and the emails are queued; delivery happens
+        # after this response, so a per-recipient success count is no longer
+        # knowable here. Failures are logged by _send_credentials.
+        "sent_count": len(updated_teachers),
+        "skipped_count": len(skipped),
+        "skipped": skipped,
+        "failures": [],
+        "failed_count": 0,
         "teachers": updated_teachers,
     }
 

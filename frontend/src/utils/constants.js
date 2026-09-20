@@ -158,6 +158,11 @@ export function matchesTypeFilter(event, typeKey) {
 /**
  * Free-text match over the fields the Dean's table actually shows.
  *
+ * The field list mirrors the `q` filter of GET /dean/events
+ * (backend/app/routers/events.py). The dashboard filters its own fetched rows
+ * with this, while All Events asks the server — so the same words typed into
+ * either box have to find the same events, or the two pages disagree.
+ *
  * `description` is deliberately excluded: teacher-entered extras are encoded
  * into it as an HTML comment, which would produce phantom matches.
  */
@@ -168,9 +173,18 @@ export function matchesEventSearch(event, query) {
     return true;
   }
 
-  return [event?.event_name, event?.location, event?.event_type].some((field) =>
-    String(field ?? "").toLowerCase().includes(term)
-  );
+  return [
+    event?.event_name,
+    event?.location,
+    event?.event_type,
+    event?.organizer,
+    // The submitting teacher, which the server's `q` filter also matches and
+    // GET /dean/events now returns on every row. Without these two the
+    // dashboard search found nothing for a teacher's name while All Events,
+    // which asks the server, found their events.
+    event?.teacher_name,
+    event?.teacher_email,
+  ].some((field) => String(field ?? "").toLowerCase().includes(term));
 }
 
 /** Bucket totals for the status chips. Always compute from the fetch scope. */
@@ -265,6 +279,12 @@ export const REJECTED_STAGE = {
   description: "The Dean rejected this event. See the reason below.",
 };
 
+export const REVOKED_STAGE = {
+  key: "revoked",
+  label: "Revoked",
+  description: "The Dean withdrew the approval. See the reason below.",
+};
+
 /** Index of the stage an event has reached along the happy path. */
 export function getProgressIndex(status) {
   const value = normalizeStatus(status);
@@ -272,6 +292,9 @@ export function getProgressIndex(status) {
   if (value === "completed") return 4;
   if (value === "in_progress") return 3;
   if (value === "approved" || value === "published") return 2;
+  // Revoked is the fourth node of its own trail (below): the event reached
+  // Approved before the Dean withdrew it, so it is not back at Pending.
+  if (value === "revoked") return 3;
   if (value === "rejected") return 1;
   if (value === "pending" || value === "submitted" || value === "under_review") {
     return 1;
@@ -284,6 +307,17 @@ export function isRejected(status) {
   return normalizeStatus(status) === "rejected";
 }
 
+/** Refused either way: rejected outright, or approved and then revoked. */
+export function isRefused(status) {
+  const value = normalizeStatus(status);
+  return value === "rejected" || value === "revoked";
+}
+
+/** The reason behind a refusal, whichever kind it was. */
+export function getRefusalReason(event) {
+  return event?.rejection_reason || event?.revocation_reason || "";
+}
+
 /**
  * The stage list to render for an event: the rejected branch replaces
  * everything after Pending, since the workflow stops there.
@@ -291,6 +325,17 @@ export function isRejected(status) {
 export function getProgressTrail(status) {
   if (isRejected(status)) {
     return [PROGRESS_STAGES[0], PROGRESS_STAGES[1], REJECTED_STAGE];
+  }
+
+  // A revocation happens *after* approval, so its trail keeps the Approved
+  // node it actually passed through rather than pretending it never got there.
+  if (normalizeStatus(status) === "revoked") {
+    return [
+      PROGRESS_STAGES[0],
+      PROGRESS_STAGES[1],
+      PROGRESS_STAGES[2],
+      REVOKED_STAGE,
+    ];
   }
 
   return PROGRESS_STAGES;
@@ -340,6 +385,11 @@ export const TEACHER_EDITABLE_STATUSES = [
   "pending",
   "under_review",
   "rejected",
+  // A revoked event is editable and resubmittable on the server
+  // (RESUBMITTABLE_STATUSES in the events router). Leaving it out here hid
+  // the Edit button on an event the API would happily have accepted, which
+  // stranded the teacher with no way out of a revocation.
+  "revoked",
 ];
 
 export function canTeacherEditEvent(event) {
