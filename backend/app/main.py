@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import MutableHeaders
 
 from app.config import settings
 from app.database import ensure_indexes, ping
@@ -108,6 +109,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================
+# CACHING
+# ============================================================
+
+class NoStoreByDefault:
+    """Send ``Cache-Control: no-store`` unless the route chose its own policy.
+
+    Almost every answer here is one person's data -- their events, profile,
+    notifications -- and none said anything about caching, which left it to
+    the browser's judgement. On a shared computer that data could then outlive
+    the sign-out in the disk cache. Routes that do set the header keep it:
+    signed file links cache privately until they expire, and report PDFs
+    already say ``private, no-store``.
+
+    Plain ASGI rather than ``@app.middleware("http")``: only the headers are
+    touched, so there is no reason to pass every file download and video
+    range through BaseHTTPMiddleware's extra stream.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_default(message):
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message).setdefault("Cache-Control", "no-store")
+            await send(message)
+
+        await self.app(scope, receive, send_with_default)
+
+
+app.add_middleware(NoStoreByDefault)
 
 
 # ============================================================

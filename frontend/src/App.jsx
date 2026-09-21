@@ -8,6 +8,7 @@ import {
 } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/common/ProtectedRoute";
+import PublicOnlyRoute from "./components/common/PublicOnlyRoute";
 
 // Landing & Authentication.
 //
@@ -55,6 +56,7 @@ const SuperAdminEventDetails = lazy(
 const Settings = lazy(() => import("./pages/superadmin/Settings"));
 const Departments = lazy(() => import("./pages/superadmin/Departments"));
 const AuditLogs = lazy(() => import("./pages/superadmin/AuditLogs"));
+const SuperAdminProfile = lazy(() => import("./pages/superadmin/Profile"));
 
 /** Shown only while a role area's chunk is being fetched. */
 function RouteFallback() {
@@ -85,8 +87,26 @@ function App() {
           <Routes>
             {/* ================= AUTH ================= */}
             <Route path="/" element={<Landing />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
+            {/* Sign-in and registration are for signed-out visitors only:
+                PublicOnlyRoute sends anyone who already has a session to their
+                dashboard, so Back/Forward can never strand them on a form they
+                have no use for. */}
+            <Route
+              path="/login"
+              element={
+                <PublicOnlyRoute>
+                  <Login />
+                </PublicOnlyRoute>
+              }
+            />
+            <Route
+              path="/register"
+              element={
+                <PublicOnlyRoute>
+                  <Register />
+                </PublicOnlyRoute>
+              }
+            />
             <Route path="/verify-email" element={<VerifyEmail />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
@@ -252,6 +272,15 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={["superadmin"]}>
                   <Settings />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/superadmin/profile"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <SuperAdminProfile />
                 </ProtectedRoute>
               }
             />

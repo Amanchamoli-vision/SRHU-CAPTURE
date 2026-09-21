@@ -4,25 +4,21 @@ import {
   changePassword,
   fetchCurrentUser,
   requestPasswordReset,
-  resendVerification,
   signOut,
 } from "../../services/auth";
-import DeanShell from "../../components/dean/DeanShell";
+import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import LogoutConfirmModal from "../../components/common/LogoutConfirmModal";
 import EditProfileModal from "../../components/common/EditProfileModal";
 import PasswordField from "../../components/common/PasswordField";
-import { useAuth } from "../../context/AuthContext";
 import {
   initialsOf,
   labelOfRole,
-  mustChangePassword as needsNewPassword,
   trackOfRole,
 } from "../../components/common/roles";
 import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
   IconArrowRight,
-  IconBuilding,
   IconCalendar,
   IconCheck,
   IconCheckCircle,
@@ -34,9 +30,10 @@ import {
   IconKey,
   IconLogout,
   IconMail,
-  IconPhone,
   IconRefresh,
+  IconSettings,
   IconShield,
+  IconUsers,
   IconX,
 } from "../../components/teacher/icons";
 
@@ -61,28 +58,26 @@ function formatDateTime(value) {
 }
 
 // One row style for every quick action, link or button alike, so the column
-// reads as a single menu.
+// reads as a single menu. Same as the Teacher and Dean profiles.
 const ACTION_CLASS =
   "flex w-full items-center gap-3 rounded-xl border border-transparent px-2.5 py-1.5 text-left transition hover:border-accent/25 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-transparent disabled:hover:bg-transparent";
 
 /**
- * The Dean's own account, laid out to fit one laptop screen without
- * scrolling: identity once at the top, the facts as a compact tile grid, and
- * everything the Dean can actually do from here in a single column beside it.
- * Name and email are shown once — the old layout repeated them in the hero
- * and again in the list, and the role three times.
+ * The Super Admin's own account, matching the Teacher and Dean profiles so the
+ * three roles read as one product.
+ *
+ * Department and mobile number are deliberately absent: `PATCH /users/me`
+ * stores them for teachers and deans only, so offering the fields here would
+ * accept input the server discards.
  */
-function DeanProfile() {
+function SuperAdminProfile() {
   const navigate = useNavigate();
-  const { user: authUser } = useAuth();
 
   const [profile, setProfile] = useState(null);
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Feedback for the account actions, shown as a toast so it never pushes the
-  // layout past the fold.
   const [notice, setNotice] = useState(null); // { kind: "ok" | "err", text }
   const [busy, setBusy] = useState(""); // key of the action in flight
   const [copied, setCopied] = useState(false);
@@ -90,22 +85,16 @@ function DeanProfile() {
   const [editOpen, setEditOpen] = useState(false);
   const copiedTimer = useRef(null);
 
-  const handleProfileSaved = (updatedUser) => {
-    setProfile(updatedUser);
-    setNotice({ kind: "ok", text: "Profile updated successfully." });
-  };
-
-  // A Dean created with a temporary password is held on this page (see
-  // ProtectedRoute) until they replace it. authUser is the source of truth:
-  // it updates as soon as the new session is stored.
-  const mustChange = needsNewPassword(authUser);
-
   // In-page change-password form.
   const [pwOpen, setPwOpen] = useState(false);
   const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
   const [pwError, setPwError] = useState("");
   const [pwSaving, setPwSaving] = useState(false);
-  const showPasswordForm = mustChange || pwOpen;
+
+  const handleProfileSaved = (updatedUser) => {
+    setProfile(updatedUser);
+    setNotice({ kind: "ok", text: "Profile updated successfully." });
+  };
 
   // Also the Retry and Refresh handler, so a failed first load, a retry and a
   // manual refresh all take exactly the same path.
@@ -130,7 +119,7 @@ function DeanProfile() {
         emailConfirmedAt: user.email_verified_at,
       });
     } catch (err) {
-      console.error("Load dean profile error:", err);
+      console.error("Load superadmin profile error:", err);
 
       setError(err.message || "Unable to load your profile.");
     } finally {
@@ -150,15 +139,13 @@ function DeanProfile() {
     navigate("/login", { replace: true });
   };
 
-  const displayName = profile?.name?.trim() || "Dean";
+  const displayName = profile?.name?.trim() || "Super Admin";
   const displayEmail = profile?.email || account?.email || "—";
   const accountId = profile?.id || account?.id || "";
   const isVerified = Boolean(account?.emailConfirmedAt);
-  const role = profile?.role || "dean";
+  const role = profile?.role || "superadmin";
   const hasEmail = displayEmail !== "—";
 
-  // Password changes go through the same emailed-link flow as "Forgot
-  // password", so the new password is never typed on a shared screen.
   const handlePasswordReset = async () => {
     if (!hasEmail || busy) return;
 
@@ -224,29 +211,6 @@ function DeanProfile() {
     }
   };
 
-  const handleResendVerification = async () => {
-    if (!hasEmail || busy) return;
-
-    try {
-      setBusy("verify");
-      setNotice(null);
-
-      const result = await resendVerification(displayEmail);
-
-      setNotice({
-        kind: "ok",
-        text: result?.message || `Verification email sent to ${displayEmail}.`,
-      });
-    } catch (err) {
-      setNotice({
-        kind: "err",
-        text: err?.message || "Unable to send the verification email right now.",
-      });
-    } finally {
-      setBusy("");
-    }
-  };
-
   // The id exists for support conversations, so copying it is the one thing
   // anyone ever does with it.
   const handleCopyId = async () => {
@@ -262,8 +226,6 @@ function DeanProfile() {
     }
   };
 
-  // The facts, in the order someone checking their own account reads them:
-  // what they may do, department, mobile, whether the address is confirmed, then the audit trail.
   const facts = [
     {
       label: "Role",
@@ -272,32 +234,10 @@ function DeanProfile() {
       track: trackOfRole(role),
     },
     {
-      label: "Department",
-      value: profile?.department?.trim() || "Not specified",
-      Icon: IconBuilding,
-    },
-    {
-      label: "Mobile number",
-      value: profile?.phone?.trim() || "Not specified",
-      Icon: IconPhone,
-    },
-    {
       label: "Email verified",
       value: isVerified ? formatDateTime(account?.emailConfirmedAt) : "Not verified",
       Icon: IconCheckCircle,
       track: trackOf(isVerified ? "approved" : "pending"),
-      // Sits beside "Not verified" rather than in Quick actions: the fix is
-      // next to the problem, and the page keeps its height.
-      action: !isVerified && (
-        <button
-          type="button"
-          onClick={handleResendVerification}
-          disabled={!hasEmail || Boolean(busy)}
-          className="link text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-55"
-        >
-          {busy === "verify" ? "Sending…" : "Resend email"}
-        </button>
-      ),
     },
     {
       label: "Member since",
@@ -314,17 +254,24 @@ function DeanProfile() {
   const navActions = [
     {
       key: "dashboard",
-      to: "/dean/dashboard",
+      to: "/superadmin/dashboard",
       label: "Dashboard",
-      hint: "Pending reviews and totals",
+      hint: "Platform totals and activity",
       Icon: IconGrid,
     },
     {
-      key: "events",
-      to: "/dean/events",
-      label: "All events",
-      hint: "Search, approve, reject",
-      Icon: IconCalendar,
+      key: "users",
+      to: "/superadmin/users",
+      label: "User management",
+      hint: "Accounts, roles, resets",
+      Icon: IconUsers,
+    },
+    {
+      key: "settings",
+      to: "/superadmin/settings",
+      label: "Settings",
+      hint: "Upload and document limits",
+      Icon: IconSettings,
     },
   ];
 
@@ -332,7 +279,7 @@ function DeanProfile() {
     {
       key: "edit-profile",
       label: "Edit profile",
-      hint: "Update name, department, phone",
+      hint: "Update your name",
       Icon: IconEdit,
       onClick: () => setEditOpen(true),
     },
@@ -345,7 +292,6 @@ function DeanProfile() {
         setPwError("");
         setPwOpen((value) => !value);
       },
-      disabled: mustChange,
     },
     {
       key: "reset-link",
@@ -366,7 +312,7 @@ function DeanProfile() {
   ];
 
   return (
-    <DeanShell
+    <SuperAdminShell
       active="profile"
       profile={profile}
       onLogout={handleLogout}
@@ -396,26 +342,7 @@ function DeanProfile() {
           </div>
         )}
 
-        {mustChange && (
-          <div
-            className="mb-4 flex items-start gap-3 rounded-2xl border p-3.5"
-            data-tint=""
-            style={{ "--track": trackOf("pending") }}
-            role="alert"
-          >
-            <IconKey className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-ink">
-                Please set a new password to replace your temporary one.
-              </p>
-              <p className="prose-muted mt-0.5 text-sm">
-                The rest of the portal opens once your new password is saved.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {showPasswordForm && (
+        {pwOpen && (
           <section
             className="glass mb-4 p-4 sm:p-5"
             aria-labelledby="change-password-heading"
@@ -424,22 +351,20 @@ function DeanProfile() {
               <h2 id="change-password-heading" className="text-sm font-semibold text-ink">
                 Change password
               </h2>
-              {!mustChange && (
-                <button
-                  type="button"
-                  onClick={() => setPwOpen(false)}
-                  aria-label="Close change password"
-                  className="shrink-0 text-muted transition hover:text-ink"
-                >
-                  <IconX className="h-4 w-4" />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setPwOpen(false)}
+                aria-label="Close change password"
+                className="shrink-0 text-muted transition hover:text-ink"
+              >
+                <IconX className="h-4 w-4" />
+              </button>
             </div>
 
             <form onSubmit={handleChangePassword} className="grid gap-3 sm:grid-cols-3">
               <PasswordField
                 id="pw-current"
-                label={mustChange ? "Temporary password" : "Current password"}
+                label="Current password"
                 autoComplete="current-password"
                 value={pwForm.current}
                 onChange={(e) => setPwForm((f) => ({ ...f, current: e.target.value }))}
@@ -509,7 +434,6 @@ function DeanProfile() {
                   </h1>
                   <p className="mt-0.5 truncate text-sm text-muted" title={displayEmail}>
                     {displayEmail}
-                    {profile?.department ? ` · ${profile.department}` : ""}
                   </p>
                 </div>
 
@@ -579,7 +503,6 @@ function DeanProfile() {
                         <span className="min-w-0 min-[480px]:truncate" title={fact.value}>
                           {fact.value}
                         </span>
-                        {fact.action}
                       </dd>
                     </div>
                   </div>
@@ -614,12 +537,11 @@ function DeanProfile() {
                 </div>
               </dl>
 
-              {/* Kept here rather than in the rail note, next to the details
-                  it is about and visible at every width. */}
               <p className="mt-3 flex items-start gap-2 text-xs text-muted lg:mt-auto lg:pt-3">
                 <IconInfo className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>
-                  Email comes from your university account. Use "Edit profile" to update your name, department, or mobile number.
+                  Email comes from your university account. Department and mobile
+                  number are recorded for teachers and Deans only.
                 </span>
               </p>
             </section>
@@ -688,8 +610,6 @@ function DeanProfile() {
         )}
       </div>
 
-      {/* Bottom-right like All Events, so feedback never shifts the layout
-          past the fold. */}
       <div className="pointer-events-none fixed bottom-5 right-5 z-50 flex w-85 max-w-[calc(100vw-2.5rem)] flex-col gap-3">
         {notice && (
           <div
@@ -724,10 +644,11 @@ function DeanProfile() {
         open={editOpen}
         onClose={() => setEditOpen(false)}
         profile={profile}
+        allowContactFields={false}
         onSaved={handleProfileSaved}
       />
-    </DeanShell>
+    </SuperAdminShell>
   );
 }
 
-export default DeanProfile;
+export default SuperAdminProfile;

@@ -11,7 +11,7 @@ function Navbar({ title = "Dean Panel", actions = null }) {
   const handleLogout = async () => {
     setLogoutConfirmOpen(false);
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   return (

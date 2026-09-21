@@ -190,7 +190,7 @@ export default function Settings() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   const lastUpdated = meta?.updatedAt

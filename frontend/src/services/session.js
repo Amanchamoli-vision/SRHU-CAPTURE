@@ -130,27 +130,47 @@ export function subscribe(listener) {
   return () => listeners.delete(listener);
 }
 
+/**
+ * Bring this page's idea of the session in line with what is stored, or
+ * reload it from a clean state when a different person is now signed in.
+ */
+function syncFromStorage() {
+  const session = readSession();
+  const nextUserId = session?.user?.id ?? null;
+
+  // Another tab signed in as a different person. Swapping the user under an
+  // open page would save drafts as one user while API calls run as another,
+  // so reload from a clean state instead. `replace`, not `assign`: the page
+  // being left belongs to the previous user and must not stay in history as
+  // a Back target for the new one.
+  if (tabUserId && nextUserId && nextUserId !== tabUserId) {
+    window.location.replace("/login");
+    return;
+  }
+
+  if (!session) {
+    emit("SIGNED_OUT", null);
+  } else {
+    emit(tabUserId ? "TOKEN_REFRESHED" : "SIGNED_IN", session);
+  }
+}
+
 // Keep tabs in sync: a login or logout in one tab is mirrored in the others.
 if (typeof window !== "undefined") {
   tabUserId = readSession()?.user?.id ?? null;
 
   window.addEventListener("storage", (e) => {
     if (e.key !== SESSION_STORAGE_KEY && e.key !== null) return;
-    const session = readSession();
-    const nextUserId = session?.user?.id ?? null;
+    syncFromStorage();
+  });
 
-    // Another tab signed in as a different person. Swapping the user under an
-    // open page would save drafts as one user while API calls run as another,
-    // so reload from a clean state instead.
-    if (tabUserId && nextUserId && nextUserId !== tabUserId) {
-      window.location.assign("/login");
-      return;
-    }
-
-    if (!session) {
-      emit("SIGNED_OUT", null);
-    } else {
-      emit(tabUserId ? "TOKEN_REFRESHED" : "SIGNED_IN", session);
-    }
+  // Back/Forward can restore a whole earlier page from the browser's
+  // back/forward cache -- its memory included, so it still believes whoever
+  // was signed in when it was left. A sign-out made since then (in a page
+  // loaded later in this tab, or in another tab) reaches it as a `storage`
+  // event only in some browsers, so re-read the stored session on every
+  // restore rather than trust that.
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) syncFromStorage();
   });
 }

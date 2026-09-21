@@ -7,6 +7,7 @@ import {
   resendVerification,
   signOut,
 } from "../../services/auth";
+import { useOriginState } from "../../hooks/useOriginState";
 import TeacherShell from "../../components/teacher/TeacherShell";
 import LogoutConfirmModal from "../../components/common/LogoutConfirmModal";
 import EditProfileModal from "../../components/common/EditProfileModal";
@@ -99,7 +100,7 @@ export default function TeacherProfile() {
       const user = await fetchCurrentUser();
 
       if (!user) {
-        navigate("/login");
+        navigate("/login", { replace: true });
         return;
       }
 
@@ -127,7 +128,7 @@ export default function TeacherProfile() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   const handleProfileSaved = (updatedUser) => {
@@ -140,6 +141,10 @@ export default function TeacherProfile() {
   const accountId = profile?.id || account?.id || "";
   const isVerified = Boolean(account?.emailConfirmedAt);
   const role = profile?.role || "teacher";
+  // The rank the teacher registered with ("Assistant Professor", ...). Every
+  // account on this page is a teacher, so the bare role word says nothing;
+  // it is only the fallback for an account with no designation on record.
+  const designation = profile?.designation?.trim() || "";
   const hasEmail = displayEmail !== "—";
 
   const handlePasswordReset = async () => {
@@ -198,7 +203,7 @@ export default function TeacherProfile() {
       setNotice({ kind: "ok", text: result?.message || "Password changed successfully." });
     } catch (err) {
       if (err?.status === 401) {
-        navigate("/login");
+        navigate("/login", { replace: true });
         return;
       }
       setPwError(err?.message || "Unable to change your password right now.");
@@ -245,15 +250,10 @@ export default function TeacherProfile() {
 
   const facts = [
     {
-      label: "Role",
-      value: labelOfRole(role),
+      label: "Designation",
+      value: designation || "Not specified",
       Icon: IconShield,
       track: trackOfRole(role),
-    },
-    {
-      label: "Designation",
-      value: profile?.designation?.trim() || "Not specified",
-      Icon: IconShield,
     },
     {
       label: "Department",
@@ -515,9 +515,10 @@ export default function TeacherProfile() {
                   <span
                     className="chip chip-sm chip-track"
                     style={{ "--track": trackOfRole(role) }}
+                    title={designation || undefined}
                   >
                     <span className="dot dot-sm" />
-                    {labelOfRole(role)}
+                    {designation || labelOfRole(role)}
                   </span>
 
                   <span

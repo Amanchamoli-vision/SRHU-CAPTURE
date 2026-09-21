@@ -115,7 +115,7 @@ export default function Departments() {
       setTotal(res?.total || 0);
     } catch (err) {
       if (err?.status === 401) {
-        navigate("/login");
+        navigate("/login", { replace: true });
         return;
       }
       console.error("Load departments error:", err);
@@ -215,7 +215,7 @@ export default function Departments() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   return (

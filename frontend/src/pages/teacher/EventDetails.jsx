@@ -93,12 +93,12 @@ function EventDetails() {
       const userProfile = await fetchCurrentUser();
 
       if (!userProfile) {
-        navigate("/login");
+        navigate("/login", { replace: true });
         return;
       }
 
       if (userProfile.role !== "teacher") {
-        navigate("/");
+        navigate("/", { replace: true });
         return;
       }
 
@@ -135,7 +135,7 @@ function EventDetails() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   const handleDuplicate = () => {

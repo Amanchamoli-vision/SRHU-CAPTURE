@@ -186,7 +186,7 @@ function UserManagement() {
   // apiJson has already cleared the stored session by then.
   const handleUnauthorized = useCallback(() => {
     setError("Your session has expired. Please login again.");
-    navigate("/login");
+    navigate("/login", { replace: true });
   }, [navigate]);
 
   // ------------------------------------------------------------ load
@@ -365,7 +365,7 @@ function UserManagement() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   const visibleUsers = users;

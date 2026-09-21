@@ -87,14 +87,21 @@ export async function refreshSession() {
 
 /**
  * Load the signed-in user's profile from the API.
- * Returns null (and clears the session) when the token is no longer valid.
+ * Returns null (and clears the session) when the token is no longer valid,
+ * and null when the session ended while the request was in flight.
  */
 export async function fetchCurrentUser() {
   if (!readSession()) return null;
   try {
     const data = await apiJson("/auth/me");
     const user = data?.user || null;
-    if (user) updateSessionUser(user);
+    // Signed out -- here or in another tab -- or signed in as someone else
+    // while /auth/me was answering. The profile belongs to a session that is
+    // gone; handing it back would sign the page in again with no token.
+    const current = readSession();
+    if (!user || !current) return null;
+    if (current.user?.id && current.user.id !== user.id) return null;
+    updateSessionUser(user);
     return user;
   } catch (err) {
     if (err?.status === 401) clearSession();

@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
+import { flushSync } from "react-dom";
 import {
   fetchCurrentUser,
   getSession,
@@ -105,6 +106,29 @@ export function AuthProvider({ children }) {
       unsubscribe();
     };
   }, [applyUser, clearState, fetchUserProfile]);
+
+  // Back/Forward can restore this page from the browser's back/forward cache,
+  // resuming it with whoever was signed in when it was left -- no reload, so
+  // nothing above runs again. A session that has gone since is dropped inside
+  // the pageshow event itself (flushSync), so ProtectedRoute swaps the page
+  // for its redirect in the same task instead of on a later render. One that
+  // is still stored may have been ended on the server meanwhile (a sign-out on
+  // another device, a password change), so the server confirms it.
+  useEffect(() => {
+    const onPageShow = (event) => {
+      if (!event.persisted) return;
+      if (!getSession()?.access_token) {
+        flushSync(() => {
+          clearState();
+          setLoading(false);
+        });
+        return;
+      }
+      fetchUserProfile();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [clearState, fetchUserProfile]);
 
   // Renew the token ahead of expiry while the app is open (interval + when the
   // tab becomes visible again).

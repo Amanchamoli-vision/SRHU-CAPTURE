@@ -141,6 +141,31 @@ class TokenVersionTests(SessionTestCase):
         self.assertNotIn("token_version", self.stored())
 
 
+class CacheControlTests(SessionTestCase):
+    """Per-user answers must not be kept by the browser past a sign-out."""
+
+    def test_authenticated_answers_are_not_stored(self) -> None:
+        response = self.client.get("/auth/me", headers=self.auth(self.token()))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_refusals_are_not_stored_either(self) -> None:
+        token = self.token()
+        self.client.post("/auth/logout", headers=self.auth(token))
+
+        response = self.client.get("/auth/me", headers=self.auth(token))
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_login_answer_carrying_a_token_is_not_stored(self) -> None:
+        response = self.client.post(
+            "/auth/login", json={"email": "asha@example.com", "password": "secret1"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+
 class RefreshTests(SessionTestCase):
     def test_refresh_keeps_the_original_auth_time(self) -> None:
         signed_in = int((utc_now() - timedelta(days=3)).timestamp())

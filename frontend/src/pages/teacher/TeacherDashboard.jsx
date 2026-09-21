@@ -70,7 +70,7 @@ function TeacherDashboard() {
       }
 
       if (userProfile.role !== "teacher") {
-        navigate("/");
+        navigate("/", { replace: true });
         return;
       }
 
@@ -103,7 +103,7 @@ function TeacherDashboard() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   // Actions

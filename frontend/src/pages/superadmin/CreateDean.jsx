@@ -88,7 +88,7 @@ function CreateDean() {
       // has already cleared the stored session by then.
       if (err?.status === 401) {
         setError("Super Admin session expired. Please login again.");
-        navigate("/login");
+        navigate("/login", { replace: true });
         return;
       }
       console.error("Create Dean Error:", err);
@@ -111,7 +111,7 @@ function CreateDean() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   return (

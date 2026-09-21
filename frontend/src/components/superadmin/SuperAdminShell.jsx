@@ -14,6 +14,7 @@ import {
   IconMoon,
   IconSettings,
   IconSun,
+  IconUser,
   IconUserPlus,
   IconUsers,
   RidgeDivider,
@@ -30,6 +31,7 @@ const NAV = [
   { key: "audit-logs", to: "/superadmin/audit-logs", label: "Audit Logs", Icon: IconActivity },
   { key: "create-dean", to: "/superadmin/create-dean", label: "Create Dean", Icon: IconUserPlus },
   { key: "settings", to: "/superadmin/settings", label: "Settings", Icon: IconSettings },
+  { key: "profile", to: "/superadmin/profile", label: "My Profile", short: "Profile", Icon: IconUser },
 ];
 
 /**

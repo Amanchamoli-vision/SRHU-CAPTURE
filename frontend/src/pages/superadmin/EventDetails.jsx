@@ -72,7 +72,7 @@ export default function SuperAdminEventDetails() {
       setTeacherName(owner ? owner.name || owner.email : "");
     } catch (err) {
       if (err?.status === 401) {
-        navigate("/login");
+        navigate("/login", { replace: true });
         return;
       }
       console.error("Load event error:", err);
@@ -99,7 +99,7 @@ export default function SuperAdminEventDetails() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   const handleDownloadReport = async () => {

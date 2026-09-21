@@ -96,9 +96,12 @@ class SuperAdminFeaturesTests(unittest.TestCase):
             "role": "teacher",
         }
 
+        # The send is patched out: with a real SMTP .env present this test
+        # otherwise mails a credentials email to the address above.
         with patch("app.utils.auth.get_current_user", return_value=SUPERADMIN), \
              patch("app.routers.superadmin.users.find_one", return_value=target_user), \
              patch("app.routers.superadmin.users.update_one") as mock_update, \
+             patch("app.services.email_service.send_teacher_credentials_email"), \
              patch("app.services.audit_service.audit_logs.insert_one"):
             response = self.client.post(
                 f"/superadmin/users/{user_id}/reset-password",

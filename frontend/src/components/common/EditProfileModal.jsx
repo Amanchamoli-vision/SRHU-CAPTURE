@@ -28,6 +28,10 @@ export default function EditProfileModal({
   onClose,
   profile,
   onSaved,
+  // Department and mobile number are stored for teachers and deans only
+  // (`PATCH /users/me`), so the Super Admin profile hides them rather than
+  // collecting input the server discards.
+  allowContactFields = true,
 }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -83,7 +87,7 @@ export default function EditProfileModal({
       newErrors.name = "Full name is required.";
     }
 
-    if (trimmedPhone && !isValidPhone(trimmedPhone)) {
+    if (allowContactFields && trimmedPhone && !isValidPhone(trimmedPhone)) {
       newErrors.phone = "Mobile number must be exactly 10 digits.";
     }
 
@@ -96,18 +100,26 @@ export default function EditProfileModal({
       setSaving(true);
       setApiError("");
 
-      const result = await updateProfile({
-        name: trimmedName,
-        phone: trimmedPhone || null,
-        department: trimmedDept || null,
-      });
+      const result = await updateProfile(
+        allowContactFields
+          ? {
+              name: trimmedName,
+              phone: trimmedPhone || null,
+              department: trimmedDept || null,
+            }
+          : { name: trimmedName }
+      );
 
-      const updatedUser = result?.user || {
-        ...profile,
-        name: trimmedName,
-        phone: trimmedPhone || null,
-        department: trimmedDept || null,
-      };
+      const updatedUser =
+        result?.user ||
+        (allowContactFields
+          ? {
+              ...profile,
+              name: trimmedName,
+              phone: trimmedPhone || null,
+              department: trimmedDept || null,
+            }
+          : { ...profile, name: trimmedName });
 
       onSaved?.(updatedUser);
       onClose();
@@ -125,7 +137,11 @@ export default function EditProfileModal({
       onClose={() => !saving && onClose()}
       eyebrow="Account Details"
       title="Edit Profile"
-      subtitle="Update your name, department, and contact information"
+      subtitle={
+        allowContactFields
+          ? "Update your name, department, and contact information"
+          : "Update your name"
+      }
       zIndex={70}
       footer={
         <div className="flex w-full items-center justify-end gap-2.5">
@@ -187,6 +203,7 @@ export default function EditProfileModal({
         </div>
 
         {/* Mobile Number */}
+        {allowContactFields && (
         <div className="field">
           <label htmlFor="profile-phone">
             Mobile Number
@@ -212,8 +229,10 @@ export default function EditProfileModal({
           </p>
           {errors.phone && <p className="field-error">{errors.phone}</p>}
         </div>
+        )}
 
         {/* Department */}
+        {allowContactFields && (
         <div className="field">
           <label htmlFor="profile-department">
             Department / School
@@ -241,6 +260,7 @@ export default function EditProfileModal({
           </p>
           {errors.department && <p className="field-error">{errors.department}</p>}
         </div>
+        )}
       </form>
     </Modal>
   );

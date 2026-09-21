@@ -91,7 +91,7 @@ export default function DeanDashboard() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   // ============================================

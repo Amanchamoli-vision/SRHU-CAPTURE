@@ -135,7 +135,7 @@ export default function SuperAdminEvents() {
       }
     } catch (err) {
       if (err?.status === 401) {
-        navigate("/login");
+        navigate("/login", { replace: true });
         return;
       }
       console.error("Load events error:", err);
@@ -180,7 +180,7 @@ export default function SuperAdminEvents() {
 
   const handleLogout = async () => {
     await signOut();
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
   const visibleEvents = events;

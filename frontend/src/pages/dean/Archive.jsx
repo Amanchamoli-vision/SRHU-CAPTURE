@@ -15,7 +15,7 @@ import {
   IconTrash,
   IconX,
 } from "../../components/teacher/icons";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 /**
  * The Dean's archive shelf (PRD 1).
@@ -64,6 +64,7 @@ function ArchiveActions({ event, isProcessing, onRestore, onDelete }) {
 }
 
 function Archive() {
+  const navigate = useNavigate();
   const { query, setPage, setPerPage } = useTableQuery();
   const { page, per } = query;
 
@@ -123,7 +124,7 @@ function Archive() {
 
   const handleLogout = async () => {
     await signOut();
-    window.location.assign("/login");
+    navigate("/login", { replace: true });
   };
 
   const restore = async (event) => {

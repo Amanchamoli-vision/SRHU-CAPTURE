@@ -338,7 +338,7 @@ function CreateEvent() {
         const user = await fetchCurrentUser();
 
         if (!user) {
-          navigate("/login");
+          navigate("/login", { replace: true });
           return;
         }
 
