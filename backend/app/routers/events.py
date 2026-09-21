@@ -1891,9 +1891,33 @@ def _record_upload(
                 break
 
 
+def _required_kind(collection, record: dict) -> tuple[dict, str] | None:
+    """``(query, label)`` when ``record`` counts towards ensure_submittable's
+    evidence -- a photo or a document -- else None (videos are optional)."""
+    if collection is event_documents:
+        return {}, "document"
+    if record.get("media_type") == "image":
+        return {"media_type": "image"}, "photo"
+    return None
+
+
+def _awaiting_dean(event: dict) -> bool:
+    return bool(events.find_one(
+        {"_id": event["_id"], "status": {"$in": list(DEAN_REVIEWABLE_STATUSES)}},
+        {"_id": 1},
+    ))
+
+
 def _delete_attachment(collection, record_id: str, event: dict, not_found: str) -> None:
     """Delete one media/document record and its bytes, unless the event left
-    the editable statuses in the meantime (then the record is restored)."""
+    the editable statuses in the meantime (then the record is restored).
+
+    An event in the Dean's queue also keeps its last photo and its last
+    document: ensure_submittable only guards the way in, and without this a
+    teacher could empty a pending event afterwards. Counted after the delete,
+    like the upload caps, so two deletes racing for the last two photos both
+    see none left and both roll back.
+    """
     record = collection.find_one_and_delete(
         {"_id": to_object_id(record_id), "event_id": str(event["_id"])}
     )
@@ -1907,6 +1931,19 @@ def _delete_attachment(collection, record_id: str, event: dict, not_found: str) 
     if not _event_still_editable(event):
         collection.insert_one(record)
         raise conflict(CHANGED_WHILE_EDITING)
+
+    required = _required_kind(collection, record)
+    if required and _awaiting_dean(event):
+        query, label = required
+        if collection.count_documents({"event_id": str(event["_id"]), **query}) == 0:
+            collection.insert_one(record)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"An event awaiting approval must keep at least one {label}. "
+                    f"Upload another {label} first, then remove this one."
+                ),
+            )
 
     delete_stored(record)
 

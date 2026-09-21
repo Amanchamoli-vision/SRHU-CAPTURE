@@ -885,14 +885,43 @@ function CreateEvent() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handleNext = () => {
-    if (step === 1 && !validateDetails()) {
-      setError("Please complete the required fields before continuing.");
-      window.scrollTo({ top: 0, behavior: "smooth" });
+  /**
+   * The first required step before `target` that is not done yet, or null.
+   *
+   * Moving forward -- "Next" or a later step in the rail -- goes through this,
+   * so the photo step cannot be skipped: an edit opened from My Events starts
+   * with every step reachable, and the rail used to jump straight past it.
+   * Documents are the last step, so the submit check covers them.
+   */
+  const blockerBefore = (target) => {
+    if (target > 1 && !validateDetails()) {
+      return { step: 1, message: "Please complete the required fields before continuing." };
+    }
+    if (target > 2 && photos.length === 0) {
+      setUploadErrors((prev) => ({ ...prev, photos: true }));
+      return {
+        step: 2,
+        message: photoUploads.some((u) => !u.error)
+          ? "Please wait for your photo to finish uploading before continuing."
+          : "Photo upload is mandatory. Please upload at least one photo before continuing.",
+      };
+    }
+    return null;
+  };
+
+  /** Go to `target`, unless a required step before it is still incomplete. */
+  const goForwardTo = (target) => {
+    const blocker = target > step ? blockerBefore(target) : null;
+    if (!blocker) {
+      goToStep(target);
       return;
     }
-    goToStep(Math.min(step + 1, STEPS.length));
+    if (blocker.step !== step) goToStep(blocker.step);
+    setError(blocker.message);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  const handleNext = () => goForwardTo(Math.min(step + 1, STEPS.length));
 
   const handleBack = () => goToStep(Math.max(step - 1, 1));
 
@@ -1246,7 +1275,7 @@ function CreateEvent() {
                     {index > 0 && <span className="wiz-sep" aria-hidden="true" />}
                     <button
                       type="button"
-                      onClick={() => reachable && goToStep(number)}
+                      onClick={() => reachable && goForwardTo(number)}
                       disabled={!reachable || busy}
                       aria-current={number === step ? "step" : undefined}
                       data-done={done ? "true" : undefined}
@@ -1596,10 +1625,10 @@ function CreateEvent() {
                   />
                   <div>
                     <span className="font-semibold">
-                      {uploadErrors.photos ? "Photo upload is required before submission:" : "Mandatory Upload:"}
+                      {uploadErrors.photos ? "Photo upload is required to continue:" : "Mandatory Upload:"}
                     </span>{" "}
                     <span>
-                      At least one photo (e.g. event poster, banner, or photograph) must be uploaded before submitting this event for approval.
+                      At least one photo (e.g. event poster, banner, or photograph) must be uploaded before you can move on to the next step or submit this event for approval.
                     </span>
                   </div>
                 </div>

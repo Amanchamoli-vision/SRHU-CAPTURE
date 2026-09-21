@@ -303,6 +303,81 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(record["original_name"], "My Poster .png")
         self.assertEqual(record["name_key"], "my poster .png")
 
+    # ---- mandatory evidence: a submitted event keeps a photo and a document --
+
+    def submit(self):
+        return self.client.patch(
+            f"/teacher/events/{self.event_id}",
+            json={**EVENT_PAYLOAD, "save_as_draft": False},
+            headers=self.auth,
+        )
+
+    def remove(self, kind, record_id):
+        return self.client.delete(
+            f"/teacher/events/{self.event_id}/{kind}/{record_id}", headers=self.auth
+        )
+
+    def test_submit_needs_a_photo_and_a_document(self) -> None:
+        response = self.submit()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("photo", response.json()["detail"])
+
+        self.upload("poster.png", PNG, "image/png")
+        response = self.submit()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("document", response.json()["detail"])
+
+        self.upload("agenda.pdf", PDF, "application/pdf", kind="documents")
+        response = self.submit()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["event"]["status"], "pending")
+
+    def test_a_video_does_not_count_as_the_photo(self) -> None:
+        self.upload("clip.mp4", MP4, "video/mp4")
+        self.upload("agenda.pdf", PDF, "application/pdf", kind="documents")
+        response = self.submit()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("photo", response.json()["detail"])
+
+    def test_pending_event_keeps_its_last_photo_and_document(self) -> None:
+        photo = self.upload("poster.png", PNG, "image/png").json()["media"]["id"]
+        doc = self.upload("agenda.pdf", PDF, "application/pdf", kind="documents").json()["document"]["id"]
+        self.assertEqual(self.submit().status_code, 200)
+
+        for kind, record_id, label, collection in (
+            ("media", photo, "photo", self.media),
+            ("documents", doc, "document", self.documents),
+        ):
+            with self.subTest(label=label):
+                response = self.remove(kind, record_id)
+                self.assertEqual(response.status_code, 400, response.text)
+                self.assertIn(f"at least one {label}", response.json()["detail"])
+                # Put back, and its bytes left alone.
+                self.assertEqual(collection.count_documents({"event_id": self.event_id}), 1)
+        self.assertEqual(self.deleted, [])
+
+    def test_pending_event_can_swap_a_photo(self) -> None:
+        first = self.upload("poster.png", PNG, "image/png").json()["media"]["id"]
+        self.upload("agenda.pdf", PDF, "application/pdf", kind="documents")
+        self.assertEqual(self.submit().status_code, 200)
+        self.upload("banner.jpg", JPEG, "image/jpeg")
+
+        self.assertEqual(self.remove("media", first).status_code, 200)
+        self.assertEqual(len(self.deleted), 1)
+
+    def test_pending_event_can_drop_its_only_video(self) -> None:
+        self.upload("poster.png", PNG, "image/png")
+        self.upload("agenda.pdf", PDF, "application/pdf", kind="documents")
+        clip = self.upload("clip.mp4", MP4, "video/mp4").json()["media"]["id"]
+        self.assertEqual(self.submit().status_code, 200)
+
+        self.assertEqual(self.remove("media", clip).status_code, 200)
+
+    def test_a_draft_may_be_emptied(self) -> None:
+        # Not in front of the Dean yet; submitting re-checks.
+        photo = self.upload("poster.png", PNG, "image/png").json()["media"]["id"]
+        self.assertEqual(self.remove("media", photo).status_code, 200)
+
     # ---- B-29: no orphans -----------------------------------------------
 
     def test_failed_insert_deletes_the_stored_file(self) -> None:
