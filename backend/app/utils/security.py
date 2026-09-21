@@ -64,6 +64,17 @@ def burn_password_check(password: str) -> None:
     verify_password(password, _DUMMY_PASSWORD_HASH)
 
 
+def token_lifetime_minutes() -> int:
+    """How long a newly issued token is valid.
+
+    The idle limit when one is set, since an unrenewed token is exactly an
+    idle session; never longer than ``access_token_expire_minutes``.
+    """
+    idle = settings.session_idle_minutes
+    ceiling = settings.access_token_expire_minutes
+    return min(idle, ceiling) if idle > 0 else ceiling
+
+
 def create_access_token(
     user_id: str,
     role: str,
@@ -78,7 +89,7 @@ def create_access_token(
     ``auth_time`` is when the password was last entered; refreshes carry it
     over unchanged so a session cannot be extended forever.
     """
-    expires_in = settings.access_token_expire_minutes * 60
+    expires_in = token_lifetime_minutes() * 60
     now = utc_now()
     issued_at = int(now.timestamp())
     payload = {

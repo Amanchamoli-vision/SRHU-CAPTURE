@@ -119,9 +119,9 @@ async function readErrorDetail(response, fallback) {
 /* Proactive token refresh                                             */
 /* ------------------------------------------------------------------ */
 
-const REFRESH_WITHIN_MS = 24 * 60 * 60 * 1000; // refresh in the last 24h
+const REFRESH_EVERY_MS = 5 * 60 * 1000; // at most this often while in use
 const REFRESH_RETRY_BACKOFF_MS = 60 * 1000; // after a failed (non-401) attempt
-const KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000;
+const KEEPALIVE_INTERVAL_MS = 30 * 1000;
 
 let refreshPromise = null;
 let lastRefreshFailureAt = 0;
@@ -129,17 +129,31 @@ let lastRefreshFailureAt = 0;
 // limit). It stays usable until it expires or a request gets a 401.
 let refreshDeclinedFor = null;
 
-/** A session is due for refresh within 24h of expiry, or past half its lifetime. */
+/**
+ * When the person at the keyboard last did something on the page.
+ *
+ * The server issues tokens that last only the idle limit, so renewing one is
+ * what keeps a session alive -- and only a person may do that. Background
+ * requests (notification polling, a retrying upload) never count, or a tab
+ * left open on a shared computer would stay signed in forever.
+ */
+let lastActivityAt = Date.now();
+const ACTIVITY_EVENTS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"];
+const markActive = () => {
+  lastActivityAt = Date.now();
+};
+
+/**
+ * Due once the token has been in use for a while (5 minutes, or half its
+ * lifetime if that is shorter) and someone has used the page since it was
+ * issued. A token nobody used since is left to expire: that is the idle
+ * sign-out, enforced by the server refusing it.
+ */
 function isRefreshDue(session) {
-  if (!session?.access_token || !session.expires_at) return false;
-  const now = Date.now();
-  const remaining = session.expires_at - now;
-  if (remaining <= REFRESH_WITHIN_MS) return true;
-  if (session.issued_at && session.expires_at > session.issued_at) {
-    const lifetime = session.expires_at - session.issued_at;
-    return now - session.issued_at >= lifetime / 2;
-  }
-  return false;
+  if (!session?.access_token || !session.expires_at || !session.issued_at) return false;
+  if (lastActivityAt <= session.issued_at) return false;
+  const lifetime = session.expires_at - session.issued_at;
+  return Date.now() - session.issued_at >= Math.min(REFRESH_EVERY_MS, lifetime / 2);
 }
 
 /** Build the stored session from a login/refresh response. */
@@ -223,21 +237,30 @@ export async function ensureFreshToken() {
 }
 
 /**
- * Keep the session fresh while the app is open: check on an interval and
- * whenever the tab becomes visible again. Returns a stop function.
+ * Keep the session fresh while someone is using the app, and notice promptly
+ * when it has gone idle: every check reads the stored session, which drops an
+ * expired one and signs the page out (see readSession). Checks run on an
+ * interval -- hidden tabs included, so a page left open behind another window
+ * is gone by the time it is looked at -- and when the tab is shown again.
+ * Returns a stop function.
  */
 export function startSessionKeepAlive() {
   if (typeof window === "undefined") return () => {};
   const check = () => {
-    if (typeof document !== "undefined" && document.hidden) return;
     ensureFreshToken();
   };
   const interval = setInterval(check, KEEPALIVE_INTERVAL_MS);
   document.addEventListener("visibilitychange", check);
+  for (const type of ACTIVITY_EVENTS) {
+    window.addEventListener(type, markActive, { passive: true, capture: true });
+  }
   check();
   return () => {
     clearInterval(interval);
     document.removeEventListener("visibilitychange", check);
+    for (const type of ACTIVITY_EVENTS) {
+      window.removeEventListener(type, markActive, { capture: true });
+    }
   };
 }
 

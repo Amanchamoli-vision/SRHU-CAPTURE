@@ -41,8 +41,13 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
-    # Seven days by default; the frontend refreshes the token on use.
+    # The longest a single token may live.
     access_token_expire_minutes: int = 60 * 24 * 7
+    # Sign-out after inactivity. Tokens are issued for this long (when it is
+    # shorter than the above) and the frontend renews them only while someone
+    # is using the page, so a session left idle this long is refused here --
+    # not just hidden by the browser. 0 turns the idle limit off.
+    session_idle_minutes: int = 30
     # /auth/refresh keeps a session alive, but never past this many days after
     # the password was last entered (the token's ``auth_time``).
     session_max_age_days: int = 30

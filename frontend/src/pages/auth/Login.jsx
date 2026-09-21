@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { signIn } from "../../services/auth";
+import { clearSignOutReason, getSignOutReason } from "../../services/session";
 import { useAuth } from "../../context/AuthContext";
 import AuthLayout, { AuthAlert } from "../../components/auth/AuthLayout";
 import EyeIcon from "../../components/common/EyeIcon";
@@ -24,7 +25,12 @@ function Login() {
   // Set by ProtectedRoute when it bounced a deep link (e.g. an emailed event
   // link) to this page; honoured after sign-in if it is in the user's area.
   const from = location.state?.from;
-  const { user: currentUser, role: currentRole, loading: authLoading, signOut } = useAuth();
+  const { loading: authLoading, signOut } = useAuth();
+
+  // Set when the last session ended because it sat idle, so the sign-out is
+  // explained rather than looking like a fault. Shown on this visit only.
+  const [idleNotice] = useState(() => getSignOutReason() === "idle");
+  useEffect(() => clearSignOutReason(), []);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -32,14 +38,6 @@ function Login() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  // Redirect if user already has an active authenticated session
-  useEffect(() => {
-    if (!authLoading && currentUser && currentRole) {
-      const target = postLoginPath(currentUser, from);
-      if (target) navigate(target, { replace: true });
-    }
-  }, [currentUser, currentRole, authLoading, navigate, from]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -114,7 +112,10 @@ function Login() {
       const target = postLoginPath(profile, from);
 
       if (target) {
-        navigate(target, { replace: true });
+        // Pushed, not replacing this page: Back from the signed-in area must
+        // land on a public page, where EndSessionOnHistoryReturn signs the
+        // user out, rather than leave the site with the session still live.
+        navigate(target);
 
         return;
       }
@@ -185,7 +186,9 @@ function Login() {
       }
     >
       <AuthAlert icon={<IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}>
-        {error}
+        {error ||
+          (idleNotice &&
+            "You were signed out because the session was inactive. Please sign in again.")}
       </AuthAlert>
 
       <form onSubmit={handleLogin} className="space-y-4">

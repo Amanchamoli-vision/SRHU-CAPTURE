@@ -18,6 +18,7 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
 from bson import ObjectId  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.config import settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.utils import rate_limit  # noqa: E402
 from app.utils.security import (  # noqa: E402
@@ -25,6 +26,7 @@ from app.utils.security import (  # noqa: E402
     decode_access_token,
     hash_one_time_token,
     hash_password,
+    token_lifetime_minutes,
     verify_password,
 )
 from app.utils.serializers import utc_now  # noqa: E402
@@ -164,6 +166,45 @@ class CacheControlTests(SessionTestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.headers["cache-control"], "no-store")
+
+
+class IdleTimeoutTests(SessionTestCase):
+    """A session nobody uses ends on the server, not only in the browser."""
+
+    def test_tokens_last_only_the_idle_limit(self) -> None:
+        with patch.object(settings, "session_idle_minutes", 30), \
+                patch.object(settings, "access_token_expire_minutes", 60 * 24 * 7):
+            response = self.client.post(
+                "/auth/login", json={"email": "asha@example.com", "password": "secret1"}
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["expires_in"], 30 * 60)
+
+    def test_lifetime_never_exceeds_the_token_ceiling(self) -> None:
+        cases = [
+            ({"session_idle_minutes": 30, "access_token_expire_minutes": 10080}, 30),
+            ({"session_idle_minutes": 90, "access_token_expire_minutes": 60}, 60),
+            # 0 switches the idle limit off.
+            ({"session_idle_minutes": 0, "access_token_expire_minutes": 10080}, 10080),
+        ]
+        for values, expected in cases:
+            with self.subTest(**values), \
+                    patch.object(settings, "session_idle_minutes", values["session_idle_minutes"]), \
+                    patch.object(settings, "access_token_expire_minutes", values["access_token_expire_minutes"]):
+                self.assertEqual(token_lifetime_minutes(), expected)
+
+    def test_an_idle_token_can_neither_be_used_nor_renewed(self) -> None:
+        # Issued 31 minutes ago with a 30-minute lifetime, never refreshed.
+        issued = utc_now() - timedelta(minutes=31)
+        with patch.object(settings, "session_idle_minutes", 30), \
+                patch("app.utils.security.utc_now", return_value=issued):
+            idle = self.token(auth_time=int(issued.timestamp()))
+
+        for method, path in (("get", "/auth/me"), ("post", "/auth/refresh")):
+            with self.subTest(path=path):
+                response = getattr(self.client, method)(path, headers=self.auth(idle))
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json()["detail"], SESSION_EXPIRED)
 
 
 class RefreshTests(SessionTestCase):

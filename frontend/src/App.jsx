@@ -9,6 +9,7 @@ import {
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/common/ProtectedRoute";
 import PublicOnlyRoute from "./components/common/PublicOnlyRoute";
+import EndSessionOnHistoryReturn from "./components/common/EndSessionOnHistoryReturn";
 
 // Landing & Authentication.
 //
@@ -83,14 +84,15 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <EndSessionOnHistoryReturn />
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             {/* ================= AUTH ================= */}
             <Route path="/" element={<Landing />} />
             {/* Sign-in and registration are for signed-out visitors only:
-                PublicOnlyRoute sends anyone who already has a session to their
-                dashboard, so Back/Forward can never strand them on a form they
-                have no use for. */}
+                PublicOnlyRoute sends anyone who opens them with a session to
+                their dashboard. Reaching them with Back/Forward instead ends
+                the session (EndSessionOnHistoryReturn). */}
             <Route
               path="/login"
               element={

@@ -2,11 +2,13 @@
  * Browser-side session storage for the API-issued login token.
  *
  * The token is a JWT signed by the FastAPI backend (MongoDB holds the users).
- * It is kept in localStorage so a page refresh keeps the user signed in, and a
- * small subscription mechanism lets the AuthContext react to changes made in
- * this tab or another one.
+ * It is kept in sessionStorage: a refresh keeps the user signed in, but the
+ * session belongs to this one tab and ends when the browser is closed, so a
+ * shared campus computer does not hand the next person a live session. A new
+ * tab starts signed out. A small subscription mechanism lets the AuthContext
+ * react to changes.
  *
- * Known limitation: a token in localStorage is readable by any script running
+ * Known limitation: a token in sessionStorage is readable by any script running
  * on the page, so an XSS bug would expose it. Moving to an httpOnly cookie
  * needs backend support (cookie issuance + CSRF protection) and is out of scope
  * for now. The server can revoke tokens (logout, password change), which limits
@@ -14,6 +16,9 @@
  */
 
 export const SESSION_STORAGE_KEY = "cc_auth_session";
+
+/** Why the last session ended, when the user did not end it themselves. */
+const SIGN_OUT_REASON_KEY = "cc_sign_out_reason";
 
 /**
  * Per-user caches that must not outlive a sign-out on a shared machine.
@@ -24,7 +29,7 @@ const USER_CACHE_PREFIXES = ["cc_teacher_notifs_", "cc_sent_reminders_"];
 
 const listeners = new Set();
 
-/** The user id this tab is currently running as (for cross-tab checks). */
+/** The user id this page is currently running as. */
 let tabUserId = null;
 
 function emit(event, session) {
@@ -53,12 +58,15 @@ function isExpired(session) {
 export function readSession() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
     if (!raw) return null;
     const session = JSON.parse(raw);
     if (!session?.access_token) return null;
     if (isExpired(session)) {
-      localStorage.removeItem(SESSION_STORAGE_KEY);
+      // The token is renewed only while someone uses the page, so an expired
+      // one means the session sat idle -- the server refuses it by now too.
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      sessionStorage.setItem(SIGN_OUT_REASON_KEY, "idle");
       // readSession can run during a React render; announce it afterwards so
       // listeners do not set state in the middle of another component's render.
       setTimeout(() => emit("SIGNED_OUT", null), 0);
@@ -73,7 +81,8 @@ export function readSession() {
 export function writeSession(session, event = "SIGNED_IN") {
   if (typeof window === "undefined") return session;
   try {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    sessionStorage.removeItem(SIGN_OUT_REASON_KEY);
   } catch (err) {
     console.error("Failed to persist session:", err);
   }
@@ -90,11 +99,31 @@ export function updateSessionUser(user) {
 export function clearSession() {
   if (typeof window === "undefined") return;
   try {
-    localStorage.removeItem(SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
   } catch {
     /* storage unavailable */
   }
   emit("SIGNED_OUT", null);
+}
+
+/** Why the previous session ended without a sign-out ("idle"), if it did. */
+export function getSignOutReason() {
+  if (typeof window === "undefined") return null;
+  try {
+    return sessionStorage.getItem(SIGN_OUT_REASON_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Forget the reason once it has been shown. */
+export function clearSignOutReason() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(SIGN_OUT_REASON_KEY);
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 /**
@@ -138,9 +167,9 @@ function syncFromStorage() {
   const session = readSession();
   const nextUserId = session?.user?.id ?? null;
 
-  // Another tab signed in as a different person. Swapping the user under an
-  // open page would save drafts as one user while API calls run as another,
-  // so reload from a clean state instead. `replace`, not `assign`: the page
+  // A later page in this tab signed in as a different person. Swapping the
+  // user under an open page would save drafts as one user while API calls run
+  // as another, so reload from a clean state instead. `replace`, not `assign`: the page
   // being left belongs to the previous user and must not stay in history as
   // a Back target for the new one.
   if (tabUserId && nextUserId && nextUserId !== tabUserId) {
@@ -155,21 +184,23 @@ function syncFromStorage() {
   }
 }
 
-// Keep tabs in sync: a login or logout in one tab is mirrored in the others.
 if (typeof window !== "undefined") {
-  tabUserId = readSession()?.user?.id ?? null;
+  // Sessions used to live in localStorage for up to seven days. Drop any left
+  // over from then, so the switch really ends them instead of leaving a live
+  // token on the disk.
+  try {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    /* storage unavailable */
+  }
 
-  window.addEventListener("storage", (e) => {
-    if (e.key !== SESSION_STORAGE_KEY && e.key !== null) return;
-    syncFromStorage();
-  });
+  tabUserId = readSession()?.user?.id ?? null;
 
   // Back/Forward can restore a whole earlier page from the browser's
   // back/forward cache -- its memory included, so it still believes whoever
-  // was signed in when it was left. A sign-out made since then (in a page
-  // loaded later in this tab, or in another tab) reaches it as a `storage`
-  // event only in some browsers, so re-read the stored session on every
-  // restore rather than trust that.
+  // was signed in when it was left. A sign-out made since then, in a page
+  // loaded later in this tab, sends it no event at all, so re-read the stored
+  // session on every restore.
   window.addEventListener("pageshow", (e) => {
     if (e.persisted) syncFromStorage();
   });

@@ -82,6 +82,7 @@ class SettingsTests(unittest.TestCase):
         values = settings_for()
         self.assertEqual(values.session_max_age_days, 30)
         self.assertEqual(values.access_token_expire_minutes, 60 * 24 * 7)
+        self.assertEqual(values.session_idle_minutes, 30)
         self.assertTrue(values.rate_limit_enabled)
 
 

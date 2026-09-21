@@ -35,13 +35,13 @@ async function run() {
     await page1.waitForSelector('a:has-text("Create New Event")', { timeout: 10000 });
     console.log("Teacher dashboard UI loaded completely!");
 
-    // Verify localStorage has valid session
+    // Verify sessionStorage has valid session
     const sessionData = await page1.evaluate(() => {
-      return localStorage.getItem("cc_auth_session");
+      return sessionStorage.getItem("cc_auth_session");
     });
     console.log("Stored session exists:", !!sessionData);
     if (!sessionData) {
-      throw new Error("No session stored in localStorage after auto-verification!");
+      throw new Error("No session stored in sessionStorage after auto-verification!");
     }
     const parsed = JSON.parse(sessionData);
     console.log("Logged in user:", parsed?.user?.email, "Role:", parsed?.user?.role);

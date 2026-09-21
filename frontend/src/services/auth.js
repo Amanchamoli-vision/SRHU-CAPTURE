@@ -36,26 +36,36 @@ export async function signIn(email, password) {
     body: { email, password },
   });
 
+  // A session can now end without a sign-out (browser closed, idle), which
+  // never ran clearUserCaches; do it here so the next person starts clean.
+  clearUserCaches();
   const session = writeSession(sessionFromTokenResponse(data), "SIGNED_IN");
 
   return { user: data.user, session };
 }
 
 /**
- * Sign out: ask the server to invalidate the token (best effort), then forget
- * it locally along with cached per-user data. Drafts are kept on purpose.
+ * Sign out: forget the token here at once, along with cached per-user data
+ * (drafts are kept on purpose), then ask the server to invalidate it.
+ *
+ * Local first, so the page is signed out in the same task that asked -- a
+ * Back step onto the sign-in page then never renders a signed-in frame while
+ * the server answers. The token is sent explicitly because it is no longer
+ * stored by then.
  */
 export async function signOut() {
+  const token = getAccessToken();
+  clearUserCaches();
+  clearSession();
+  if (!token) return;
   try {
-    if (getAccessToken()) {
-      // refresh: false -- no point renewing a token we are about to revoke.
-      await apiFetch("/auth/logout", { method: "POST", refresh: false });
-    }
+    await apiFetch("/auth/logout", {
+      method: "POST",
+      auth: false,
+      headers: { Authorization: `Bearer ${token}` },
+    });
   } catch {
-    /* offline or already invalid: clearing locally is what matters here */
-  } finally {
-    clearUserCaches();
-    clearSession();
+    /* offline or already invalid: it expires on its own after the idle limit */
   }
 }
 
@@ -95,8 +105,8 @@ export async function fetchCurrentUser() {
   try {
     const data = await apiJson("/auth/me");
     const user = data?.user || null;
-    // Signed out -- here or in another tab -- or signed in as someone else
-    // while /auth/me was answering. The profile belongs to a session that is
+    // Signed out, or signed in as someone else, while /auth/me was
+    // answering. The profile belongs to a session that is
     // gone; handing it back would sign the page in again with no token.
     const current = readSession();
     if (!user || !current) return null;
