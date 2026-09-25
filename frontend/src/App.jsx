@@ -43,6 +43,7 @@ const DeanAllEvents = lazy(() => import("./pages/dean/AllEvents"));
 const DeanArchive = lazy(() => import("./pages/dean/Archive"));
 const DeanEventDetails = lazy(() => import("./pages/dean/EventDetails"));
 const DeanProfile = lazy(() => import("./pages/dean/Profile"));
+const DeanTeachers = lazy(() => import("./pages/dean/Teachers"));
 
 // Super Admin
 const SuperAdminDashboard = lazy(
@@ -192,6 +193,15 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={["dean"]}>
                   <DeanEventDetails />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/dean/teachers"
+              element={
+                <ProtectedRoute allowedRoles={["dean"]}>
+                  <DeanTeachers />
                 </ProtectedRoute>
               }
             />

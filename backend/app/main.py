@@ -8,7 +8,7 @@ from starlette.datastructures import MutableHeaders
 
 from app.config import settings
 from app.database import ensure_indexes, ping
-from app.routers import auth, directory, events, files, reports, superadmin, users
+from app.routers import auth, dean_teachers, directory, events, files, reports, superadmin, users
 
 
 # Show the application's own log lines (registration, email_sent, ...) next to
@@ -169,6 +169,9 @@ app.include_router(events.router)
 
 # Dean Report APIs
 app.include_router(reports.router)
+
+# Dean management of Teacher accounts (/dean/teachers)
+app.include_router(dean_teachers.router)
 
 # Uploaded files served from GridFS
 app.include_router(files.router)
