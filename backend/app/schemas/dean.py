@@ -64,3 +64,36 @@ class DeanUpdateTeacherRequest(BaseModel):
 
 class DeanSendCredentialsRequest(BaseModel):
     user_ids: list[str] = Field(min_length=1, max_length=MAX_BULK_CREDENTIALS)
+
+
+# Matches teacher_import.MAX_ROWS: one file is imported in one request.
+MAX_IMPORT_TEACHERS = 500
+
+
+class DeanImportTeacherItem(BaseModel):
+    """One teacher from an imported roster, as confirmed on the preview screen."""
+
+    name: str | None = Field(default=None, max_length=120)
+    email: EmailStr
+    phone: str | None = Field(default=None, max_length=24)
+    department: str | None = Field(default=None, max_length=120)
+    designation: str | None = Field(default=None, max_length=120)
+
+    @field_validator("email")
+    @classmethod
+    def fold_email(cls, value: str) -> str:
+        return str(value).casefold()
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone_field(cls, value: str | None) -> str | None:
+        return normalize_phone(value)
+
+    @field_validator("name", "department", "designation")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _collapse(value)
+
+
+class DeanImportTeachersRequest(BaseModel):
+    teachers: list[DeanImportTeacherItem] = Field(min_length=1, max_length=MAX_IMPORT_TEACHERS)

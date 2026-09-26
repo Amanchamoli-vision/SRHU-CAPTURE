@@ -164,6 +164,14 @@ export const IconCheck = (p) => (
   </svg>
 );
 
+export const IconMoreHorizontal = (p) => (
+  <svg {...bold} {...p}>
+    <circle cx="5" cy="12" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />
+  </svg>
+);
+
 export const IconX = (p) => (
   <svg {...bold} {...p}>
     <path d="M18 6 6 18M6 6l12 12" />

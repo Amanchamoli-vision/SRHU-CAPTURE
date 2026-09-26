@@ -25,19 +25,25 @@ carry ``details.via = "dean_panel"`` so the Dean panel can list its own.
 
 import logging
 import re
+import secrets
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
 from app.database import audit_logs, users
-from app.models.documents import USER_PRIVATE_FIELDS
+from app.models.documents import USER_PRIVATE_FIELDS, new_user_document
 from app.routers.auth import find_user_by_email
-from app.schemas.dean import DeanSendCredentialsRequest, DeanUpdateTeacherRequest
-from app.services import email_service
+from app.schemas.dean import (
+    DeanImportTeachersRequest,
+    DeanSendCredentialsRequest,
+    DeanUpdateTeacherRequest,
+)
+from app.services import email_service, teacher_import
 from app.services.audit_service import log_audit_event
 from app.services.storage_service import delete_user_cascade
 from app.utils.auth import dean_dep, public_user
@@ -66,6 +72,10 @@ CREDENTIALS_RESEND_COOLDOWN_MINUTES = 10
 
 STATUS_FILTERS = ("all", "active", "inactive", "pending")
 VERIFIED_FILTERS = ("all", "verified", "unverified")
+SOURCE_FILTERS = ("all", "imported", "registered")
+
+# Marks an account created from a Dean's Excel import.
+IMPORT_SOURCE = "dean_import"
 SORTS = {
     "newest": [("created_at", DESCENDING), ("_id", DESCENDING)],
     "oldest": [("created_at", ASCENDING), ("_id", ASCENDING)],
@@ -163,6 +173,7 @@ def list_teachers(
     # Named account_status, not status: `status` would shadow fastapi.status.
     account_status: str = Query(default="all", alias="status", max_length=20),
     verified: str = Query(default="all", max_length=20),
+    source: str = Query(default="all", max_length=20),
     sort: str = Query(default="newest", max_length=20),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
@@ -184,6 +195,12 @@ def list_teachers(
         base["email_verified"] = True
     elif verified_key == "unverified":
         base["email_verified"] = {"$ne": True}
+
+    source_key = source.strip().lower()
+    if source_key == "imported":
+        base["onboarded_via"] = IMPORT_SOURCE
+    elif source_key == "registered":
+        base["onboarded_via"] = {"$ne": IMPORT_SOURCE}
 
     # Tab counts under every other filter, so each number is what clicking
     # that tab would show.
@@ -235,6 +252,153 @@ def teacher_management_activity(limit: int = Query(default=20, ge=1, le=100)):
         .limit(limit)
     )
     return {"success": True, "logs": serialize_many(cursor)}
+
+
+# ============================================================
+# IMPORT FROM EXCEL / CSV
+# ============================================================
+
+@router.post("/import/preview")
+async def preview_teacher_import(file: UploadFile = File(...)):
+    """Read a roster file and say what importing each row would do.
+
+    Nothing is written. Every row comes back with a status: ``new`` (an
+    account will be created), ``exists`` (an account with that email is
+    already there -- of any role, so a Dean or superadmin address is never
+    turned into a Teacher), ``duplicate`` (repeated in the file) or
+    ``invalid`` (with why).
+    """
+    # One byte over the limit is enough to know it is too large, without
+    # reading an arbitrarily large upload into memory.
+    content = await file.read(teacher_import.MAX_FILE_BYTES + 1)
+    try:
+        rows = teacher_import.read_rows(file.filename, content)
+        entries, truncated = teacher_import.parse_roster(rows)
+    except teacher_import.ImportFileError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
+
+    if not entries:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No teachers were found in this file. It needs at least an Email column.",
+        )
+
+    for entry in entries:
+        if entry["status"] != "ok":
+            continue
+        existing = find_user_by_email(entry["email"])
+        if existing:
+            entry["status"] = "exists"
+            entry["reason"] = (
+                "Already in the teacher list."
+                if existing.get("role") == "teacher"
+                else "This email belongs to an account that is not a Teacher."
+            )
+        else:
+            entry["status"] = "new"
+
+    counts = {key: 0 for key in ("new", "exists", "duplicate", "invalid")}
+    for entry in entries:
+        counts[entry["status"]] += 1
+
+    return {
+        "success": True,
+        "filename": file.filename,
+        "rows": entries,
+        "total": len(entries),
+        "counts": counts,
+        "truncated": truncated,
+        "max_rows": teacher_import.MAX_ROWS,
+        "email_configured": email_service.is_configured(),
+    }
+
+
+@router.post("/import")
+def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dean_dep)):
+    """Create Teacher accounts for the rows the Dean confirmed.
+
+    Every row is checked again here -- the preview is advisory, and time has
+    passed since it. An address with any existing account is skipped, never
+    overwritten.
+
+    The accounts have no usable password: the hash below is of a random
+    secret that is discarded at once, so nobody can sign in until the Dean
+    sends credentials (POST /dean/teachers/send-credentials, which the panel
+    does straight after when "send email" is on) or the teacher uses Forgot
+    password. It is a real bcrypt hash rather than none so that signing in to
+    one of these accounts costs the same time as any other and does not reveal
+    that it exists. One hash is shared by the whole batch: hashing 500 would
+    take minutes, and the secret behind it is unknowable either way.
+    """
+    unusable_hash = hash_password(secrets.token_urlsafe(32))
+    now = utc_now()
+
+    results: list[dict] = []
+    seen: set[str] = set()
+    for item in payload.teachers:
+        email = item.email
+        if email in seen:
+            results.append({"email": email, "name": item.name, "status": "skipped",
+                            "reason": "Repeated in this import.", "user_id": None})
+            continue
+        seen.add(email)
+
+        if find_user_by_email(email):
+            results.append({"email": email, "name": item.name, "status": "skipped",
+                            "reason": "An account with this email already exists.", "user_id": None})
+            continue
+
+        name = item.name or teacher_import.name_from_email(email)
+        document = new_user_document(
+            name=name,
+            email=email,
+            password_hash=unusable_hash,
+            role="teacher",
+            # Nothing has proved this mailbox yet. Delivering credentials, or
+            # completing a password reset, marks it verified.
+            email_verified=False,
+            must_change_password=True,
+            phone=item.phone,
+            department=item.department,
+            designation=item.designation,
+        )
+        document.update({
+            "onboarded_via": IMPORT_SOURCE,
+            "imported_by": dean.get("id"),
+            "imported_at": now,
+        })
+
+        try:
+            inserted = users.insert_one(document)
+        except DuplicateKeyError:
+            results.append({"email": email, "name": name, "status": "skipped",
+                            "reason": "An account with this email already exists.", "user_id": None})
+            continue
+
+        results.append({"email": email, "name": name, "status": "created",
+                        "reason": None, "user_id": str(inserted.inserted_id)})
+
+    created = [r for r in results if r["status"] == "created"]
+    skipped = [r for r in results if r["status"] == "skipped"]
+
+    _audit(dean, "teachers_imported", None, {
+        "result": "success" if created else "failed",
+        "requested_count": len(results),
+        "created_count": len(created),
+        "skipped_count": len(skipped),
+        "results": [
+            {"user_id": r["user_id"], "email": r["email"], "status": r["status"], "reason": r["reason"]}
+            for r in results
+        ],
+    })
+
+    return {
+        "success": True,
+        "requested_count": len(results),
+        "created_count": len(created),
+        "skipped_count": len(skipped),
+        "results": results,
+    }
 
 
 # ============================================================

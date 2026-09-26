@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson, isAbortError } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
@@ -11,6 +12,9 @@ import { PER_PAGE_OPTIONS, DEFAULT_PER_PAGE } from "../../hooks/useTableQuery";
 import { ROLE_TRACK, initialsOf } from "../../components/common/roles";
 import { DESIGNATION_SUGGESTIONS } from "../../utils/designations";
 import { isValidPhone, normalizePhoneInput } from "../../utils/phone";
+import { sendCredentialsInChunks } from "../../services/deanTeachers";
+import CredentialReport from "../../components/dean/CredentialReport";
+import ImportTeachersModal from "../../components/dean/ImportTeachersModal";
 import {
   IconActivity,
   IconAlertTriangle,
@@ -22,9 +26,11 @@ import {
   IconInbox,
   IconKey,
   IconMail,
+  IconMoreHorizontal,
   IconRefresh,
   IconSearch,
   IconTrash,
+  IconUpload,
   IconUsers,
   IconX,
   IconXCircle,
@@ -55,6 +61,12 @@ const VERIFIED_OPTIONS = [
   { key: "unverified", label: "Email not verified" },
 ];
 
+const SOURCE_OPTIONS = [
+  { key: "all", label: "Any source" },
+  { key: "imported", label: "Imported from Excel" },
+  { key: "registered", label: "Registered / onboarded" },
+];
+
 const SORT_OPTIONS = [
   { key: "newest", label: "Newest first" },
   { key: "oldest", label: "Oldest first" },
@@ -62,12 +74,16 @@ const SORT_OPTIONS = [
   { key: "last_login", label: "Last login" },
 ];
 
-const TABLE_COLUMNS = ["Teacher", "Mobile", "Status", "Email", "Created", "Last login", "Actions"];
-
-// A bulk send is split into requests of this many, so each request finishes
-// well inside a proxy timeout while emails are delivered synchronously. The
-// server caps a request at 25.
-const BULK_CHUNK = 10;
+// The desktop table is fixed-layout: every column but Teacher has a set width
+// and Teacher takes what is left, truncating long emails instead of pushing
+// the table past the screen. Status gathers what used to be three columns.
+const TABLE_COLUMNS = [
+  { label: "Teacher", width: "" },
+  { label: "Mobile", width: "w-28" },
+  { label: "Status", width: "w-56" },
+  { label: "Last login", width: "w-40" },
+  { label: "Actions", width: "w-32", align: "text-right" },
+];
 
 const TRACK_OK = "#10B981";
 const TRACK_ERR = "#EF4444";
@@ -188,6 +204,9 @@ export default function Teachers() {
   const verifiedFilter = VERIFIED_OPTIONS.some((o) => o.key === searchParams.get("verified"))
     ? searchParams.get("verified")
     : "all";
+  const sourceFilter = SOURCE_OPTIONS.some((o) => o.key === searchParams.get("source"))
+    ? searchParams.get("source")
+    : "all";
   const sort = SORT_OPTIONS.some((o) => o.key === searchParams.get("sort"))
     ? searchParams.get("sort")
     : "newest";
@@ -243,10 +262,11 @@ export default function Teachers() {
     const params = new URLSearchParams();
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (verifiedFilter !== "all") params.set("verified", verifiedFilter);
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
     if (urlQ) params.set("q", urlQ);
     params.set("sort", sort);
     return params;
-  }, [statusFilter, verifiedFilter, urlQ, sort]);
+  }, [statusFilter, verifiedFilter, sourceFilter, urlQ, sort]);
 
   const loadTeachers = useCallback(async () => {
     loadControllerRef.current?.abort();
@@ -391,6 +411,9 @@ export default function Teachers() {
   // ------------------------------------------------------------ edit
   const [editing, setEditing] = useState(null);
 
+  // ------------------------------------------------------------ import
+  const [importOpen, setImportOpen] = useState(false);
+
   // ------------------------------------------------------------ bulk send
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [bulkRun, setBulkRun] = useState(null); // { done, total, results, running }
@@ -401,44 +424,18 @@ export default function Teachers() {
     setBulkConfirmOpen(false);
     setBulkRun({ done: 0, total: ids.length, results: [], running: true, error: "" });
 
-    const results = [];
-    let fatal = "";
-    for (let i = 0; i < ids.length; i += BULK_CHUNK) {
-      const chunk = ids.slice(i, i + BULK_CHUNK);
-      try {
-        const data = await apiJson("/dean/teachers/send-credentials", {
-          method: "POST",
-          body: { user_ids: chunk },
-        });
-        results.push(...(data?.results || []));
-      } catch (err) {
-        if (err?.status === 401) {
-          handleApiError(err);
-          return;
-        }
-        // The rest were never attempted; say so per teacher rather than
-        // leaving them out of the report.
-        fatal = err?.message || "The request failed.";
-        ids.slice(i).forEach((id) => {
-          const t = selected.get(id);
-          results.push({
-            user_id: id,
-            name: t?.name,
-            email: t?.email,
-            status: "failed",
-            reason: `Not attempted: ${fatal}`,
-          });
-        });
-        break;
-      }
-      setBulkRun((prev) => ({ ...prev, done: Math.min(ids.length, i + chunk.length), results: [...results] }));
+    let withNames;
+    let fatal;
+    try {
+      ({ results: withNames, error: fatal } = await sendCredentialsInChunks(ids, {
+        lookup: (id) => selected.get(id),
+        onProgress: (done, results) => setBulkRun((prev) => ({ ...prev, done, results })),
+      }));
+    } catch (err) {
+      setBulkRun(null);
+      handleApiError(err);
+      return;
     }
-
-    // Fill in names the server could not (ids that were not teachers).
-    const withNames = results.map((r) => {
-      const t = selected.get(r.user_id);
-      return { ...r, name: r.name ?? t?.name ?? null, email: r.email ?? t?.email ?? null };
-    });
     setBulkRun({ done: ids.length, total: ids.length, results: withNames, running: false, error: fatal });
 
     // Anyone who was sent credentials is done; keep the rest selected so the
@@ -457,7 +454,8 @@ export default function Teachers() {
   };
 
   const pendingAction = pending ? ACTIONS[pending.kind] : null;
-  const filtersActive = Boolean(urlQ) || statusFilter !== "all" || verifiedFilter !== "all";
+  const filtersActive =
+    Boolean(urlQ) || statusFilter !== "all" || verifiedFilter !== "all" || sourceFilter !== "all";
   const selectedCount = selected.size;
 
   // ------------------------------------------------------------ UI
@@ -475,10 +473,16 @@ export default function Teachers() {
           accent="Management"
           subtitle="Every Teacher account at Swami Rama Himalayan University. Send login credentials, reset passwords, edit profiles, manage access and promote teachers to Dean."
           actions={
-            <button type="button" onClick={refreshAll} disabled={loading} className="btn btn-ghost">
-              {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
-              Refresh
-            </button>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <button type="button" onClick={refreshAll} disabled={loading} className="btn btn-ghost">
+                {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
+                Refresh
+              </button>
+              <button type="button" onClick={() => setImportOpen(true)} className="btn btn-primary">
+                <IconUpload />
+                Import from Excel
+              </button>
+            </div>
           }
         />
 
@@ -585,6 +589,16 @@ export default function Teachers() {
               ))}
             </select>
             <select
+              value={sourceFilter}
+              onChange={(e) => updateParams({ source: e.target.value === "all" ? null : e.target.value })}
+              aria-label="Filter by how the teacher was added"
+              className="input h-9 w-auto py-0 text-sm"
+            >
+              {SOURCE_OPTIONS.map((o) => (
+                <option key={o.key} value={o.key}>{o.label}</option>
+              ))}
+            </select>
+            <select
               value={sort}
               onChange={(e) => updateParams({ sort: e.target.value === "newest" ? null : e.target.value })}
               aria-label="Sort teachers"
@@ -599,7 +613,7 @@ export default function Teachers() {
                 type="button"
                 onClick={() => {
                   setSearchDraft("");
-                  updateParams({ q: null, status: null, verified: null });
+                  updateParams({ q: null, status: null, verified: null, source: null });
                 }}
                 className="btn btn-ghost btn-sm"
               >
@@ -654,7 +668,7 @@ export default function Teachers() {
         <section className="glass reveal mt-4 overflow-hidden" style={{ "--i": 2 }}>
           <div className="flex items-center justify-between gap-3 border-b hairline px-5 py-4">
             <div>
-              <p className="eyebrow">Teachers</p>
+              <p className="eyebrow">Role · Teacher</p>
               <h2 className="h3 text-ink">{STATUS_TABS.find((t) => t.key === statusFilter).label}</h2>
             </div>
             {!loading && (
@@ -687,8 +701,9 @@ export default function Teachers() {
             </div>
           ) : (
             <>
-              {/* Phone: one card per teacher, with a page-level select-all. */}
-              <div className="flex items-center gap-3 border-b hairline px-5 py-2.5 md:hidden">
+              {/* Below 1280px: one card per teacher (two a row on a tablet),
+                  with a page-level select-all. */}
+              <div className="flex items-center gap-3 border-b hairline px-5 py-2.5 xl:hidden">
                 <SelectBox
                   checked={allOnPageSelected}
                   indeterminate={!allOnPageSelected && someOnPageSelected}
@@ -697,9 +712,12 @@ export default function Teachers() {
                 />
                 <span className="text-xs text-muted">Select all on this page</span>
               </div>
-              <ul className="divide-y divide-line/8 md:hidden">
+              <ul className={`grid md:grid-cols-2 xl:hidden ${loading ? "opacity-60" : ""}`}>
                 {teachers.map((t) => (
-                  <li key={t.id} className="px-5 py-4">
+                  <li
+                    key={t.id}
+                    className={`border-b hairline px-5 py-4 md:odd:border-r ${selected.has(t.id) ? "bg-accent/5" : ""}`}
+                  >
                     <div className="flex items-start gap-3">
                       <SelectBox
                         checked={selected.has(t.id)}
@@ -713,11 +731,12 @@ export default function Teachers() {
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
                           <ActiveChip teacher={t} />
                           <VerifiedChip teacher={t} />
+                          <SourceChips teacher={t} />
                         </div>
                         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted">
                           {t.phone && <span>Mobile {t.phone}</span>}
                           <span>Created {formatDate(t.created_at)}</span>
-                          <span>Last login {formatDate(t.last_sign_in_at)}</span>
+                          <span>Last login {t.last_sign_in_at ? formatDate(t.last_sign_in_at) : "Never"}</span>
                         </div>
                       </div>
                     </div>
@@ -733,12 +752,12 @@ export default function Teachers() {
                 ))}
               </ul>
 
-              {/* Desktop table. */}
-              <div className="hidden overflow-x-auto md:block">
-                <table className="w-full text-left">
+              {/* 1280px and up: a table that fits the screen without scrolling sideways. */}
+              <div className="hidden xl:block">
+                <table className="w-full table-fixed text-left">
                   <thead>
                     <tr className="border-b hairline bg-raised/40">
-                      <th scope="col" className="w-10 py-3 pl-5 pr-1">
+                      <th scope="col" className="w-12 py-3 pl-5 pr-1">
                         <SelectBox
                           checked={allOnPageSelected}
                           indeterminate={!allOnPageSelected && someOnPageSelected}
@@ -746,15 +765,13 @@ export default function Teachers() {
                           label="Select all teachers on this page"
                         />
                       </th>
-                      {TABLE_COLUMNS.map((col, idx) => (
+                      {TABLE_COLUMNS.map((col) => (
                         <th
-                          key={col}
+                          key={col.label}
                           scope="col"
-                          className={`whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted ${
-                            idx === TABLE_COLUMNS.length - 1 ? "text-right" : ""
-                          }`}
+                          className={`whitespace-nowrap px-3 py-3 text-xs font-semibold uppercase tracking-wider text-muted ${col.width} ${col.align || ""}`}
                         >
-                          {col}
+                          {col.label}
                         </th>
                       ))}
                     </tr>
@@ -765,53 +782,55 @@ export default function Teachers() {
                         key={t.id}
                         className={`transition hover:bg-raised/40 ${selected.has(t.id) ? "bg-accent/5" : ""}`}
                       >
-                        <td className="py-3.5 pl-5 pr-1 align-middle">
+                        <td className="py-3 pl-5 pr-1 align-middle">
                           <SelectBox
                             checked={selected.has(t.id)}
                             onChange={() => toggleOne(t)}
                             label={`Select ${nameOf(t)}`}
                           />
                         </td>
-                        <td className="px-4 py-3.5">
-                          <div className="flex items-center gap-3">
+                        <td className="px-3 py-3">
+                          <div className="flex min-w-0 items-center gap-3">
                             <Avatar teacher={t} />
                             <div className="min-w-0">
-                              <p className="font-display text-sm font-semibold text-ink">{t.name || "Unnamed"}</p>
-                              <p className="prose-muted truncate text-xs">{t.email}</p>
+                              <p className="truncate font-display text-sm font-semibold text-ink" title={t.name || undefined}>
+                                {t.name || "Unnamed"}
+                              </p>
+                              <p className="prose-muted truncate text-xs" title={t.email}>{t.email}</p>
                               {(t.designation || t.department) && (
-                                <p className="prose-muted mt-0.5 truncate text-[11px]">
+                                <p
+                                  className="prose-muted mt-0.5 truncate text-[11px]"
+                                  title={[t.designation, t.department].filter(Boolean).join(" · ")}
+                                >
                                   {[t.designation, t.department].filter(Boolean).join(" · ")}
                                 </p>
                               )}
                             </div>
                           </div>
                         </td>
-                        <td className="num whitespace-nowrap px-4 py-3.5 text-sm text-muted">{t.phone || "—"}</td>
-                        <td className="whitespace-nowrap px-4 py-3.5">
-                          <div className="flex flex-col items-start gap-1">
+                        <td className="num whitespace-nowrap px-3 py-3 text-sm text-muted">{t.phone || "—"}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-wrap gap-1">
                             <ActiveChip teacher={t} />
-                            <span className="text-[11px] text-muted">Role: Teacher</span>
+                            <VerifiedChip teacher={t} />
+                            <SourceChips teacher={t} />
                           </div>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3.5">
-                          <VerifiedChip teacher={t} />
-                        </td>
-                        <td className="num whitespace-nowrap px-4 py-3.5 text-sm text-muted">
-                          {formatDate(t.created_at)}
-                        </td>
-                        <td className="num whitespace-nowrap px-4 py-3.5 text-sm text-muted">
+                        <td className="whitespace-nowrap px-3 py-3 text-sm">
                           {t.last_sign_in_at ? (
-                            <span title={formatDateTime(t.last_sign_in_at) || undefined}>
+                            <p className="num text-ink" title={formatDateTime(t.last_sign_in_at) || undefined}>
                               {formatDate(t.last_sign_in_at)}
-                            </span>
+                            </p>
                           ) : (
-                            <span className="text-xs">Never</span>
+                            <p className="text-muted">Never</p>
                           )}
+                          <p className="text-[11px] text-muted">Joined {formatDate(t.created_at)}</p>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3.5 text-right">
+                        <td className="whitespace-nowrap px-3 py-3 pr-5 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <RowActions
                               teacher={t}
+                              compact
                               emailConfigured={emailConfigured}
                               onAct={openAction}
                               onEdit={setEditing}
@@ -942,8 +961,15 @@ export default function Teachers() {
           )
         }
       >
-        {bulkRun && <BulkReport run={bulkRun} />}
+        {bulkRun && <CredentialReport run={bulkRun} />}
       </Modal>
+
+      <ImportTeachersModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onDone={refreshAll}
+        onUnauthorized={() => navigate("/login", { replace: true })}
+      />
 
       <EditTeacherModal
         teacher={editing}
@@ -1020,6 +1046,32 @@ function ActiveChip({ teacher }) {
   );
 }
 
+/**
+ * "Imported" for an account created from an Excel import, and "Credentials
+ * not sent" while such an account has no way to sign in yet.
+ */
+function SourceChips({ teacher }) {
+  if (teacher.onboarded_via !== "dean_import") return null;
+  const awaiting = !teacher.credentials_sent_at && !teacher.last_sign_in_at;
+  return (
+    <>
+      <span className="chip chip-sm chip-track" style={{ "--track": ROLE_TRACK.teacher }}>
+        <IconUpload className="h-3 w-3" />
+        Imported
+      </span>
+      {awaiting && (
+        <span
+          className="chip chip-sm"
+          style={{ color: TRACK_WARN, borderColor: `${TRACK_WARN}55` }}
+          title="This teacher cannot sign in until login credentials are sent"
+        >
+          Credentials not sent
+        </span>
+      )}
+    </>
+  );
+}
+
 function VerifiedChip({ teacher }) {
   return teacher.email_verified ? (
     <span className="chip chip-sm border-ok/30 bg-ok/10 text-ok">
@@ -1046,11 +1098,61 @@ function TeacherSummary({ teacher }) {
   );
 }
 
-/** The actions a Teacher row offers; the server enforces the same rules. */
-function RowActions({ teacher, emailConfigured, onAct, onEdit }) {
+/**
+ * The actions a Teacher row offers; the server enforces the same rules.
+ *
+ * `compact` (the desktop table) keeps the two everyday actions as buttons and
+ * puts the rest in a "More actions" menu, so the row fits the screen. The
+ * cards have the room to show every action as a button.
+ */
+function RowActions({ teacher, emailConfigured, onAct, onEdit, compact = false }) {
   const active = isActive(teacher);
   const mailTitle = (label) => (emailConfigured ? label : `${label} (email is not configured)`);
   const btn = "btn btn-ghost btn-xs btn-icon";
+
+  if (compact) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => onAct("credentials", teacher)}
+          disabled={!active || !emailConfigured}
+          className={btn}
+          title={active ? mailTitle("Send login credentials") : "Activate the account first"}
+          aria-label="Send login credentials"
+        >
+          <IconMail className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={() => onEdit(teacher)} className={btn} title="Edit teacher" aria-label="Edit teacher">
+          <IconEdit className="h-4 w-4" />
+        </button>
+        <RowMenu
+          label={`More actions for ${nameOf(teacher)}`}
+          items={[
+            {
+              key: "reset",
+              label: "Send password reset link",
+              Icon: IconKey,
+              disabled: !active || !emailConfigured,
+              hint: !active ? "Activate the account first" : !emailConfigured ? "Email is not configured" : null,
+            },
+            {
+              key: "promote",
+              label: "Promote to Dean",
+              Icon: IconAward,
+              disabled: !active,
+              hint: !active ? "Activate the account first" : null,
+            },
+            active
+              ? { key: "deactivate", label: "Deactivate account", Icon: IconXCircle, danger: true }
+              : { key: "activate", label: "Reactivate account", Icon: IconCheck },
+            { key: "delete", label: "Delete account", Icon: IconTrash, danger: true },
+          ]}
+          onSelect={(key) => onAct(key, teacher)}
+        />
+      </>
+    );
+  }
 
   return (
     <>
@@ -1121,89 +1223,123 @@ function RowActions({ teacher, emailConfigured, onAct, onEdit }) {
   );
 }
 
-const RESULT_STYLE = {
-  sent: { label: "Sent", track: TRACK_OK },
-  failed: { label: "Failed", track: TRACK_ERR },
-  skipped: { label: "Skipped", track: TRACK_WARN },
-};
+/**
+ * A row's overflow menu. Rendered into <body> with fixed positioning so the
+ * table's own overflow can never clip it, and flipped above the button when
+ * there is no room below. It follows the button while the page scrolls or
+ * resizes (closing on scroll made it vanish whenever the browser nudged the
+ * page, e.g. as the list reloaded). Escape, Tab and a click outside close
+ * it; the arrow keys move between items.
+ */
+function RowMenu({ label, items, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+  const WIDTH = 232;
 
-function BulkReport({ run }) {
-  const tally = { sent: 0, failed: 0, skipped: 0 };
-  run.results.forEach((r) => { tally[r.status] = (tally[r.status] || 0) + 1; });
-  const pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
-  const order = { failed: 0, skipped: 1, sent: 2 };
-  const rows = [...run.results].sort((a, b) => order[a.status] - order[b.status]);
+  const place = useCallback(() => {
+    const button = buttonRef.current?.getBoundingClientRect();
+    if (!button) return;
+    const height = menuRef.current?.offsetHeight || 0;
+    const below = button.bottom + 6;
+    const top = below + height > window.innerHeight - 8 ? Math.max(8, button.top - height - 6) : below;
+    const left = Math.min(Math.max(8, button.right - WIDTH), window.innerWidth - WIDTH - 8);
+    setPos({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, place]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const itemsOf = () => [...(menuRef.current?.querySelectorAll('[role="menuitem"]:not([disabled])') || [])];
+    itemsOf()[0]?.focus({ preventScroll: true });
+
+    const close = (refocus = false) => {
+      setOpen(false);
+      if (refocus) buttonRef.current?.focus();
+    };
+    const onPointer = (e) => {
+      if (!menuRef.current?.contains(e.target) && !buttonRef.current?.contains(e.target)) close();
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(true);
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const list = itemsOf();
+        const at = list.indexOf(document.activeElement);
+        const next = e.key === "ArrowDown" ? (at + 1) % list.length : (at - 1 + list.length) % list.length;
+        list[next]?.focus({ preventScroll: true });
+      } else if (e.key === "Tab") {
+        close();
+      }
+    };
+    const onScroll = () => place();
+
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [open, place]);
 
   return (
-    <div className="space-y-5">
-      {run.running && (
-        <div>
-          <div className="progress-track">
-            <span className="progress-bar" style={{ width: `${pct}%` }} />
-          </div>
-          <p className="prose-muted mt-2 text-xs">
-            Processed {run.done} of {run.total}. Keep this page open until it finishes.
-          </p>
-        </div>
-      )}
-
-      {run.error && (
-        <div className="toast toast-err text-sm" role="alert">
-          <IconAlertTriangle className="h-4 w-4 shrink-0 text-err" />
-          <span>Stopped early: {run.error}</span>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Tally label="Selected" value={run.total} track={ROLE_TRACK.teacher} />
-        <Tally label="Sent" value={tally.sent} track={TRACK_OK} />
-        <Tally label="Failed" value={tally.failed} track={TRACK_ERR} />
-        <Tally label="Skipped" value={tally.skipped} track={TRACK_WARN} />
-      </div>
-
-      {rows.length > 0 && (
-        <div className="overflow-hidden rounded-2xl border hairline">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b hairline bg-raised/40">
-                <th scope="col" className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted">Teacher</th>
-                <th scope="col" className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted">Result</th>
-                <th scope="col" className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted">Reason</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line/8">
-              {rows.map((r) => {
-                const style = RESULT_STYLE[r.status] || RESULT_STYLE.failed;
-                return (
-                  <tr key={r.user_id}>
-                    <td className="px-4 py-2.5">
-                      <p className="font-medium text-ink">{r.name || "Unknown account"}</p>
-                      {r.email && <p className="text-xs text-muted">{r.email}</p>}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className="chip chip-sm chip-track" style={{ "--track": style.track }}>
-                        <span className="dot dot-sm" />
-                        {style.label}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-muted">{r.reason || "—"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Tally({ label, value, track }) {
-  return (
-    <div className="rounded-2xl border hairline bg-raised/40 p-3" style={{ "--track": track }}>
-      <p className="text-xs text-muted">{label}</p>
-      <p className="stat-num mt-0.5 text-2xl" style={{ color: track }}>{value}</p>
-    </div>
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title="More actions"
+        className={`btn btn-ghost btn-xs btn-icon ${open ? "bg-raised" : ""}`}
+      >
+        <IconMoreHorizontal className="h-4 w-4" />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            className="hv-popover glass glass-blur fixed z-50 rounded-xl p-1.5 text-left"
+            style={{ top: pos.top, left: pos.left, width: WIDTH }}
+          >
+            {items.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                title={item.hint || undefined}
+                onClick={() => {
+                  setOpen(false);
+                  onSelect(item.key);
+                }}
+                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-45 ${
+                  item.danger
+                    ? "text-err hover:bg-err/10 focus-visible:bg-err/10"
+                    : "text-ink hover:bg-raised focus-visible:bg-raised"
+                }`}
+              >
+                <item.Icon className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -1373,6 +1509,7 @@ function EditTeacherModal({ teacher, onClose, onSaved, onUnauthorized }) {
 const ACTIVITY_LABEL = {
   teacher_credentials_sent: "Sent login credentials",
   teachers_credentials_sent: "Bulk sent login credentials",
+  teachers_imported: "Imported teachers from Excel",
   password_reset_link_sent: "Sent password reset link",
   user_profile_updated: "Edited teacher",
   user_deleted: "Deleted teacher",
@@ -1432,7 +1569,9 @@ function ActivityPanel({ refreshKey }) {
                 const failed = d.result === "failed";
                 const summary = log.action === "teachers_credentials_sent"
                   ? `${d.sent_count ?? 0} sent · ${d.failed_count ?? 0} failed · ${d.skipped_count ?? 0} skipped`
-                  : d.target_name || d.target_email || "";
+                  : log.action === "teachers_imported"
+                    ? `${d.created_count ?? 0} created · ${d.skipped_count ?? 0} skipped`
+                    : d.target_name || d.target_email || "";
                 return (
                   <li key={log.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
                     <div className="min-w-0">
