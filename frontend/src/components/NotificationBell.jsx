@@ -42,7 +42,7 @@ const TYPE_META = {
   // entry here it fell through to the generic bell with no label of its own.
   revoked: { Icon: IconXCircle, track: trackOf("revoked"), label: "Revoked" },
   needs_changes: { Icon: IconAlertTriangle, track: trackOf("pending"), label: "Changes" },
-  progress: { Icon: IconActivity, track: trackOf("in_progress"), label: "Progress" },
+  progress: { Icon: IconActivity, track: trackOf("completed"), label: "Progress" },
   published: { Icon: IconLayers, track: trackOf("published"), label: "Published" },
   reminder: { Icon: IconClock, track: "#0EA5E9", label: "Reminders" },
   submitted: { Icon: IconInbox, track: trackOf("pending"), label: "New" },

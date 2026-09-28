@@ -4,45 +4,31 @@
 
 import { apiJson, apiUpload } from "./api";
 
-// Bulk invitations are split into requests of this many, so each request finishes
-// well inside a proxy timeout while emails are delivered synchronously. The
-// server caps a request at 25.
-export const INVITE_CHUNK = 10;
-
 /**
- * Send invitations (a one-time "set your password" link) to these teacher ids,
- * a chunk at a time.
+ * Send invitations (a one-time "set your password" link) to these teacher ids
+ * in one request. The server sends them in parallel and reports every one.
  *
  * Resolves with `{ results, error }`: one result per id (`sent`, `skipped` or
- * `failed`, with a reason), and the message that stopped the run early, if
- * any -- ids after that point are reported as failed "Not attempted" rather
- * than left out. A 401 is re-thrown so the caller can send the Dean to sign in.
+ * `failed`, with a reason), and -- if the request itself failed -- its
+ * message, with every id reported as failed "Not attempted" rather than left
+ * out. A 401 is re-thrown so the caller can send the Dean to sign in.
  *
  * `lookup(id)` fills in a name and email the server could not (an id that
- * turned out not to be a teacher); `onProgress(done, results)` runs after
- * each chunk.
+ * turned out not to be a teacher).
  */
-export async function sendInvitesInChunks(ids, { lookup, onProgress } = {}) {
-  const results = [];
+export async function sendInvites(ids, { lookup } = {}) {
+  let results = [];
   let error = "";
-
-  for (let i = 0; i < ids.length; i += INVITE_CHUNK) {
-    const chunk = ids.slice(i, i + INVITE_CHUNK);
-    try {
-      const data = await apiJson("/dean/teachers/invite", {
-        method: "POST",
-        body: { user_ids: chunk },
-      });
-      results.push(...(data?.results || []));
-    } catch (err) {
-      if (err?.status === 401) throw err;
-      error = err?.message || "The request failed.";
-      ids.slice(i).forEach((id) => {
-        results.push({ user_id: id, status: "failed", reason: `Not attempted: ${error}` });
-      });
-      break;
-    }
-    onProgress?.(Math.min(ids.length, i + chunk.length), [...results]);
+  try {
+    const data = await apiJson("/dean/teachers/invite", {
+      method: "POST",
+      body: { user_ids: ids },
+    });
+    results = data?.results || [];
+  } catch (err) {
+    if (err?.status === 401) throw err;
+    error = err?.message || "The request failed.";
+    results = ids.map((id) => ({ user_id: id, status: "failed", reason: `Not attempted: ${error}` }));
   }
 
   const withNames = results.map((r) => {
@@ -50,6 +36,28 @@ export async function sendInvitesInChunks(ids, { lookup, onProgress } = {}) {
     return { ...r, name: r.name ?? known?.name ?? null, email: r.email ?? known?.email ?? null };
   });
   return { results: withNames, error };
+}
+
+/** Every teacher matching the list's filters -- ids, names, emails -- in one request. */
+export async function fetchTeacherIds(filterParams) {
+  const data = await apiJson(`/dean/teachers/ids?${filterParams}`);
+  return data?.teachers || [];
+}
+
+/** Remove or delete the selected teachers in one request (`kind`: "remove" | "delete"). */
+export function bulkTeachers(kind, ids) {
+  return apiJson(`/dean/teachers/bulk-${kind}`, { method: "POST", body: { user_ids: ids } });
+}
+
+/** Every event matching the Dean list's filters -- ids and names -- in one request. */
+export async function fetchEventIds(filterParams) {
+  const data = await apiJson(`/dean/events/ids?${filterParams}`);
+  return data?.events || [];
+}
+
+/** Delete or archive the selected events in one request (`action`: "delete" | "archive"). */
+export function bulkEvents(action, ids, extra = {}) {
+  return apiJson(`/dean/events/bulk-${action}`, { method: "POST", body: { event_ids: ids, ...extra } });
 }
 
 /** Upload a roster file and get the server's row-by-row preview. Nothing is written. */

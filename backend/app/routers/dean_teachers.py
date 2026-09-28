@@ -29,6 +29,7 @@ carry ``details.via = "dean_panel"`` so the Dean panel can list its own.
 import logging
 import re
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -45,11 +46,12 @@ from app.schemas.dean import (
     DeanCreateTeacherRequest,
     DeanImportTeachersRequest,
     DeanInviteRequest,
+    DeanTeacherIdsRequest,
     DeanUpdateTeacherRequest,
 )
 from app.services import email_service, teacher_import
 from app.services.audit_service import log_audit_event
-from app.services.storage_service import delete_user_cascade
+from app.services.storage_service import delete_user_cascade, delete_users_cascade
 from app.utils.auth import dean_dep, public_user
 from app.utils.security import (
     generate_one_time_token,
@@ -72,6 +74,14 @@ VIA = "dean_panel"
 # double click or two Deans acting at once; the second would silently replace
 # the link the first one just delivered.
 INVITE_RESEND_COOLDOWN_MINUTES = 10
+
+# Largest selection one bulk request takes (and "Select all" returns).
+MAX_BULK_TEACHERS = 5000
+
+# Invitation emails sent at once by a bulk invite. Parallel sending is what
+# makes one request for the whole selection practical; kept small so a mail
+# server that limits concurrent connections is not flooded.
+INVITE_SEND_WORKERS = 4
 
 STATUS_FILTERS = ("all", "active", "inactive", "pending", "removed")
 ONBOARDING_FILTERS = ("all", "not_invited", "invited", "expired", "joined")
@@ -272,19 +282,14 @@ def _event_counts(teacher_ids: list[str]) -> dict[str, int]:
 # LIST
 # ============================================================
 
-@router.get("")
-def list_teachers(
-    q: str | None = Query(default=None, max_length=200),
-    # Named account_status, not status: `status` would shadow fastapi.status.
-    account_status: str = Query(default="all", alias="status", max_length=20),
-    verified: str = Query(default="all", max_length=20),
-    source: str = Query(default="all", max_length=20),
-    onboarding: str = Query(default="all", max_length=20),
-    sort: str = Query(default="newest", max_length=20),
-    skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=25, ge=1, le=100),
-):
-    now = utc_now()
+def _teacher_filters(
+    q: str | None, verified: str, source: str, onboarding: str, now: datetime
+) -> tuple[dict, dict, dict, dict]:
+    """The teacher list's filters: ``(base, search, onboarding, per-status)``.
+
+    Shared by the list and GET /dean/teachers/ids, so "Select all matching"
+    can never pick a different set of teachers from the one the list shows.
+    """
     base: dict[str, Any] = {"role": "teacher"}
 
     verified_key = verified.strip().lower()
@@ -322,20 +327,45 @@ def list_teachers(
     listed = {"removed_at": None}
     status_queries = {
         "all": listed,
-        "active": {**listed, "is_active": {"$ne": False}},
+        # Active means able to take part: an active account whose email is
+        # verified. Unverified accounts (e.g. never-joined imports) are left
+        # out; they are still in All and Never signed in.
+        "active": {**listed, "is_active": {"$ne": False}, "email_verified": True},
         "inactive": {**listed, "is_active": False},
         # Never signed in: the people invitations are for.
         "pending": {**listed, "last_sign_in_at": None},
         "removed": {"removed_at": {"$ne": None}},
     }
+    return base, search_clause, onboarding_clause, status_queries
+
+
+def _status_key(account_status: str) -> str:
+    key = (account_status or "all").strip().lower()
+    return key if key in STATUS_FILTERS else "all"
+
+
+@router.get("")
+def list_teachers(
+    q: str | None = Query(default=None, max_length=200),
+    # Named account_status, not status: `status` would shadow fastapi.status.
+    account_status: str = Query(default="all", alias="status", max_length=20),
+    verified: str = Query(default="all", max_length=20),
+    source: str = Query(default="all", max_length=20),
+    onboarding: str = Query(default="all", max_length=20),
+    sort: str = Query(default="newest", max_length=20),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+):
+    now = utc_now()
+    base, search_clause, onboarding_clause, status_queries = _teacher_filters(
+        q, verified, source, onboarding, now
+    )
     counts = {
         key: users.count_documents(_combine({**base, **extra}, search_clause, onboarding_clause))
         for key, extra in status_queries.items()
     }
 
-    status_key = account_status.strip().lower()
-    if status_key not in STATUS_FILTERS:
-        status_key = "all"
+    status_key = _status_key(account_status)
     status_base = {**base, **status_queries[status_key]}
     onboarding_counts = {
         key: users.count_documents(_combine(status_base, search_clause, _onboarding_query(key, now)))
@@ -390,6 +420,28 @@ def _parse_iso(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value))
     except ValueError:
         return None
+
+
+@router.get("/ids")
+def list_teacher_ids(
+    q: str | None = Query(default=None, max_length=200),
+    account_status: str = Query(default="all", alias="status", max_length=20),
+    verified: str = Query(default="all", max_length=20),
+    source: str = Query(default="all", max_length=20),
+    onboarding: str = Query(default="all", max_length=20),
+):
+    """Every teacher matching the list's filters, as id, name and email only.
+
+    Backs "Select all matching": one light request instead of paging through
+    full teacher records to collect their ids.
+    """
+    base, search_clause, onboarding_clause, status_queries = _teacher_filters(
+        q, verified, source, onboarding, utc_now()
+    )
+    query = _combine({**base, **status_queries[_status_key(account_status)]}, search_clause, onboarding_clause)
+    cursor = users.find(query, {"_id": 1, "name": 1, "email": 1}).limit(MAX_BULK_TEACHERS)
+    found = [{"id": str(d["_id"]), "name": d.get("name"), "email": d.get("email")} for d in cursor]
+    return {"success": True, "teachers": found, "total": len(found)}
 
 
 @router.get("/activity")
@@ -801,6 +853,123 @@ def restore_teacher(user_id: str, dean: dict = Depends(dean_dep)):
     }
 
 
+def _resolve_teachers(user_ids: list[str], dean: dict) -> tuple[list[dict], list[dict]]:
+    """Look up selected ids: the Teacher documents, and a skip row for the rest.
+
+    Anything that is not a Teacher -- or is the Dean -- is reported like an
+    unknown id, as everywhere else in this router.
+    """
+    wanted: dict[str, Any] = {}
+    skipped: list[dict] = []
+    for raw_id in user_ids:
+        user_id = _canonical_id(raw_id)
+        if user_id in wanted or any(r["user_id"] == user_id for r in skipped):
+            continue
+        object_id = to_object_id(user_id)
+        if object_id is None or user_id == dean.get("id"):
+            skipped.append(_result_row(None, user_id, "skipped", "Not a Teacher account."))
+        else:
+            wanted[user_id] = object_id
+
+    # One query for the whole selection.
+    found = list(users.find({"_id": {"$in": list(wanted.values())}, "role": "teacher"})) if wanted else []
+    found_ids = {str(doc["_id"]) for doc in found}
+    skipped.extend(
+        _result_row(None, user_id, "skipped", "Not a Teacher account.")
+        for user_id in wanted
+        if user_id not in found_ids
+    )
+    return found, skipped
+
+
+@router.post("/bulk-delete")
+def bulk_delete_teachers(payload: DeanTeacherIdsRequest, dean: dict = Depends(dean_dep)):
+    """Delete the selected teachers permanently -- the ones with no events.
+
+    The same rule as deleting one: permanent deletion erases a teacher's
+    events, media and reports, so a teacher who has any is skipped with the
+    reason, and can be removed instead (which keeps everything).
+    """
+    teachers, results = _resolve_teachers(payload.user_ids, dean)
+    counts = _event_counts([str(t["_id"]) for t in teachers])
+
+    deletable: list[dict] = []
+    for teacher in teachers:
+        event_count = counts.get(str(teacher["_id"]), 0)
+        if event_count:
+            results.append(_result_row(
+                teacher, str(teacher["_id"]), "skipped",
+                f"Has {event_count} event{'s' if event_count != 1 else ''}. Remove the teacher instead.",
+            ))
+        else:
+            deletable.append(teacher)
+
+    # One cascade for all of them: a query per collection, not per teacher.
+    if deletable:
+        delete_users_cascade([str(t["_id"]) for t in deletable])
+    results.extend(_result_row(t, str(t["_id"]), "deleted", None) for t in deletable)
+
+    return _bulk_response(dean, "teachers_bulk_deleted", results, "deleted")
+
+
+@router.post("/bulk-remove")
+def bulk_remove_teachers(payload: DeanTeacherIdsRequest, dean: dict = Depends(dean_dep)):
+    """Remove the selected teachers: hidden and signed out, every record kept."""
+    teachers, results = _resolve_teachers(payload.user_ids, dean)
+    now = utc_now()
+
+    # Grouped by whether each was active (remembered for Restore): at most two
+    # updates for the whole selection instead of one per teacher.
+    groups: dict[bool, list[dict]] = {True: [], False: []}
+    for teacher in teachers:
+        if teacher.get("removed_at"):
+            results.append(_result_row(teacher, str(teacher["_id"]), "skipped", "Already removed."))
+        else:
+            groups[_is_active(teacher)].append(teacher)
+
+    for was_active, group in groups.items():
+        if not group:
+            continue
+        users.update_many(
+            {"_id": {"$in": [t["_id"] for t in group]}, "role": "teacher", "removed_at": None},
+            {
+                "$set": {
+                    "removed_at": now,
+                    "removed_by": dean.get("id"),
+                    "removed_was_active": was_active,
+                    "is_active": False,
+                    "updated_at": now,
+                },
+                "$inc": {"token_version": 1},
+            },
+        )
+        results.extend(_result_row(t, str(t["_id"]), "removed", None) for t in group)
+
+    return _bulk_response(dean, "teachers_bulk_removed", results, "removed")
+
+
+def _bulk_response(dean: dict, action: str, results: list[dict], done_status: str) -> dict:
+    done = [r for r in results if r["status"] == done_status]
+    skipped = [r for r in results if r["status"] != done_status]
+    _audit(dean, action, None, {
+        "result": "success" if done else "failed",
+        "requested_count": len(results),
+        f"{done_status}_count": len(done),
+        "skipped_count": len(skipped),
+        "results": [
+            {"user_id": r["user_id"], "email": r["email"], "status": r["status"], "reason": r["reason"]}
+            for r in results
+        ],
+    })
+    return {
+        "success": True,
+        "requested_count": len(results),
+        "done_count": len(done),
+        "skipped_count": len(skipped),
+        "results": results,
+    }
+
+
 @router.delete("/{user_id}")
 def delete_teacher(user_id: str, dean: dict = Depends(dean_dep)):
     """Permanently delete a teacher who has no events.
@@ -1005,37 +1174,34 @@ def _result_row(doc: dict | None, user_id: str, outcome: str, reason: str | None
 
 @router.post("/invite")
 def invite_teachers(payload: DeanInviteRequest, dean: dict = Depends(dean_dep)):
-    """Send invitations to several teachers; report each one's outcome.
+    """Send invitations to the whole selection in one request; report each outcome.
 
-    Every id is resolved and checked before anything is sent, so the response
-    always accounts for every requested teacher: sent, skipped (with why) or
-    failed (with why).
+    Every id is resolved (in one query) and checked before anything is sent,
+    so the response always accounts for every requested teacher: sent,
+    skipped (with why) or failed (with why).
     """
     if not email_service.is_configured():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=EMAIL_NOT_CONFIGURED)
 
-    results: list[dict] = []
-    seen: set[str] = set()
-    for raw_id in payload.user_ids:
-        user_id = _canonical_id(raw_id)
-        if user_id in seen:
-            continue
-        seen.add(user_id)
+    teachers, results = _resolve_teachers(payload.user_ids, dean)
 
-        object_id = to_object_id(user_id)
-        doc = users.find_one({"_id": object_id}) if object_id else None
-        if not doc or doc.get("role") != "teacher" or user_id == dean.get("id"):
-            # Not distinguished further, as with find_teacher_or_404.
-            results.append(_result_row(None, user_id, "skipped", "Not a Teacher account."))
-            continue
-
+    to_send: list[dict] = []
+    for doc in teachers:
         reason = _invite_skip_reason(doc)
         if reason:
-            results.append(_result_row(doc, user_id, "skipped", reason))
-            continue
+            results.append(_result_row(doc, str(doc["_id"]), "skipped", reason))
+        else:
+            to_send.append(doc)
 
+    # Sent in parallel: one request covers the whole selection, and each
+    # teacher still gets their real outcome (sent, or failed with why).
+    def deliver(doc: dict) -> dict:
         outcome, reason = _deliver_invite(doc, dean)
-        results.append(_result_row(doc, user_id, outcome, reason))
+        return _result_row(doc, str(doc["_id"]), outcome, reason)
+
+    if to_send:
+        with ThreadPoolExecutor(max_workers=min(INVITE_SEND_WORKERS, len(to_send))) as pool:
+            results.extend(pool.map(deliver, to_send))
 
     sent = [r for r in results if r["status"] == "sent"]
     failed = [r for r in results if r["status"] == "failed"]

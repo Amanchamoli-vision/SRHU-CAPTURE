@@ -262,6 +262,19 @@ class NotificationCreateRequest(BaseModel):
         return value
 
 
+class DeanBulkDeleteEventsRequest(BaseModel):
+    """Events the Dean selected ("Select All Events") to delete together."""
+
+    event_ids: list[str] = Field(min_length=1, max_length=5000)
+
+
+class DeanBulkArchiveEventsRequest(BaseModel):
+    """Events the Dean selected to archive together."""
+
+    event_ids: list[str] = Field(min_length=1, max_length=5000)
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class DeanDecisionBody(BaseModel):
     """Optional JSON body for reject / revoke / request-changes; the query string
     parameters are still accepted."""

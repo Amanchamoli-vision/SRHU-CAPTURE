@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 
 import StatusChip from "../teacher/StatusChip";
@@ -14,7 +15,28 @@ import { IconInbox, IconRotateCcw } from "../teacher/icons";
  *
  * Actions are a render prop because they are the one part that genuinely
  * differs: All Events approves and rejects, the Archive restores and deletes.
+ *
+ * `selection` (optional) adds a checkbox per row and a select-all box in the
+ * header: `{ isSelected(id), onToggle(event), allSelected, someSelected,
+ * onToggleAll() }`. Without it the table is exactly as before.
  */
+
+function SelectBox({ checked, indeterminate = false, onChange, label }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      aria-label={label}
+      className="h-4 w-4 shrink-0 cursor-pointer rounded border-line text-accent focus:ring-accent"
+    />
+  );
+}
 
 export const COLUMNS = [
   { label: "Event", className: "" },
@@ -34,6 +56,7 @@ function EventsTable({
   emptyHint = "No events have been submitted yet.",
   onClearFilters,
   linkBase = "/dean/events",
+  selection = null,
 }) {
   return (
     <>
@@ -79,13 +102,22 @@ function EventsTable({
                         : ""
                     }`}
                   >
-                    <Link
-                      to={`${linkBase}/${event.id}`}
-                      className="block w-full truncate text-left font-display text-sm font-semibold text-ink"
-                      title={event.event_name}
-                    >
-                      {event.event_name || "Untitled Event"}
-                    </Link>
+                    <div className="flex items-center gap-2.5">
+                      {selection && (
+                        <SelectBox
+                          checked={selection.isSelected(event.id)}
+                          onChange={() => selection.onToggle(event)}
+                          label={`Select ${event.event_name || "event"}`}
+                        />
+                      )}
+                      <Link
+                        to={`${linkBase}/${event.id}`}
+                        className="block w-full min-w-0 truncate text-left font-display text-sm font-semibold text-ink"
+                        title={event.event_name}
+                      >
+                        {event.event_name || "Untitled Event"}
+                      </Link>
+                    </div>
 
                     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted">
                       <StatusChip status={event.status} />
@@ -120,6 +152,16 @@ function EventsTable({
             <table className="hidden w-full text-left md:table">
               <thead className="sticky top-0 z-10">
                 <tr>
+                  {selection && (
+                    <th className="w-10 border-b hairline bg-raised/45 py-3 pl-4 pr-1 backdrop-blur">
+                      <SelectBox
+                        checked={selection.allSelected}
+                        indeterminate={!selection.allSelected && selection.someSelected}
+                        onChange={selection.onToggleAll}
+                        label="Select all events on this page"
+                      />
+                    </th>
+                  )}
                   {COLUMNS.map((column) => (
                     <th
                       key={column.label}
@@ -145,6 +187,16 @@ function EventsTable({
                           : ""
                       }`}
                     >
+                      {selection && (
+                        <td className="py-3 pl-4 pr-1 align-middle">
+                          <SelectBox
+                            checked={selection.isSelected(event.id)}
+                            onChange={() => selection.onToggle(event)}
+                            label={`Select ${event.event_name || "event"}`}
+                          />
+                        </td>
+                      )}
+
                       {/* Event */}
                       <td className="max-w-56 px-4 py-3 xl:max-w-72">
                         <Link

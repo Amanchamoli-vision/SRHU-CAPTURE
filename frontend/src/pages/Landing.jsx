@@ -61,12 +61,6 @@ const STAGES = [
     body: "The Dean reads the proposal and approves it — or rejects it with feedback the teacher can act on and resubmit.",
   },
   {
-    status: "in_progress",
-    label: "In progress",
-    who: "Dean",
-    body: "Once the event is under way, the Dean marks it in progress. The teacher is emailed and notified.",
-  },
-  {
     status: "completed",
     label: "Completed",
     who: "Dean",

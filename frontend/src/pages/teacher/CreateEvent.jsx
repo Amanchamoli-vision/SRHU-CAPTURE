@@ -14,13 +14,13 @@ import {
   deleteTeacherDraft,
   encodeEventMetadata,
 } from "../../utils/draftStorage";
-import { readEventFields } from "../../utils/eventFields";
+import { DEFAULT_HOST_DEPARTMENT, readEventFields } from "../../utils/eventFields";
 import {
   DOC_ACCEPT,
   IMAGE_ACCEPT,
   VIDEO_ACCEPT,
-  MAX_DOC_TOTAL,
   formatMb,
+  limitFor,
   usedBytes,
   validatePick,
 } from "../../utils/uploadRules";
@@ -71,7 +71,6 @@ const REQUIRED_DETAILS = [
   ["startTime", "Please specify the event start time."],
   ["endTime", "Please specify the event end time."],
   ["location", "Please enter the venue / location."],
-  ["department", "Please specify the host department or school."],
   ["organizer", "Please enter the organizer or faculty coordinator name."],
   ["description", "Please provide a description for the event."],
 ];
@@ -89,7 +88,9 @@ const EMPTY_FORM = {
   startTime: "",
   endTime: "",
   location: "",
-  department: "",
+  // Not asked on the form any more (SST only); kept so an edited event keeps
+  // the department it was saved with.
+  department: DEFAULT_HOST_DEPARTMENT,
   organizer: "",
   expectedParticipants: "",
   contactInfo: "",
@@ -267,7 +268,9 @@ function CreateEvent() {
   const [submitted, setSubmitted] = useState(null); // the saved event
   // Shared hook rather than a local fetch: it also revalidates when this tab is
   // focused, so a limit an admin changes elsewhere reaches an open wizard.
-  const { limits: uploadLimits } = useUploadLimits();
+  const { limits: uploadLimits, reload: reloadUploadLimits } = useUploadLimits();
+  // The combined document budget, from the same settings as the checks below.
+  const documentLimitBytes = limitFor("document", uploadLimits);
 
   // The event id is also held in a ref: several files picked at once each need
   // it, and React state would still be null for all of them.
@@ -361,7 +364,7 @@ function CreateEvent() {
               startTime: draft.start_time || "",
               endTime: draft.end_time || "",
               location: draft.location || "",
-              department: draft.department || "",
+              department: draft.department || DEFAULT_HOST_DEPARTMENT,
               organizer: draft.organizer || "",
               expectedParticipants: draft.expected_participants || "",
               contactInfo: draft.contact_info || "",
@@ -585,7 +588,7 @@ function CreateEvent() {
       description: encodeEventMetadata(data.description, {
         startTime: data.startTime,
         endTime: data.endTime,
-        department: data.department,
+        department: data.department?.trim() || DEFAULT_HOST_DEPARTMENT,
         organizer: data.organizer,
         expectedParticipants: data.expectedParticipants,
         contactInfo: data.contactInfo,
@@ -796,13 +799,18 @@ function CreateEvent() {
       ];
     }
 
+    // Re-read the limits before judging the pick, so a change the Super Admin
+    // made since this page loaded is what the teacher is held to -- the same
+    // value the server is about to enforce.
+    const limits = (await reloadUploadLimits({ force: true })) || uploadLimits;
+
     const { accepted, duplicates, rejections, overLimit } = validatePick({
       files: Array.from(files),
       kind,
       savedItems: saved,
       pendingUploads: pending,
       existingNames,
-      limits: uploadLimits,
+      limits,
     });
 
     setError(rejections.join(" "));
@@ -1329,7 +1337,7 @@ function CreateEvent() {
                 `Optional. Teasers and recordings — ${formatMb(uploadLimits.max_video_total_mb * 1024 * 1024)} in total${uploadLimits.max_videos_per_event ? `, up to ${uploadLimits.max_videos_per_event} videos` : ", across any number of videos"}.`}
               {step === 4 && (
                 <>
-                  <span className="font-semibold text-ink">Required.</span> PDF, Word, Excel, PowerPoint, Text or CSV — upload at least 1 document up to {formatMb(MAX_DOC_TOTAL)} total.
+                  <span className="font-semibold text-ink">Required.</span> PDF, Word, Excel, PowerPoint, Text or CSV — upload at least 1 document, up to {formatMb(documentLimitBytes)} in total.
                 </>
               )}
             </p>
@@ -1456,7 +1464,7 @@ function CreateEvent() {
                 {fieldErrors.location && <p className="field-error">{fieldErrors.location}</p>}
               </div>
 
-              <div className="field col-span-2 md:col-span-1">
+              <div className="field col-span-2">
                 <label htmlFor="expectedParticipants">
                   Expected Participants
                   <span className="ml-2 font-normal text-muted">(Optional)</span>
@@ -1471,26 +1479,6 @@ function CreateEvent() {
                   disabled={busy}
                   className="input min-h-10 py-2"
                 />
-              </div>
-
-              <div className="field col-span-2 md:col-span-1">
-                <label htmlFor="department">
-                  Host Department / School<span className="req">*</span>
-                </label>
-                <input
-                  id="department"
-                  name="department"
-                  type="text"
-                  value={formData.department}
-                  onChange={handleChange}
-                  placeholder="e.g. Department of Computer Science & Engineering"
-                  disabled={busy}
-                  aria-invalid={fieldErrors.department ? "true" : undefined}
-                  className="input min-h-10 py-2"
-                />
-                {fieldErrors.department && (
-                  <p className="field-error">{fieldErrors.department}</p>
-                )}
               </div>
 
               <div className="col-span-2 md:col-span-1">
@@ -1611,20 +1599,24 @@ function CreateEvent() {
           {step === 2 && (
             <div className="px-4 py-5 sm:px-6">
               {photos.length === 0 ? (
+                // The notice uses the Document step's accent info styling in
+                // the Video step's compact bar, with "Mandatory Upload" in the
+                // required-marker red; the amber it used before read as a
+                // faint yellow. A failed attempt to continue still turns it red.
                 <div
-                  className={`mb-4 flex items-start gap-2.5 rounded-xl border p-3 text-xs ${
+                  className={`mb-4 flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-xs ${
                     uploadErrors.photos
                       ? "border-err/30 bg-err/10 text-err"
-                      : "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                      : "border-accent/15 bg-accent/6 text-ink"
                   }`}
                 >
-                  <IconAlertTriangle
-                    className={`mt-0.5 h-4 w-4 shrink-0 ${
-                      uploadErrors.photos ? "text-err" : "text-amber-600 dark:text-amber-400"
-                    }`}
-                  />
+                  {uploadErrors.photos ? (
+                    <IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-err" />
+                  ) : (
+                    <IconInfo className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                  )}
                   <div>
-                    <span className="font-semibold">
+                    <span className="font-semibold text-err">
                       {uploadErrors.photos ? "Photo upload is required to continue:" : "Mandatory Upload:"}
                     </span>{" "}
                     <span>
@@ -1737,7 +1729,7 @@ function CreateEvent() {
                     Document requirement met ({documentItems.length} {documentItems.length === 1 ? "document" : "documents"} uploaded)
                   </span>
                   <span className="text-[11px] text-muted">
-                    Total: {formatMb(documentBytesUsed)} / {formatMb(MAX_DOC_TOTAL)}
+                    Total: {formatMb(documentBytesUsed)} / {formatMb(documentLimitBytes)}
                   </span>
                 </div>
               )}
@@ -1747,9 +1739,10 @@ function CreateEvent() {
                 accept={DOC_ACCEPT}
                 items={documentItems}
                 uploads={documentUploads}
-                totalLimitBytes={MAX_DOC_TOTAL}
+                max={uploadLimits.max_documents_per_event}
+                totalLimitBytes={documentLimitBytes}
                 usedBytes={documentBytesUsed}
-                maxSizeLabel={`PDF, Word, Excel, PowerPoint, TXT or CSV · ${formatMb(MAX_DOC_TOTAL)} total`}
+                maxSizeLabel={`PDF, Word, Excel, PowerPoint, TXT or CSV · ${formatMb(documentLimitBytes)} total, up to ${uploadLimits.max_documents_per_event} files`}
                 emptyLabel="Drag documents here"
                 hint="Agenda, budget, invitation letter, or approval paperwork."
                 disabled={busy}
@@ -2076,7 +2069,7 @@ function CreateEvent() {
               endTime: formData.endTime,
               organizer: formData.organizer.trim(),
               contactInfo: formData.contactInfo.trim(),
-              department: formData.department.trim(),
+              department: formData.department?.trim() || DEFAULT_HOST_DEPARTMENT,
               expectedParticipants: formData.expectedParticipants.trim(),
               description: formData.description.trim(),
             }}

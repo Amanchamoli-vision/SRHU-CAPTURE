@@ -6,13 +6,16 @@ import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
 import Pagination from "../../components/common/Pagination";
+import Modal from "../../components/teacher/Modal";
 import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
   IconArrowRight,
+  IconCheckCircle,
   IconInbox,
   IconRefresh,
   IconSearch,
+  IconTrash,
   IconX,
 } from "../../components/teacher/icons";
 
@@ -46,6 +49,10 @@ export default function SuperAdminEvents() {
   const [teacherNames, setTeacherNames] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Deleting an event: { event, confirmText } while the dialog is open.
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [success, setSuccess] = useState("");
 
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
   const rawPer = Number(searchParams.get("per")) || 25;
@@ -149,6 +156,25 @@ export default function SuperAdminEvents() {
     loadEvents();
   }, [loadEvents]);
 
+  const confirmDelete = async () => {
+    const event = pendingDelete?.event;
+    if (!event) return;
+    try {
+      setDeleting(true);
+      setError("");
+      setSuccess("");
+      const data = await apiJson(`/superadmin/events/${event.id}`, { method: "DELETE" });
+      setPendingDelete(null);
+      setSuccess(data?.message || "Event deleted permanently.");
+      await loadEvents();
+    } catch (err) {
+      setPendingDelete(null);
+      setError(err?.message || "Failed to delete the event.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const [exporting, setExporting] = useState(false);
 
   const handleExportCsv = async () => {
@@ -233,6 +259,21 @@ export default function SuperAdminEvents() {
           </div>
         )}
 
+        {success && (
+          <div className="toast toast-ok mt-6" role="status">
+            <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-ok" />
+            <p className="flex-1 text-sm font-medium text-ink">{success}</p>
+            <button
+              type="button"
+              onClick={() => setSuccess("")}
+              className="icon-btn icon-btn-sm -my-1 -mr-1 border-0 bg-transparent"
+              aria-label="Dismiss"
+            >
+              <IconX />
+            </button>
+          </div>
+        )}
+
         <div className="reveal mt-7 flex flex-col gap-3 md:flex-row md:items-center md:justify-between" style={{ "--i": 1 }}>
           <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter by status">
             {STATUS_TABS.map((tab) => (
@@ -303,10 +344,10 @@ export default function SuperAdminEvents() {
           ) : (
             <ul className="divide-y divide-line/10">
               {visibleEvents.map((event) => (
-                <li key={event.id}>
+                <li key={event.id} className="flex items-center gap-2 pr-4 transition hover:bg-raised/50">
                   <Link
                     to={`/superadmin/events/${event.id}`}
-                    className="flex flex-col gap-2 px-5 py-4 transition hover:bg-raised/50 sm:flex-row sm:items-center sm:gap-4"
+                    className="flex min-w-0 flex-1 flex-col gap-2 py-4 pl-5 sm:flex-row sm:items-center sm:gap-4"
                   >
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-display text-sm font-semibold text-ink">
@@ -327,6 +368,16 @@ export default function SuperAdminEvents() {
                       </span>
                     </div>
                   </Link>
+                  {/* Outside the link, so deleting never also opens the event. */}
+                  <button
+                    type="button"
+                    onClick={() => setPendingDelete({ event, confirmText: "" })}
+                    className="btn btn-danger btn-xs btn-icon shrink-0"
+                    title="Delete this event permanently"
+                    aria-label={`Delete ${event.event_name || "event"}`}
+                  >
+                    <IconTrash className="h-4 w-4" />
+                  </button>
                 </li>
               ))}
             </ul>
@@ -344,6 +395,55 @@ export default function SuperAdminEvents() {
           )}
         </section>
       </div>
+
+      <Modal
+        open={Boolean(pendingDelete)}
+        onClose={() => !deleting && setPendingDelete(null)}
+        eyebrow="Permanent"
+        title="Delete this event permanently?"
+        subtitle={pendingDelete?.event?.event_name || ""}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setPendingDelete(null)}
+              disabled={deleting}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmDelete}
+              disabled={deleting || pendingDelete?.confirmText !== "DELETE"}
+              className="btn btn-danger btn-sm"
+            >
+              {deleting ? <span className="spin h-4 w-4" /> : <IconTrash />}
+              Delete permanently
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="prose-muted text-sm">
+            The event is removed with its photos, videos, documents and report. This cannot be undone.
+          </p>
+          <div className="field">
+            <label htmlFor="adminDeleteConfirm">
+              Type <span className="font-semibold">DELETE</span> to confirm
+            </label>
+            <input
+              id="adminDeleteConfirm"
+              type="text"
+              value={pendingDelete?.confirmText || ""}
+              onChange={(e) => setPendingDelete((current) => ({ ...current, confirmText: e.target.value }))}
+              autoComplete="off"
+              placeholder="DELETE"
+              className="input"
+            />
+          </div>
+        </div>
+      </Modal>
     </SuperAdminShell>
   );
 }

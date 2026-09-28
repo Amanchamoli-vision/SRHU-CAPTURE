@@ -39,8 +39,16 @@ TEACHER_EDITABLE_STATUSES = (
     "draft", "submitted", "pending", "under_review", "rejected", "revoked",
 )
 
-# Post-approval delivery stages the Dean moves an event through.
-DEAN_PROGRESS_STAGES = ("approved", "in_progress", "completed")
+# Post-approval delivery stages the Dean moves an event through. "in_progress"
+# was removed from event tracking: an approved event now goes straight to
+# completed. Events already stored as in_progress are moved to approved by
+# scripts/migrate_in_progress_to_approved.py, and until then can still be
+# moved on (see LEGACY_PROGRESS_STAGES).
+DEAN_PROGRESS_STAGES = ("approved", "completed")
+
+# Stages an event may still be *in* when the Dean moves it, though no longer a
+# stage it can be moved *to*.
+LEGACY_PROGRESS_STAGES = ("in_progress",)
 
 # Statuses at or beyond approval.
 APPROVED_STAGES = ("approved", "published", "in_progress", "completed")

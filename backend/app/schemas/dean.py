@@ -5,11 +5,10 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.schemas.common import normalize_phone
 
 
-# Bulk invitations are delivered synchronously so each teacher's real
-# outcome can be reported back. A full SMTP session costs seconds, so a request
-# is kept small enough to finish well inside a proxy timeout; the Dean panel
-# sends a larger selection as several of these.
-MAX_BULK_INVITES = 25
+# Bulk invitations are delivered within the request (in parallel) so each
+# teacher's real outcome can be reported back; the whole selection is one
+# request.
+MAX_BULK_INVITES = 500
 
 
 def _collapse(value: str | None) -> str | None:
@@ -95,6 +94,12 @@ class DeanCreateTeacherRequest(BaseModel):
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         return _collapse(value)
+
+
+class DeanTeacherIdsRequest(BaseModel):
+    """Teachers selected in the list for a bulk remove or delete."""
+
+    user_ids: list[str] = Field(min_length=1, max_length=5000)
 
 
 class DeanInviteRequest(BaseModel):

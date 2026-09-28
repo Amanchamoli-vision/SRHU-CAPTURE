@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     # How long a Dean's "set your password" invitation link stays valid.
     teacher_invite_expire_days: int = 7
 
+    # The host of every event. The platform serves SST (School of Science &
+    # Technology) only, so the event form no longer asks for a host
+    # department or school; an event without one is reported as this.
+    default_host_department: str = "SST"
+
     # ------------------------------------------------------------------
     # SMTP (outbound email)
     # ------------------------------------------------------------------
@@ -87,6 +92,20 @@ class Settings(BaseSettings):
     # this for development and testing, never for production.
     email_delivery_enabled: bool = True
     email_outbox_dir: str = "email_outbox"
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+    # Application logs go to stdout (the platform's log viewer) and to
+    # size-rotated files under LOG_DIR -- never to MongoDB. Each file is
+    # capped at LOG_FILE_MAX_MB and keeps LOG_FILE_BACKUP_COUNT rotated
+    # copies, so disk use is bounded: app.log, error.log, access.log and
+    # audit.log together never exceed 4 x (1 + backups) x max size.
+    log_level: str = "INFO"
+    log_to_files: bool = True
+    log_dir: str = "logs"
+    log_file_max_mb: int = Field(default=10, ge=1, le=1024)
+    log_file_backup_count: int = Field(default=5, ge=1, le=100)
 
     # ------------------------------------------------------------------
     # Reports
@@ -155,6 +174,14 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        level = value.strip().upper()
+        if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL")
+        return level
 
     @field_validator("frontend_url")
     @classmethod

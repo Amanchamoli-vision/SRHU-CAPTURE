@@ -3,16 +3,15 @@ import { STATUS_TRACK } from "./status";
 
 // Only the states the backend actually puts an event in. Submitting sets the
 // status straight to "pending", so a separate "Submitted" node could never be
-// the current one and has gone. "In progress" and "Completed" stay: the Dean
-// moves an approved event through them from the event page, and the teacher is
-// emailed and notified at each move. A refused event can reach neither until
+// the current one and has gone. "In progress" was removed from event tracking;
+// "Completed" stays: the Dean closes an approved event from the event page, and
+// the teacher is emailed and notified. A refused event can reach neither until
 // it comes back round, so each refusal ends its own rail: "Rejected" straight
 // after Pending review, "Revoked" after the Approved it had already reached.
 const HAPPY_PATH = [
   { id: "draft", label: "Created" },
   { id: "pending", label: "Pending review" },
   { id: "approved", label: "Approved" },
-  { id: "in_progress", label: "In progress" },
   { id: "completed", label: "Completed" },
 ];
 
@@ -39,12 +38,12 @@ const STEPS = (status) => {
 /** How far along the rail a given status sits. */
 function indexFor(status) {
   if (status === "draft") return 0;
-  if (status === "approved" || status === "published" || status === "rejected") return 2;
-  if (status === "in_progress") return 3;
+  // A retired "in_progress" event sits at Approved, the stage it has become.
+  if (status === "approved" || status === "published" || status === "in_progress" || status === "rejected") return 2;
   // Fourth node of the revoked trail above -- not "Pending review", which is
   // what this used to fall through to while the chip beside it read "Revoked".
   if (status === "revoked") return 3;
-  if (status === "completed") return 4;
+  if (status === "completed") return 3;
   return 1; // pending, or the legacy submitted / under_review: waiting on the Dean
 }
 

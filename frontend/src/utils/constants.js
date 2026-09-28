@@ -86,10 +86,13 @@ const STATUS_META = {
       "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20",
     dotClass: "bg-emerald-500",
   },
+  // "In Progress" was removed from event tracking. An event still stored with
+  // it (until scripts/migrate_in_progress_to_approved.py runs) reads as Approved.
   in_progress: {
-    label: "In Progress",
-    badgeClass: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20",
-    dotClass: "bg-blue-500",
+    label: "Approved",
+    badgeClass:
+      "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20",
+    dotClass: "bg-emerald-500",
   },
   completed: {
     label: "Completed",
@@ -241,7 +244,7 @@ export function getApproveLabel(event) {
 // ============================================================
 // EVENT PROGRESS / WORKFLOW STAGES
 //
-// Created -> Pending -> Approved -> In Progress -> Completed
+// Created -> Pending -> Approved -> Completed
 //                    \-> Rejected
 // ============================================================
 
@@ -260,11 +263,6 @@ export const PROGRESS_STAGES = [
     key: "approved",
     label: "Approved",
     description: "The Dean approved this event. It can now go ahead.",
-  },
-  {
-    key: "in_progress",
-    label: "In Progress",
-    description: "The event is currently underway.",
   },
   {
     key: "completed",
@@ -289,9 +287,9 @@ export const REVOKED_STAGE = {
 export function getProgressIndex(status) {
   const value = normalizeStatus(status);
 
-  if (value === "completed") return 4;
-  if (value === "in_progress") return 3;
-  if (value === "approved" || value === "published") return 2;
+  if (value === "completed") return 3;
+  // The retired "in_progress" sits at Approved, the stage it has become.
+  if (value === "approved" || value === "published" || value === "in_progress") return 2;
   // Revoked is the fourth node of its own trail (below): the event reached
   // Approved before the Dean withdrew it, so it is not back at Pending.
   if (value === "revoked") return 3;
@@ -345,11 +343,7 @@ export function getProgressTrail(status) {
 export function getNextStage(status) {
   const value = normalizeStatus(status);
 
-  if (value === "approved" || value === "published") {
-    return { key: "in_progress", label: "Mark In Progress" };
-  }
-
-  if (value === "in_progress") {
+  if (value === "approved" || value === "published" || value === "in_progress") {
     return { key: "completed", label: "Mark Completed" };
   }
 
@@ -361,10 +355,6 @@ export function getPreviousStage(status) {
   const value = normalizeStatus(status);
 
   if (value === "completed") {
-    return { key: "in_progress", label: "Back to In Progress" };
-  }
-
-  if (value === "in_progress") {
     return { key: "approved", label: "Back to Approved" };
   }
 

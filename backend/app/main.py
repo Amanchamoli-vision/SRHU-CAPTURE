@@ -8,16 +8,13 @@ from starlette.datastructures import MutableHeaders
 
 from app.config import settings
 from app.database import ensure_indexes, ping
+from app.logging_config import configure_logging
 from app.routers import auth, dean_teachers, directory, events, files, reports, superadmin, users
 
 
-# Show the application's own log lines (registration, email_sent, ...) next to
-# uvicorn's access log so email delivery problems are visible in the console.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s:     %(name)s - %(message)s",
-)
-logging.getLogger("pymongo").setLevel(logging.WARNING)
+# Application log lines (registration, email_sent, audit, errors, ...) go to
+# stdout and to size-rotated files under LOG_DIR -- never to the database.
+LOG_DIR = configure_logging(settings)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +62,8 @@ def _warn_about_insecure_settings() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Create MongoDB indexes on startup without blocking a misconfigured boot."""
+    if LOG_DIR:
+        logger.info("log_files_ready dir=%s", LOG_DIR)
     _warn_about_insecure_settings()
 
     stop_retrying = threading.Event()

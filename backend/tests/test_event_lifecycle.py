@@ -75,15 +75,17 @@ class EventLifecycleTests(history.EventHistoryTests):
         self.assertEqual(self.approve(event_id).status_code, 200)
         self.assertEqual(self.status_of(event_id), "approved")
 
-        self.assertEqual(self.stage(event_id, "in_progress").status_code, 200)
-        self.assertEqual(self.status_of(event_id), "in_progress")
+        # "In Progress" was removed from tracking: approved goes straight to
+        # completed, and in_progress is no longer a stage the Dean can set.
+        self.assertEqual(self.stage(event_id, "in_progress").status_code, 400)
+        self.assertEqual(self.status_of(event_id), "approved")
 
         self.assertEqual(self.stage(event_id, "completed").status_code, 200)
         self.assertEqual(self.status_of(event_id), "completed")
 
         self.assertEqual(
             [entry["action"] for entry in self.history_of(event_id)],
-            ["created", "submitted", "approved", "stage_changed", "stage_changed"],
+            ["created", "submitted", "approved", "stage_changed"],
         )
 
     # ------------------------------------------------------------------
@@ -102,7 +104,7 @@ class EventLifecycleTests(history.EventHistoryTests):
         )
 
         # Delivery stages are out of reach while the approval is withdrawn.
-        self.assertEqual(self.stage(event_id, "in_progress").status_code, 400)
+        self.assertEqual(self.stage(event_id, "completed").status_code, 400)
 
         restored = self.approve(event_id)
         self.assertEqual(restored.status_code, 200, restored.text)
@@ -111,7 +113,6 @@ class EventLifecycleTests(history.EventHistoryTests):
         self.assertIsNone(restored.json()["event"]["revoked_at"])
 
         # ...and back within reach once it is restored.
-        self.assertEqual(self.stage(event_id, "in_progress").status_code, 200)
         self.assertEqual(self.stage(event_id, "completed").status_code, 200)
         self.assertEqual(self.status_of(event_id), "completed")
 
@@ -125,7 +126,6 @@ class EventLifecycleTests(history.EventHistoryTests):
                 "approved",
                 "revoked",
                 "approved",
-                "stage_changed",
                 "stage_changed",
             ],
         )
@@ -144,7 +144,6 @@ class EventLifecycleTests(history.EventHistoryTests):
         self.assertEqual(restored.status_code, 200, restored.text)
         self.assertIsNone(restored.json()["event"]["rejection_reason"])
 
-        self.assertEqual(self.stage(event_id, "in_progress").status_code, 200)
         self.assertEqual(self.stage(event_id, "completed").status_code, 200)
         self.assertEqual(self.status_of(event_id), "completed")
 
@@ -178,7 +177,6 @@ class EventLifecycleTests(history.EventHistoryTests):
     def test_a_completed_event_is_not_approved_again(self) -> None:
         event_id = self.submit()
         self.approve(event_id)
-        self.stage(event_id, "in_progress")
         self.stage(event_id, "completed")
 
         response = self.approve(event_id)

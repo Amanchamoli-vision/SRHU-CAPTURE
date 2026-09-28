@@ -10,32 +10,20 @@ import {
   IconUser,
 } from "../teacher/icons";
 
-const SUGGESTED_DEPARTMENTS = [
-  "Department of Computer Science & Engineering",
-  "Department of Mechanical Engineering",
-  "Department of Civil Engineering",
-  "Department of Electrical & Electronics Engineering",
-  "Department of Management Studies",
-  "Himalayan Institute of Medical Sciences",
-  "Himalayan College of Nursing",
-  "Himalayan School of Pharmaceutical Sciences",
-  "Himalayan School of Yoga Sciences",
-  "Department of Biosciences",
-];
-
 export default function EditProfileModal({
   open,
   onClose,
   profile,
   onSaved,
-  // Department and mobile number are stored for teachers and deans only
-  // (`PATCH /users/me`), so the Super Admin profile hides them rather than
-  // collecting input the server discards.
+  // Mobile number is stored for teachers and deans only (`PATCH /users/me`),
+  // so the Super Admin profile hides it rather than collecting input the
+  // server discards. Department is not asked at all: the platform serves a
+  // single department, and leaving it out of the request keeps whatever is
+  // already stored (the server writes only the fields it is sent).
   allowContactFields = true,
 }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [department, setDepartment] = useState("");
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState("");
@@ -45,7 +33,6 @@ export default function EditProfileModal({
     if (open && profile) {
       setName(profile.name || "");
       setPhone(normalizePhoneInput(profile.phone || ""));
-      setDepartment(profile.department || "");
       setErrors({});
       setApiError("");
     }
@@ -67,20 +54,12 @@ export default function EditProfileModal({
     }
   };
 
-  const handleDepartmentChange = (e) => {
-    setDepartment(e.target.value);
-    if (errors.department) {
-      setErrors((prev) => ({ ...prev, department: "" }));
-    }
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (saving) return;
 
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim();
-    const trimmedDept = department.trim();
 
     const newErrors = {};
     if (!trimmedName) {
@@ -105,7 +84,6 @@ export default function EditProfileModal({
           ? {
               name: trimmedName,
               phone: trimmedPhone || null,
-              department: trimmedDept || null,
             }
           : { name: trimmedName }
       );
@@ -117,7 +95,6 @@ export default function EditProfileModal({
               ...profile,
               name: trimmedName,
               phone: trimmedPhone || null,
-              department: trimmedDept || null,
             }
           : { ...profile, name: trimmedName });
 
@@ -139,7 +116,7 @@ export default function EditProfileModal({
       title="Edit Profile"
       subtitle={
         allowContactFields
-          ? "Update your name, department, and contact information"
+          ? "Update your name and contact information"
           : "Update your name"
       }
       zIndex={70}
@@ -231,36 +208,6 @@ export default function EditProfileModal({
         </div>
         )}
 
-        {/* Department */}
-        {allowContactFields && (
-        <div className="field">
-          <label htmlFor="profile-department">
-            Department / School
-          </label>
-          <div className="relative">
-            <input
-              id="profile-department"
-              list="srhu-department-options"
-              type="text"
-              className="input"
-              value={department}
-              onChange={handleDepartmentChange}
-              placeholder="e.g. Department of Computer Science & Engineering"
-              disabled={saving}
-              aria-invalid={errors.department ? "true" : undefined}
-            />
-            <datalist id="srhu-department-options">
-              {SUGGESTED_DEPARTMENTS.map((dept) => (
-                <option key={dept} value={dept} />
-              ))}
-            </datalist>
-          </div>
-          <p className="prose-muted mt-1 text-[11px]">
-            Your academic department, school, or administrative unit.
-          </p>
-          {errors.department && <p className="field-error">{errors.department}</p>}
-        </div>
-        )}
       </form>
     </Modal>
   );

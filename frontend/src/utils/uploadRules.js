@@ -128,6 +128,8 @@ export function validatePick({
       ? limits.max_photo_size_mb * 1024 * 1024
       : MAX_IMAGE_SIZE;
   const maxVideoCount = limits?.max_videos_per_event ?? null;
+  const maxDocumentCount =
+    limits?.max_documents_per_event ?? DEFAULT_UPLOAD_LIMITS.max_documents_per_event;
   const maxVideoSize =
     limits?.max_video_size_mb != null
       ? limits.max_video_size_mb * 1024 * 1024
@@ -192,6 +194,13 @@ export function validatePick({
     if (isVideo && maxVideoCount != null && runningCount >= maxVideoCount) {
       rejections.push(
         `"${file.name}" was not added. The limit is ${maxVideoCount} videos.`,
+      );
+      continue;
+    }
+
+    if (isDocument && runningCount >= maxDocumentCount) {
+      rejections.push(
+        `"${file.name}" was not added. The limit is ${maxDocumentCount} documents.`,
       );
       continue;
     }

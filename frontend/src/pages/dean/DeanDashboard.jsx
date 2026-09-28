@@ -8,6 +8,8 @@ import { programShare } from "../../components/dean/programShades";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
 import StatCard from "../../components/common/StatCard";
+import Pagination from "../../components/common/Pagination";
+import { DEFAULT_PER_PAGE } from "../../hooks/useTableQuery";
 import { trackOf } from "../../components/teacher/status";
 import useThemeTokens from "../../components/theme/useThemeTokens";
 import {
@@ -72,6 +74,11 @@ export default function DeanDashboard() {
   // the events already fetched and must never trigger a server refetch.
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+
+  // Pages over the filtered list below. The dashboard already holds every
+  // event it shows (the list is filtered client-side), so paging is too.
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
 
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingEvents, setLoadingEvents] = useState(true);
@@ -245,6 +252,16 @@ export default function DeanDashboard() {
       ),
     [events, searchQuery, statusFilter]
   );
+
+  // Any change to what is listed starts again from the first page; the clamp
+  // covers a list that shrank under the page being looked at.
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, statusFilter, selectedDate, selectedEventType]);
+
+  const pageCount = Math.max(1, Math.ceil(visibleEvents.length / perPage));
+  const currentPage = Math.min(page, pageCount);
+  const pagedEvents = visibleEvents.slice((currentPage - 1) * perPage, currentPage * perPage);
 
   const isFiltered =
     searchQuery.trim() !== "" ||
@@ -840,7 +857,7 @@ export default function DeanDashboard() {
                     </thead>
 
                     <tbody className="divide-y divide-line/8">
-                      {visibleEvents.map((event) => (
+                      {pagedEvents.map((event) => (
                         <tr key={event.id} className="transition hover:bg-raised/35">
                           <td className="max-w-72 px-5 py-3.5">
                             <p className="truncate font-display text-sm font-semibold text-ink">
@@ -885,6 +902,19 @@ export default function DeanDashboard() {
                     </tbody>
                   </table>
                 </div>
+              )}
+
+              {!loadingEvents && visibleEvents.length > 0 && (
+                <Pagination
+                  page={currentPage}
+                  perPage={perPage}
+                  total={visibleEvents.length}
+                  onPageChange={setPage}
+                  onPerPageChange={(next) => {
+                    setPerPage(next);
+                    setPage(1);
+                  }}
+                />
               )}
             </div>
           </>

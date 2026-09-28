@@ -14,8 +14,10 @@ export const STATUS_TRACK = {
   submitted: "#F59E0B",
   under_review: "#0EA5E9", // sky
   approved: "#10B981",     // emerald
-  in_progress: "#3B82F6",  // blue — the post-approval delivery stages the
-  completed: "#14B8A6",    // teal   Dean advances an event through
+  // "In Progress" was removed from event tracking; an event still stored
+  // with it reads as Approved until it is migrated.
+  in_progress: "#10B981",
+  completed: "#14B8A6",    // teal — the stage the Dean closes an event with
   published: "#8B5CF6",    // violet
   rejected: "#EF4444",     // red
   revoked: "#E11D48",      // rose — a refusal like rejected, but its own
@@ -27,7 +29,7 @@ export const STATUS_LABEL = {
   submitted: "Submitted",
   under_review: "Under Review",
   approved: "Approved",
-  in_progress: "In Progress",
+  in_progress: "Approved",
   completed: "Completed",
   published: "Published",
   rejected: "Rejected",

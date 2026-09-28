@@ -82,6 +82,28 @@ and created indexes on whatever cluster `.env` pointed at.
 
 `GET /health` reports whether MongoDB answers and whether SMTP is configured.
 
+## Logs
+
+Application logs are written to files and stdout, never to MongoDB. They go to
+`LOG_DIR` (default `logs/` next to where the server starts), and the directory
+is git-ignored:
+
+| File         | Contents                                                              |
+| ------------ | --------------------------------------------------------------------- |
+| `app.log`    | Everything at `LOG_LEVEL` and up: application, uvicorn, tracebacks    |
+| `error.log`  | Warnings and errors only                                              |
+| `access.log` | One line per HTTP request                                             |
+| `audit.log`  | One JSON line per audited action: user, event and bulk changes        |
+
+Each file rotates at `LOG_FILE_MAX_MB` (default 10) and keeps
+`LOG_FILE_BACKUP_COUNT` old copies (default 5), so the directory stays under
+about 4 × 6 × 10 MB. `LOG_TO_FILES=false` keeps stdout only. On Railway the disk
+is wiped on every deploy, so use the Railway log viewer (stdout) there.
+
+The `audit_logs` collection is kept as well. It is application data rather than
+a log: the Super Admin *Audit Logs* page and the Dean's *Recent Activity* panel
+read from it.
+
 ## Collections
 
 | Collection                           | Contents                                                                                                                                 |
