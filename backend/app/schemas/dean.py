@@ -5,11 +5,11 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.schemas.common import normalize_phone
 
 
-# Bulk credential sends are delivered synchronously so each teacher's real
+# Bulk invitations are delivered synchronously so each teacher's real
 # outcome can be reported back. A full SMTP session costs seconds, so a request
 # is kept small enough to finish well inside a proxy timeout; the Dean panel
 # sends a larger selection as several of these.
-MAX_BULK_CREDENTIALS = 25
+MAX_BULK_INVITES = 25
 
 
 def _collapse(value: str | None) -> str | None:
@@ -62,8 +62,8 @@ class DeanUpdateTeacherRequest(BaseModel):
         return _collapse(value)
 
 
-class DeanSendCredentialsRequest(BaseModel):
-    user_ids: list[str] = Field(min_length=1, max_length=MAX_BULK_CREDENTIALS)
+class DeanInviteRequest(BaseModel):
+    user_ids: list[str] = Field(min_length=1, max_length=MAX_BULK_INVITES)
 
 
 # Matches teacher_import.MAX_ROWS: one file is imported in one request.

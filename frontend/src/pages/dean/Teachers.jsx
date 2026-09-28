@@ -12,18 +12,21 @@ import { PER_PAGE_OPTIONS, DEFAULT_PER_PAGE } from "../../hooks/useTableQuery";
 import { ROLE_TRACK, initialsOf } from "../../components/common/roles";
 import { DESIGNATION_SUGGESTIONS } from "../../utils/designations";
 import { isValidPhone, normalizePhoneInput } from "../../utils/phone";
-import { sendCredentialsInChunks } from "../../services/deanTeachers";
+import { sendInvitesInChunks } from "../../services/deanTeachers";
 import CredentialReport from "../../components/dean/CredentialReport";
 import ImportTeachersModal from "../../components/dean/ImportTeachersModal";
 import {
   IconActivity,
   IconAlertTriangle,
+  IconArchive,
+  IconArchiveRestore,
   IconAward,
   IconCheck,
   IconCheckCircle,
   IconClock,
   IconEdit,
   IconInbox,
+  IconInfo,
   IconKey,
   IconMail,
   IconMoreHorizontal,
@@ -44,8 +47,13 @@ import {
  * the caller is a Dean and the target is a Teacher -- nothing here is the
  * permission boundary, it only avoids offering what the server would refuse.
  *
- * No password is ever shown: credentials and reset links go to the teacher's
- * inbox, and the API never returns them.
+ * No password is ever sent or shown. A teacher is invited with a one-time
+ * "set your password" link, and reset links work the same way; the API never
+ * returns either. With EMAIL_DELIVERY_ENABLED=false on the server those
+ * emails are saved to its outbox folder instead of being sent.
+ *
+ * Removing a teacher hides them and keeps every record; only a teacher with
+ * no events can be deleted permanently.
  */
 
 const STATUS_TABS = [
@@ -53,6 +61,15 @@ const STATUS_TABS = [
   { key: "active", label: "Active" },
   { key: "inactive", label: "Inactive" },
   { key: "pending", label: "Never signed in" },
+  { key: "removed", label: "Removed" },
+];
+
+const ONBOARDING_OPTIONS = [
+  { key: "all", label: "Any invitation status" },
+  { key: "not_invited", label: "Not invited" },
+  { key: "invited", label: "Invited" },
+  { key: "expired", label: "Link expired" },
+  { key: "joined", label: "Joined" },
 ];
 
 const VERIFIED_OPTIONS = [
@@ -88,6 +105,7 @@ const TABLE_COLUMNS = [
 const TRACK_OK = "#10B981";
 const TRACK_ERR = "#EF4444";
 const TRACK_WARN = "#F59E0B";
+const TRACK_MUTED = "#64748B";
 
 const formatDate = (iso) => {
   if (!iso) return "—";
@@ -115,17 +133,20 @@ const isActive = (t) => t?.is_active !== false;
 /** What each confirmation dialog says and does. One table, so the phone
  *  cards and the desktop table can never offer different actions. */
 const ACTIONS = {
-  credentials: {
-    eyebrow: "Login credentials",
-    title: "Send login credentials?",
-    body: (name, t) =>
-      `${name} will be emailed a new temporary password at ${t.email} and asked to choose their own on first sign-in. Any password they had stops working and open sessions are signed out.`,
-    confirm: "Send credentials",
+  invite: {
+    eyebrow: "Invitation",
+    title: "Send an invitation?",
+    body: (name, t, ctx) =>
+      `${name} will be emailed a one-time link at ${t.email} to choose their own password and activate the account. The link is valid for ${ctx.inviteDays} days` +
+      (t.onboarding_status === "invited" || t.onboarding_status === "expired"
+        ? " and replaces the link sent before."
+        : ". No password is sent."),
+    confirm: "Send invitation",
     busy: "Sending…",
     tone: "btn-brand",
     Icon: IconMail,
     method: "POST",
-    path: (id) => `/dean/teachers/${id}/send-credentials`,
+    path: (id) => `/dean/teachers/${id}/invite`,
   },
   reset: {
     eyebrow: "Password reset",
@@ -174,11 +195,39 @@ const ACTIONS = {
     method: "POST",
     path: (id) => `/dean/teachers/${id}/activate`,
   },
+  remove: {
+    eyebrow: "Remove teacher",
+    title: "Remove this teacher?",
+    body: (name, t) =>
+      `${name} will be signed out, unable to sign in, and moved to the Removed tab. ` +
+      (t.event_count
+        ? `Their ${t.event_count} event${t.event_count === 1 ? "" : "s"}, uploads and reports are all kept. `
+        : "Nothing is deleted. ") +
+      "You can restore them at any time.",
+    confirm: "Remove teacher",
+    busy: "Removing…",
+    tone: "btn-danger",
+    Icon: IconArchive,
+    method: "POST",
+    path: (id) => `/dean/teachers/${id}/remove`,
+  },
+  restore: {
+    eyebrow: "Restore teacher",
+    title: "Restore this teacher?",
+    body: (name) => `${name} will return to the teacher list with the account status they had before they were removed.`,
+    confirm: "Restore",
+    busy: "Restoring…",
+    tone: "btn-ok",
+    Icon: IconArchiveRestore,
+    method: "POST",
+    path: (id) => `/dean/teachers/${id}/restore`,
+  },
   delete: {
     eyebrow: "Permanent",
-    title: "Are you sure you want to delete this Teacher account?",
-    body: (name) => `${name}'s account will be removed from Campus Capture. This cannot be undone.`,
-    confirm: "Delete account",
+    title: "Are you sure you want to delete this Teacher account permanently?",
+    body: (name) =>
+      `${name}'s account will be erased from Campus Capture. This cannot be undone. It is allowed only because they have no events.`,
+    confirm: "Delete permanently",
     busy: "Deleting…",
     tone: "btn-danger",
     Icon: IconTrash,
@@ -206,6 +255,9 @@ export default function Teachers() {
     : "all";
   const sourceFilter = SOURCE_OPTIONS.some((o) => o.key === searchParams.get("source"))
     ? searchParams.get("source")
+    : "all";
+  const onboardingFilter = ONBOARDING_OPTIONS.some((o) => o.key === searchParams.get("onboarding"))
+    ? searchParams.get("onboarding")
     : "all";
   const sort = SORT_OPTIONS.some((o) => o.key === searchParams.get("sort"))
     ? searchParams.get("sort")
@@ -237,8 +289,11 @@ export default function Teachers() {
   // ------------------------------------------------------------ data
   const [teachers, setTeachers] = useState([]);
   const [total, setTotal] = useState(0);
-  const [counts, setCounts] = useState({ all: 0, active: 0, inactive: 0, pending: 0 });
+  const [counts, setCounts] = useState({ all: 0, active: 0, inactive: 0, pending: 0, removed: 0 });
+  const [onboardingCounts, setOnboardingCounts] = useState({});
   const [emailConfigured, setEmailConfigured] = useState(true);
+  const [emailDeliveryEnabled, setEmailDeliveryEnabled] = useState(true);
+  const [inviteDays, setInviteDays] = useState(7);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -263,10 +318,11 @@ export default function Teachers() {
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (verifiedFilter !== "all") params.set("verified", verifiedFilter);
     if (sourceFilter !== "all") params.set("source", sourceFilter);
+    if (onboardingFilter !== "all") params.set("onboarding", onboardingFilter);
     if (urlQ) params.set("q", urlQ);
     params.set("sort", sort);
     return params;
-  }, [statusFilter, verifiedFilter, sourceFilter, urlQ, sort]);
+  }, [statusFilter, verifiedFilter, sourceFilter, onboardingFilter, urlQ, sort]);
 
   const loadTeachers = useCallback(async () => {
     loadControllerRef.current?.abort();
@@ -283,7 +339,10 @@ export default function Teachers() {
       setTeachers(data?.teachers || []);
       setTotal(data?.total || 0);
       if (data?.counts) setCounts(data.counts);
+      if (data?.onboarding_counts) setOnboardingCounts(data.onboarding_counts);
       setEmailConfigured(data?.email_configured !== false);
+      setEmailDeliveryEnabled(data?.email_delivery_enabled !== false);
+      if (data?.invite_expire_days) setInviteDays(data.invite_expire_days);
     } catch (err) {
       if (controller.signal.aborted || isAbortError(err)) return;
       handleApiError(err, "Failed to load teachers.");
@@ -381,14 +440,16 @@ export default function Teachers() {
       const data = await apiJson(action.path(teacher.id), { method: action.method });
       setSuccess(data?.message || "Done.");
       setPending(null);
-      if (kind === "delete" || kind === "promote") {
+      // These take the teacher out of the list being looked at.
+      const leavesList = ["delete", "promote", "remove", "restore"].includes(kind);
+      if (leavesList) {
         setSelected((prev) => {
           const next = new Map(prev);
           next.delete(teacher.id);
           return next;
         });
       }
-      if ((kind === "delete" || kind === "promote") && teachers.length === 1 && page > 1) {
+      if (leavesList && teachers.length === 1 && page > 1) {
         updateParams({ page: page - 1 }, { keepPage: true });
         setActivityKey((k) => k + 1);
       } else {
@@ -427,7 +488,7 @@ export default function Teachers() {
     let withNames;
     let fatal;
     try {
-      ({ results: withNames, error: fatal } = await sendCredentialsInChunks(ids, {
+      ({ results: withNames, error: fatal } = await sendInvitesInChunks(ids, {
         lookup: (id) => selected.get(id),
         onProgress: (done, results) => setBulkRun((prev) => ({ ...prev, done, results })),
       }));
@@ -438,7 +499,7 @@ export default function Teachers() {
     }
     setBulkRun({ done: ids.length, total: ids.length, results: withNames, running: false, error: fatal });
 
-    // Anyone who was sent credentials is done; keep the rest selected so the
+    // Anyone who was sent an invitation is done; keep the rest selected so the
     // Dean can deal with them.
     setSelected((prev) => {
       const next = new Map(prev);
@@ -455,7 +516,11 @@ export default function Teachers() {
 
   const pendingAction = pending ? ACTIONS[pending.kind] : null;
   const filtersActive =
-    Boolean(urlQ) || statusFilter !== "all" || verifiedFilter !== "all" || sourceFilter !== "all";
+    Boolean(urlQ) ||
+    statusFilter !== "all" ||
+    verifiedFilter !== "all" ||
+    sourceFilter !== "all" ||
+    onboardingFilter !== "all";
   const selectedCount = selected.size;
 
   // ------------------------------------------------------------ UI
@@ -464,14 +529,14 @@ export default function Teachers() {
       active="teachers"
       profile={profile}
       onLogout={handleLogout}
-      railNote="Credentials and reset links are emailed to the teacher. Passwords are never shown here."
+      railNote="Teachers are invited with a one-time link to set their own password. Passwords are never sent or shown."
     >
       <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
         <PageHero
           eyebrow="Dean Panel"
           title="Teacher"
           accent="Management"
-          subtitle="Every Teacher account at Swami Rama Himalayan University. Send login credentials, reset passwords, edit profiles, manage access and promote teachers to Dean."
+          subtitle="Every Teacher account at Swami Rama Himalayan University. Invite teachers, reset passwords, edit profiles, manage access and promote teachers to Dean."
           actions={
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <button type="button" onClick={refreshAll} disabled={loading} className="btn btn-ghost">
@@ -520,7 +585,7 @@ export default function Teachers() {
             value={counts.pending ?? 0}
             Icon={IconClock}
             track={TRACK_WARN}
-            hint="May need credentials"
+            hint="May need an invitation"
             to="/dean/teachers?status=pending"
             index={3}
           />
@@ -528,8 +593,15 @@ export default function Teachers() {
 
         {!emailConfigured && (
           <Banner track={TRACK_WARN} Icon={IconAlertTriangle} title="Email is not configured">
-            Sending credentials and password reset links needs outgoing email, which is not set up on
+            Sending invitations and password reset links needs outgoing email, which is not set up on
             this server. Ask the administrator to configure SMTP.
+          </Banner>
+        )}
+
+        {emailConfigured && !emailDeliveryEnabled && (
+          <Banner track={ROLE_TRACK.teacher} Icon={IconInfo} title="Email delivery is switched off">
+            Invitations and reset links are saved to the server&apos;s email outbox instead of being sent,
+            so no teacher receives anything. Turn it on with EMAIL_DELIVERY_ENABLED=true on the server.
           </Banner>
         )}
 
@@ -599,6 +671,19 @@ export default function Teachers() {
               ))}
             </select>
             <select
+              value={onboardingFilter}
+              onChange={(e) => updateParams({ onboarding: e.target.value === "all" ? null : e.target.value })}
+              aria-label="Filter by invitation status"
+              className="input h-9 w-auto py-0 text-sm"
+            >
+              {ONBOARDING_OPTIONS.map((o) => (
+                <option key={o.key} value={o.key}>
+                  {o.label}
+                  {o.key !== "all" && onboardingCounts[o.key] != null ? ` (${onboardingCounts[o.key]})` : ""}
+                </option>
+              ))}
+            </select>
+            <select
               value={sort}
               onChange={(e) => updateParams({ sort: e.target.value === "newest" ? null : e.target.value })}
               aria-label="Sort teachers"
@@ -613,7 +698,7 @@ export default function Teachers() {
                 type="button"
                 onClick={() => {
                   setSearchDraft("");
-                  updateParams({ q: null, status: null, verified: null, source: null });
+                  updateParams({ q: null, status: null, verified: null, source: null, onboarding: null });
                 }}
                 className="btn btn-ghost btn-sm"
               >
@@ -653,12 +738,12 @@ export default function Teachers() {
               <button
                 type="button"
                 onClick={() => setBulkConfirmOpen(true)}
-                disabled={!emailConfigured || Boolean(bulkRun?.running)}
+                disabled={!emailConfigured || Boolean(bulkRun?.running) || statusFilter === "removed"}
                 title={emailConfigured ? undefined : "Email is not configured on the server"}
                 className="btn btn-primary btn-sm"
               >
                 <IconMail />
-                Send login credentials
+                Send invitations
               </button>
             </div>
           </div>
@@ -730,6 +815,7 @@ export default function Teachers() {
                         <p className="prose-muted truncate text-xs">{t.email}</p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
                           <ActiveChip teacher={t} />
+                          <OnboardingChip teacher={t} />
                           <VerifiedChip teacher={t} />
                           <SourceChips teacher={t} />
                         </div>
@@ -812,6 +898,7 @@ export default function Teachers() {
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-1">
                             <ActiveChip teacher={t} />
+                            <OnboardingChip teacher={t} />
                             <VerifiedChip teacher={t} />
                             <SourceChips teacher={t} />
                           </div>
@@ -824,13 +911,12 @@ export default function Teachers() {
                           ) : (
                             <p className="text-muted">Never</p>
                           )}
-                          <p className="text-[11px] text-muted">Joined {formatDate(t.created_at)}</p>
+                          <p className="text-[11px] text-muted">Added {formatDate(t.created_at)}</p>
                         </td>
                         <td className="whitespace-nowrap px-3 py-3 pr-5 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <RowActions
                               teacher={t}
-                              compact
                               emailConfigured={emailConfigured}
                               onAct={openAction}
                               onEdit={setEditing}
@@ -895,14 +981,22 @@ export default function Teachers() {
         {pending && (
           <div className="space-y-4">
             <TeacherSummary teacher={pending.teacher} />
-            <p className="prose-muted text-sm">{pendingAction.body(nameOf(pending.teacher), pending.teacher)}</p>
+            <p className="prose-muted text-sm">
+              {pendingAction.body(nameOf(pending.teacher), pending.teacher, { inviteDays })}
+            </p>
             {pending.kind === "delete" && (
               <div className="flex items-start gap-3 rounded-2xl border p-3.5" data-tint="" style={{ "--track": TRACK_ERR }}>
                 <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
                 <p className="text-sm text-ink">
-                  Their events, uploaded media, documents, reports and notifications are deleted with the
-                  account. To keep their records, deactivate the account instead.
+                  Use this for a wrong import or a duplicate account. To take a real teacher off the list,
+                  use Remove instead: it keeps everything and can be undone.
                 </p>
+              </div>
+            )}
+            {pending.kind === "invite" && !emailDeliveryEnabled && (
+              <div className="toast text-sm" role="note">
+                <IconInfo className="h-4 w-4 shrink-0 text-accent" />
+                <span>Email delivery is switched off: the invitation is saved to the server outbox, not sent.</span>
               </div>
             )}
             {pendingError && (
@@ -919,8 +1013,8 @@ export default function Teachers() {
       <Modal
         open={bulkConfirmOpen}
         onClose={() => setBulkConfirmOpen(false)}
-        eyebrow="Login credentials"
-        title={`Send login credentials to ${selectedCount} ${selectedCount === 1 ? "teacher" : "teachers"}?`}
+        eyebrow="Invitations"
+        title={`Send invitations to ${selectedCount} ${selectedCount === 1 ? "teacher" : "teachers"}?`}
         footer={
           <>
             <button type="button" onClick={() => setBulkConfirmOpen(false)} className="btn btn-ghost btn-sm">
@@ -935,14 +1029,19 @@ export default function Teachers() {
       >
         <div className="space-y-3 text-sm">
           <p className="prose-muted">
-            Each teacher is emailed a new temporary password and asked to choose their own on first
-            sign-in. Their previous password stops working and open sessions are signed out.
+            Each teacher is emailed a one-time link to choose their own password. The link is valid for{" "}
+            {inviteDays} days; no password is sent, and nothing about their account changes until they use it.
           </p>
           <p className="prose-muted">
             Some teachers are skipped automatically, and the report says why: deactivated accounts,
-            teachers who already sign in with their own password (use Reset Password for them),
-            invalid email addresses, and anyone sent credentials in the last few minutes.
+            teachers who have already joined (use Reset Password for them), invalid email addresses, and
+            anyone invited in the last few minutes.
           </p>
+          {!emailDeliveryEnabled && (
+            <p className="text-ink">
+              Email delivery is switched off: the invitations are saved to the server outbox, not sent.
+            </p>
+          )}
         </div>
       </Modal>
 
@@ -950,8 +1049,8 @@ export default function Teachers() {
       <Modal
         open={Boolean(bulkRun)}
         onClose={() => { if (!bulkRun?.running) setBulkRun(null); }}
-        eyebrow="Login credentials"
-        title={bulkRun?.running ? "Sending credentials…" : "Credential delivery report"}
+        eyebrow="Invitations"
+        title={bulkRun?.running ? "Sending invitations…" : "Invitation report"}
         wide
         footer={
           !bulkRun?.running && (
@@ -966,6 +1065,7 @@ export default function Teachers() {
 
       <ImportTeachersModal
         open={importOpen}
+        inviteDays={inviteDays}
         onClose={() => setImportOpen(false)}
         onDone={refreshAll}
         onUnauthorized={() => navigate("/login", { replace: true })}
@@ -1039,6 +1139,13 @@ function Avatar({ teacher }) {
 }
 
 function ActiveChip({ teacher }) {
+  if (teacher.removed_at) {
+    return (
+      <span className="chip chip-sm border-err/30 bg-err/10 text-err" title={`Removed ${formatDate(teacher.removed_at)}`}>
+        Removed
+      </span>
+    );
+  }
   return isActive(teacher) ? (
     <span className="chip chip-sm border-ok/30 bg-ok/10 text-ok">Active</span>
   ) : (
@@ -1047,28 +1154,57 @@ function ActiveChip({ teacher }) {
 }
 
 /**
- * "Imported" for an account created from an Excel import, and "Credentials
- * not sent" while such an account has no way to sign in yet.
+ * "Imported" for an account created from a Dean's Excel import.
  */
 function SourceChips({ teacher }) {
   if (teacher.onboarded_via !== "dean_import") return null;
-  const awaiting = !teacher.credentials_sent_at && !teacher.last_sign_in_at;
   return (
-    <>
-      <span className="chip chip-sm chip-track" style={{ "--track": ROLE_TRACK.teacher }}>
-        <IconUpload className="h-3 w-3" />
-        Imported
+    <span className="chip chip-sm chip-track" style={{ "--track": ROLE_TRACK.teacher }}>
+      <IconUpload className="h-3 w-3" />
+      Imported
+    </span>
+  );
+}
+
+/** Where a teacher is in joining: not invited, invited, link expired, joined. */
+function OnboardingChip({ teacher }) {
+  if (teacher.removed_at) return null;
+  const status = teacher.onboarding_status;
+  if (status === "joined") {
+    return <span className="chip chip-sm border-ok/30 bg-ok/10 text-ok">Joined</span>;
+  }
+  if (status === "invited") {
+    const until = formatDate(teacher.invite_expires_at);
+    return (
+      <span
+        className="chip chip-sm chip-track"
+        style={{ "--track": ROLE_TRACK.teacher }}
+        title={`Invitation sent ${formatDateTime(teacher.invited_at) || ""}; link valid until ${until}`}
+      >
+        <IconMail className="h-3 w-3" />
+        Invited
       </span>
-      {awaiting && (
-        <span
-          className="chip chip-sm"
-          style={{ color: TRACK_WARN, borderColor: `${TRACK_WARN}55` }}
-          title="This teacher cannot sign in until login credentials are sent"
-        >
-          Credentials not sent
-        </span>
-      )}
-    </>
+    );
+  }
+  if (status === "expired") {
+    return (
+      <span
+        className="chip chip-sm"
+        style={{ color: TRACK_WARN, borderColor: `${TRACK_WARN}55` }}
+        title="The invitation link expired before it was used. Send a new one."
+      >
+        Link expired
+      </span>
+    );
+  }
+  return (
+    <span
+      className="chip chip-sm"
+      style={{ color: TRACK_MUTED, borderColor: `${TRACK_MUTED}55` }}
+      title="No invitation sent yet"
+    >
+      Not invited
+    </span>
   );
 }
 
@@ -1101,124 +1237,93 @@ function TeacherSummary({ teacher }) {
 /**
  * The actions a Teacher row offers; the server enforces the same rules.
  *
- * `compact` (the desktop table) keeps the two everyday actions as buttons and
- * puts the rest in a "More actions" menu, so the row fits the screen. The
- * cards have the room to show every action as a button.
+ * The two everyday actions are buttons -- invite and edit -- and the rest sit
+ * in a "More actions" menu, so a row fits the screen in the table and on a
+ * card alike. A removed teacher offers only Restore and, when they have no
+ * events, permanent deletion.
  */
-function RowActions({ teacher, emailConfigured, onAct, onEdit, compact = false }) {
+function RowActions({ teacher, emailConfigured, onAct, onEdit }) {
   const active = isActive(teacher);
-  const mailTitle = (label) => (emailConfigured ? label : `${label} (email is not configured)`);
   const btn = "btn btn-ghost btn-xs btn-icon";
+  const events = teacher.event_count || 0;
+  const deleteItem = {
+    key: "delete",
+    label: "Delete permanently",
+    Icon: IconTrash,
+    danger: true,
+    disabled: events > 0,
+    hint: events > 0 ? `Has ${events} event${events === 1 ? "" : "s"}. Remove the teacher instead.` : null,
+  };
 
-  if (compact) {
+  if (teacher.removed_at) {
     return (
       <>
         <button
           type="button"
-          onClick={() => onAct("credentials", teacher)}
-          disabled={!active || !emailConfigured}
-          className={btn}
-          title={active ? mailTitle("Send login credentials") : "Activate the account first"}
-          aria-label="Send login credentials"
+          onClick={() => onAct("restore", teacher)}
+          className="btn btn-ok btn-xs"
+          title="Restore this teacher"
         >
-          <IconMail className="h-4 w-4" />
+          <IconArchiveRestore className="h-4 w-4" />
+          Restore
         </button>
-        <button type="button" onClick={() => onEdit(teacher)} className={btn} title="Edit teacher" aria-label="Edit teacher">
-          <IconEdit className="h-4 w-4" />
-        </button>
-        <RowMenu
-          label={`More actions for ${nameOf(teacher)}`}
-          items={[
-            {
-              key: "reset",
-              label: "Send password reset link",
-              Icon: IconKey,
-              disabled: !active || !emailConfigured,
-              hint: !active ? "Activate the account first" : !emailConfigured ? "Email is not configured" : null,
-            },
-            {
-              key: "promote",
-              label: "Promote to Dean",
-              Icon: IconAward,
-              disabled: !active,
-              hint: !active ? "Activate the account first" : null,
-            },
-            active
-              ? { key: "deactivate", label: "Deactivate account", Icon: IconXCircle, danger: true }
-              : { key: "activate", label: "Reactivate account", Icon: IconCheck },
-            { key: "delete", label: "Delete account", Icon: IconTrash, danger: true },
-          ]}
-          onSelect={(key) => onAct(key, teacher)}
-        />
+        <RowMenu label={`More actions for ${nameOf(teacher)}`} items={[deleteItem]} onSelect={(key) => onAct(key, teacher)} />
       </>
     );
   }
+
+  const status = teacher.onboarding_status;
+  const joined = status === "joined";
+  const inviteLabel =
+    status === "invited" ? "Resend invitation" : status === "expired" ? "Send a new invitation" : "Send invitation";
+  const inviteTitle = !active
+    ? "Activate the account first"
+    : joined
+      ? "Already joined. Use Send password reset link if they cannot sign in."
+      : emailConfigured
+        ? inviteLabel
+        : `${inviteLabel} (email is not configured)`;
 
   return (
     <>
       <button
         type="button"
-        onClick={() => onAct("credentials", teacher)}
-        disabled={!active || !emailConfigured}
+        onClick={() => onAct("invite", teacher)}
+        disabled={!active || !emailConfigured || joined}
         className={btn}
-        title={active ? mailTitle("Send login credentials") : "Activate the account first"}
-        aria-label="Send login credentials"
+        title={inviteTitle}
+        aria-label={inviteLabel}
       >
         <IconMail className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onAct("reset", teacher)}
-        disabled={!active || !emailConfigured}
-        className={btn}
-        title={active ? mailTitle("Send password reset link") : "Activate the account first"}
-        aria-label="Send password reset link"
-      >
-        <IconKey className="h-4 w-4" />
       </button>
       <button type="button" onClick={() => onEdit(teacher)} className={btn} title="Edit teacher" aria-label="Edit teacher">
         <IconEdit className="h-4 w-4" />
       </button>
-      <button
-        type="button"
-        onClick={() => onAct("promote", teacher)}
-        disabled={!active}
-        className="btn btn-brand btn-xs btn-icon"
-        title={active ? "Promote to Dean" : "Activate the account before promoting"}
-        aria-label="Promote to Dean"
-      >
-        <IconAward className="h-4 w-4" />
-      </button>
-      {active ? (
-        <button
-          type="button"
-          onClick={() => onAct("deactivate", teacher)}
-          className={`${btn} text-err hover:bg-err/10`}
-          title="Deactivate account"
-          aria-label="Deactivate account"
-        >
-          <IconXCircle className="h-4 w-4" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => onAct("activate", teacher)}
-          className="btn btn-ok btn-xs btn-icon"
-          title="Reactivate account"
-          aria-label="Reactivate account"
-        >
-          <IconCheck className="h-4 w-4" />
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={() => onAct("delete", teacher)}
-        className="btn btn-danger btn-xs btn-icon"
-        title="Delete account"
-        aria-label="Delete account"
-      >
-        <IconTrash className="h-4 w-4" />
-      </button>
+      <RowMenu
+        label={`More actions for ${nameOf(teacher)}`}
+        items={[
+          {
+            key: "reset",
+            label: "Send password reset link",
+            Icon: IconKey,
+            disabled: !active || !emailConfigured,
+            hint: !active ? "Activate the account first" : !emailConfigured ? "Email is not configured" : null,
+          },
+          {
+            key: "promote",
+            label: "Promote to Dean",
+            Icon: IconAward,
+            disabled: !active,
+            hint: !active ? "Activate the account first" : null,
+          },
+          active
+            ? { key: "deactivate", label: "Deactivate account", Icon: IconXCircle, danger: true }
+            : { key: "activate", label: "Reactivate account", Icon: IconCheck },
+          { key: "remove", label: "Remove teacher", Icon: IconArchive, danger: true },
+          deleteItem,
+        ]}
+        onSelect={(key) => onAct(key, teacher)}
+      />
     </>
   );
 }
@@ -1507,12 +1612,16 @@ function EditTeacherModal({ teacher, onClose, onSaved, onUnauthorized }) {
 }
 
 const ACTIVITY_LABEL = {
+  teacher_invited: "Sent invitation",
+  teachers_invited: "Bulk sent invitations",
+  user_removed: "Removed teacher",
+  user_restored: "Restored teacher",
   teacher_credentials_sent: "Sent login credentials",
   teachers_credentials_sent: "Bulk sent login credentials",
   teachers_imported: "Imported teachers from Excel",
   password_reset_link_sent: "Sent password reset link",
   user_profile_updated: "Edited teacher",
-  user_deleted: "Deleted teacher",
+  user_deleted: "Deleted teacher permanently",
   user_activated: "Reactivated teacher",
   user_deactivated: "Deactivated teacher",
   role_change: "Promoted to Dean",
@@ -1567,7 +1676,7 @@ function ActivityPanel({ refreshKey }) {
               {logs.map((log) => {
                 const d = log.details || {};
                 const failed = d.result === "failed";
-                const summary = log.action === "teachers_credentials_sent"
+                const summary = ["teachers_credentials_sent", "teachers_invited"].includes(log.action)
                   ? `${d.sent_count ?? 0} sent · ${d.failed_count ?? 0} failed · ${d.skipped_count ?? 0} skipped`
                   : log.action === "teachers_imported"
                     ? `${d.created_count ?? 0} created · ${d.skipped_count ?? 0} skipped`

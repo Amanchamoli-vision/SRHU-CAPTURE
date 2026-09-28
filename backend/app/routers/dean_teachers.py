@@ -8,15 +8,18 @@ not modified by a stale request.
 
 What deliberately differs from the superadmin equivalents in superadmin.py:
 
-* No password is ever returned. The superadmin's credential and reset routes
-  hand the temporary password back as an out-of-band fallback; a Dean only
-  ever triggers an email.
+* No password is ever sent or returned. A teacher is *invited*: emailed a
+  one-time link (POST /auth/accept-invite) to choose their own password. The
+  superadmin's routes still hand out temporary passwords; a Dean never does.
 * "Reset password" issues the same one-time link as /auth/forgot-password
-  rather than setting a temporary password, and leaves the current password
-  working until the teacher chooses a new one.
+  and leaves the current password working until the teacher chooses a new one.
 * Emails are sent synchronously, so the Dean sees each teacher's real outcome.
-  A new credential is written only after its email was accepted by the SMTP
-  server: a failed delivery therefore never replaces a password nobody knows.
+  An invitation link is stored only after its email was accepted, so a failed
+  send never replaces a link the teacher already has.
+* A Dean *removes* a teacher (hidden, signed out, every record kept) and can
+  restore them. Permanent deletion is only for a teacher with no events --
+  the typical case being a wrong import -- because it erases their events,
+  media and reports.
 
 Audit entries reuse the superadmin's action names where the action is the
 same (so the superadmin's existing audit filters include Dean actions) and all
@@ -26,7 +29,7 @@ carry ``details.via = "dean_panel"`` so the Dean panel can list its own.
 import logging
 import re
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -35,12 +38,12 @@ from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
-from app.database import audit_logs, users
+from app.database import audit_logs, events, users
 from app.models.documents import USER_PRIVATE_FIELDS, new_user_document
 from app.routers.auth import find_user_by_email
 from app.schemas.dean import (
     DeanImportTeachersRequest,
-    DeanSendCredentialsRequest,
+    DeanInviteRequest,
     DeanUpdateTeacherRequest,
 )
 from app.services import email_service, teacher_import
@@ -49,7 +52,6 @@ from app.services.storage_service import delete_user_cascade
 from app.utils.auth import dean_dep, public_user
 from app.utils.security import (
     generate_one_time_token,
-    generate_temporary_password,
     hash_one_time_token,
     hash_password,
 )
@@ -65,12 +67,13 @@ logger = logging.getLogger(__name__)
 
 VIA = "dean_panel"
 
-# Two sends to the same teacher inside this window are almost always a double
-# click or two Deans acting at once; the second would silently invalidate the
-# password the first one just delivered.
-CREDENTIALS_RESEND_COOLDOWN_MINUTES = 10
+# Two invitations to the same teacher inside this window are almost always a
+# double click or two Deans acting at once; the second would silently replace
+# the link the first one just delivered.
+INVITE_RESEND_COOLDOWN_MINUTES = 10
 
-STATUS_FILTERS = ("all", "active", "inactive", "pending")
+STATUS_FILTERS = ("all", "active", "inactive", "pending", "removed")
+ONBOARDING_FILTERS = ("all", "not_invited", "invited", "expired", "joined")
 VERIFIED_FILTERS = ("all", "verified", "unverified")
 SOURCE_FILTERS = ("all", "imported", "registered")
 
@@ -97,11 +100,13 @@ def _canonical_id(user_id: str) -> str:
     return str(object_id) if object_id is not None else user_id
 
 
-def find_teacher_or_404(user_id: str, actor: dict) -> dict:
+def find_teacher_or_404(user_id: str, actor: dict, *, include_removed: bool = False) -> dict:
     """The Teacher account with this id, or 404 for anything else.
 
     A superadmin or Dean id answers exactly like an unknown one, so these
     routes cannot be used to probe or touch accounts outside a Dean's remit.
+    A removed teacher is out of reach too, except for the routes that bring
+    them back or delete them (``include_removed``).
     """
     if _canonical_id(user_id) == actor.get("id"):
         raise HTTPException(
@@ -110,7 +115,10 @@ def find_teacher_or_404(user_id: str, actor: dict) -> dict:
         )
 
     object_id = to_object_id(user_id)
-    teacher = users.find_one({"_id": object_id, "role": "teacher"}) if object_id else None
+    query: dict[str, Any] = {"_id": object_id, "role": "teacher"}
+    if not include_removed:
+        query["removed_at"] = None
+    teacher = users.find_one(query) if object_id else None
     if not teacher:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -163,6 +171,60 @@ def _is_active(doc: dict) -> bool:
     return doc.get("is_active") is not False
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    """PyMongo can return naive UTC datetimes; compare them as UTC."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=utc_now().tzinfo)
+    return value
+
+
+def onboarding_status(doc: dict, now: datetime | None = None) -> str:
+    """not_invited, invited, expired or joined -- the Dean panel's onboarding column."""
+    if doc.get("last_sign_in_at") or doc.get("invite_accepted_at"):
+        return "joined"
+    expires = _aware(doc.get("invite_expires_at"))
+    if expires is None:
+        return "not_invited"
+    return "invited" if expires > (now or utc_now()) else "expired"
+
+
+def _onboarding_query(key: str, now: datetime) -> dict:
+    """The MongoDB filter for one onboarding status (matches onboarding_status)."""
+    not_joined = {"last_sign_in_at": None, "invite_accepted_at": None}
+    if key == "joined":
+        return {"$or": [{"last_sign_in_at": {"$ne": None}}, {"invite_accepted_at": {"$ne": None}}]}
+    if key == "invited":
+        return {**not_joined, "invite_expires_at": {"$gt": now}}
+    if key == "expired":
+        return {**not_joined, "invite_expires_at": {"$lte": now}}
+    if key == "not_invited":
+        return {**not_joined, "invite_expires_at": None}
+    return {}
+
+
+def _combine(*clauses: dict) -> dict:
+    """AND together filters that may each carry their own $or."""
+    parts = [c for c in clauses if c]
+    if not parts:
+        return {}
+    return parts[0] if len(parts) == 1 else {"$and": parts}
+
+
+def _event_counts(teacher_ids: list[str]) -> dict[str, int]:
+    """How many events each teacher owns (events store the id as a string).
+
+    find() and a Python count rather than an aggregation, so it stays testable
+    with the collection fakes (see the api skill).
+    """
+    counts = {teacher_id: 0 for teacher_id in teacher_ids}
+    if teacher_ids:
+        for event in events.find({"teacher_id": {"$in": teacher_ids}}, {"teacher_id": 1}):
+            key = str(event.get("teacher_id"))
+            if key in counts:
+                counts[key] += 1
+    return counts
+
+
 # ============================================================
 # LIST
 # ============================================================
@@ -174,21 +236,13 @@ def list_teachers(
     account_status: str = Query(default="all", alias="status", max_length=20),
     verified: str = Query(default="all", max_length=20),
     source: str = Query(default="all", max_length=20),
+    onboarding: str = Query(default="all", max_length=20),
     sort: str = Query(default="newest", max_length=20),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ):
+    now = utc_now()
     base: dict[str, Any] = {"role": "teacher"}
-
-    search = (q or "").strip()
-    if search:
-        pattern = re.escape(search)
-        base["$or"] = [
-            {"name": {"$regex": pattern, "$options": "i"}},
-            {"email": {"$regex": pattern, "$options": "i"}},
-            {"phone": {"$regex": pattern, "$options": "i"}},
-            {"department": {"$regex": pattern, "$options": "i"}},
-        ]
 
     verified_key = verified.strip().lower()
     if verified_key == "verified":
@@ -202,21 +256,47 @@ def list_teachers(
     elif source_key == "registered":
         base["onboarded_via"] = {"$ne": IMPORT_SOURCE}
 
+    search_clause: dict = {}
+    search = (q or "").strip()
+    if search:
+        pattern = re.escape(search)
+        search_clause = {"$or": [
+            {"name": {"$regex": pattern, "$options": "i"}},
+            {"email": {"$regex": pattern, "$options": "i"}},
+            {"phone": {"$regex": pattern, "$options": "i"}},
+            {"department": {"$regex": pattern, "$options": "i"}},
+        ]}
+
+    onboarding_key = onboarding.strip().lower()
+    if onboarding_key not in ONBOARDING_FILTERS:
+        onboarding_key = "all"
+    onboarding_clause = _onboarding_query(onboarding_key, now)
+
     # Tab counts under every other filter, so each number is what clicking
-    # that tab would show.
+    # that tab would show. Removed teachers are only ever in their own tab.
+    listed = {"removed_at": None}
     status_queries = {
-        "all": {},
-        "active": {"is_active": {"$ne": False}},
-        "inactive": {"is_active": False},
-        # Never signed in: the people credentials are for.
-        "pending": {"last_sign_in_at": None},
+        "all": listed,
+        "active": {**listed, "is_active": {"$ne": False}},
+        "inactive": {**listed, "is_active": False},
+        # Never signed in: the people invitations are for.
+        "pending": {**listed, "last_sign_in_at": None},
+        "removed": {"removed_at": {"$ne": None}},
     }
-    counts = {key: users.count_documents({**base, **extra}) for key, extra in status_queries.items()}
+    counts = {
+        key: users.count_documents(_combine({**base, **extra}, search_clause, onboarding_clause))
+        for key, extra in status_queries.items()
+    }
 
     status_key = account_status.strip().lower()
     if status_key not in STATUS_FILTERS:
         status_key = "all"
-    query = {**base, **status_queries[status_key]}
+    status_base = {**base, **status_queries[status_key]}
+    onboarding_counts = {
+        key: users.count_documents(_combine(status_base, search_clause, _onboarding_query(key, now)))
+        for key in ONBOARDING_FILTERS
+    }
+    query = _combine(status_base, search_clause, onboarding_clause)
 
     total = counts[status_key]
     cursor = (
@@ -228,6 +308,17 @@ def list_teachers(
     # Excluded twice on purpose: by the projection, and again on the way out,
     # so no credential field can reach a Dean even if the projection changes.
     teachers = serialize_many(cursor, exclude=USER_PRIVATE_FIELDS)
+    event_counts = _event_counts([t["id"] for t in teachers])
+    for teacher in teachers:
+        teacher["onboarding_status"] = onboarding_status(
+            {
+                "last_sign_in_at": teacher.get("last_sign_in_at"),
+                "invite_accepted_at": teacher.get("invite_accepted_at"),
+                "invite_expires_at": _parse_iso(teacher.get("invite_expires_at")),
+            },
+            now,
+        )
+        teacher["event_count"] = event_counts.get(teacher["id"], 0)
 
     return {
         "success": True,
@@ -238,9 +329,22 @@ def list_teachers(
         "skip": skip,
         "limit": limit,
         "counts": counts,
+        "onboarding_counts": onboarding_counts,
         "email_configured": email_service.is_configured(),
-        "credentials_cooldown_minutes": CREDENTIALS_RESEND_COOLDOWN_MINUTES,
+        "email_delivery_enabled": email_service.delivery_enabled(),
+        "invite_expire_days": settings.teacher_invite_expire_days,
+        "invite_cooldown_minutes": INVITE_RESEND_COOLDOWN_MINUTES,
     }
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    """serialize() turned datetimes into ISO strings; read one back."""
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
 
 
 @router.get("/activity")
@@ -289,11 +393,12 @@ async def preview_teacher_import(file: UploadFile = File(...)):
         existing = find_user_by_email(entry["email"])
         if existing:
             entry["status"] = "exists"
-            entry["reason"] = (
-                "Already in the teacher list."
-                if existing.get("role") == "teacher"
-                else "This email belongs to an account that is not a Teacher."
-            )
+            if existing.get("role") != "teacher":
+                entry["reason"] = "This email belongs to an account that is not a Teacher."
+            elif existing.get("removed_at"):
+                entry["reason"] = "Belongs to a removed teacher. Restore them from the Removed tab."
+            else:
+                entry["reason"] = "Already in the teacher list."
         else:
             entry["status"] = "new"
 
@@ -310,6 +415,7 @@ async def preview_teacher_import(file: UploadFile = File(...)):
         "truncated": truncated,
         "max_rows": teacher_import.MAX_ROWS,
         "email_configured": email_service.is_configured(),
+        "email_delivery_enabled": email_service.delivery_enabled(),
     }
 
 
@@ -322,10 +428,9 @@ def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dea
     overwritten.
 
     The accounts have no usable password: the hash below is of a random
-    secret that is discarded at once, so nobody can sign in until the Dean
-    sends credentials (POST /dean/teachers/send-credentials, which the panel
-    does straight after when "send email" is on) or the teacher uses Forgot
-    password. It is a real bcrypt hash rather than none so that signing in to
+    secret that is discarded at once, so nobody can sign in until the teacher
+    accepts an invitation (POST /dean/teachers/invite, which the panel sends
+    straight after when "send invitations" is on) or uses Forgot password. It is a real bcrypt hash rather than none so that signing in to
     one of these accounts costs the same time as any other and does not reveal
     that it exists. One hash is shared by the whole batch: hashing 500 would
     take minutes, and the secret behind it is unknowable either way.
@@ -354,8 +459,8 @@ def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dea
             email=email,
             password_hash=unusable_hash,
             role="teacher",
-            # Nothing has proved this mailbox yet. Delivering credentials, or
-            # completing a password reset, marks it verified.
+            # Nothing has proved this mailbox yet. Accepting the invitation,
+            # or completing a password reset, marks it verified.
             email_verified=False,
             must_change_password=True,
             phone=item.phone,
@@ -528,22 +633,111 @@ def deactivate_teacher(user_id: str, dean: dict = Depends(dean_dep)):
 # DELETE
 # ============================================================
 
-@router.delete("/{user_id}")
-def delete_teacher(user_id: str, dean: dict = Depends(dean_dep)):
-    """Delete a Teacher with the application's standard cascade.
+@router.post("/{user_id}/remove")
+def remove_teacher(user_id: str, dean: dict = Depends(dean_dep)):
+    """Take a teacher off the list without destroying anything.
 
-    Same rule as the superadmin's delete: the teacher's events, media,
-    documents, reports and notifications go with the account.
+    The account is deactivated and signed out everywhere, and hidden from the
+    teacher list; their events, media, documents and reports are untouched.
+    Whether they were active is remembered, so restoring puts things back.
     """
     teacher = find_teacher_or_404(user_id, dean)
+    now = utc_now()
 
-    delete_user_cascade(str(teacher["_id"]))
+    updated = users.find_one_and_update(
+        {"_id": teacher["_id"], "role": "teacher", "removed_at": None},
+        {
+            "$set": {
+                "removed_at": now,
+                "removed_by": dean.get("id"),
+                "removed_was_active": _is_active(teacher),
+                "is_active": False,
+                "updated_at": now,
+            },
+            "$inc": {"token_version": 1},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
 
-    _audit(dean, "user_deleted", teacher, {"result": "success", "role": "teacher"})
+    _audit(dean, "user_removed", teacher, {
+        "result": "success",
+        "event_count": _event_counts([str(teacher["_id"])])[str(teacher["_id"])],
+    })
 
     return {
         "success": True,
-        "message": f"{_label(teacher)}'s account was deleted.",
+        "message": f"{_label(teacher)} was removed. Their events are kept; restore them any time from the Removed tab.",
+        "teacher": public_user(updated),
+    }
+
+
+@router.post("/{user_id}/restore")
+def restore_teacher(user_id: str, dean: dict = Depends(dean_dep)):
+    teacher = find_teacher_or_404(user_id, dean, include_removed=True)
+    if not teacher.get("removed_at"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{_label(teacher)} is not removed.",
+        )
+
+    was_active = teacher.get("removed_was_active", True) is not False
+    updated = users.find_one_and_update(
+        {"_id": teacher["_id"], "role": "teacher", "removed_at": {"$ne": None}},
+        {"$set": {
+            "removed_at": None,
+            "removed_by": None,
+            "removed_was_active": None,
+            "is_active": was_active,
+            "updated_at": utc_now(),
+        }},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher not found")
+
+    _audit(dean, "user_restored", teacher, {"result": "success", "is_active": was_active})
+
+    return {
+        "success": True,
+        "message": (
+            f"{_label(teacher)} is back in the teacher list"
+            + ("." if was_active else " (still deactivated, as before).")
+        ),
+        "teacher": public_user(updated),
+    }
+
+
+@router.delete("/{user_id}")
+def delete_teacher(user_id: str, dean: dict = Depends(dean_dep)):
+    """Permanently delete a teacher who has no events.
+
+    Deleting uses the application's standard cascade, which also erases a
+    teacher's events, media, documents and reports -- so a Dean may only do it
+    when there are none (a wrong import, a duplicate account). Anyone with
+    events is removed instead, which keeps every record.
+    """
+    teacher = find_teacher_or_404(user_id, dean, include_removed=True)
+
+    event_count = _event_counts([str(teacher["_id"])])[str(teacher["_id"])]
+    if event_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{_label(teacher)} has {event_count} event{'s' if event_count != 1 else ''}, "
+                "so the account cannot be deleted permanently. Remove the teacher instead: "
+                "their records are kept."
+            ),
+        )
+
+    delete_user_cascade(str(teacher["_id"]))
+
+    _audit(dean, "user_deleted", teacher, {"result": "success", "role": "teacher", "event_count": 0})
+
+    return {
+        "success": True,
+        "message": f"{_label(teacher)}'s account was deleted permanently.",
         "teacher": public_user(teacher),
     }
 
@@ -658,66 +852,52 @@ def send_password_reset(user_id: str, dean: dict = Depends(dean_dep)):
 
 
 # ============================================================
-# LOGIN CREDENTIALS (single and bulk)
+# INVITATIONS (single and bulk)
 # ============================================================
 
-def _credential_skip_reason(doc: dict) -> str | None:
-    """Why this teacher should not be sent new credentials, or None."""
+def _invite_skip_reason(doc: dict) -> str | None:
+    """Why this teacher should not be sent an invitation, or None."""
+    if doc.get("removed_at"):
+        return "Teacher has been removed. Restore them first."
     if not _is_active(doc):
         return "Account is deactivated. Activate it first."
     if not _valid_email(doc.get("email")):
         return "Email address on the account is not valid."
-    if doc.get("last_sign_in_at") and not doc.get("must_change_password"):
-        # They have signed in and chose their own password: new credentials
-        # would overwrite it. A reset link is the right tool.
-        return "Already signed in with their own password. Use Reset Password instead."
-    sent_at = doc.get("credentials_sent_at")
-    if sent_at is not None:
-        if sent_at.tzinfo is None:  # PyMongo returns naive UTC by default
-            sent_at = sent_at.replace(tzinfo=utc_now().tzinfo)
-        if utc_now() - sent_at < timedelta(minutes=CREDENTIALS_RESEND_COOLDOWN_MINUTES):
-            return (
-                "Credentials were sent less than "
-                f"{CREDENTIALS_RESEND_COOLDOWN_MINUTES} minutes ago."
-            )
+    if onboarding_status(doc) == "joined":
+        return "Already joined. Use Reset Password if they cannot sign in."
+    invited_at = _aware(doc.get("invited_at"))
+    if invited_at is not None and utc_now() - invited_at < timedelta(minutes=INVITE_RESEND_COOLDOWN_MINUTES):
+        return f"An invitation was sent less than {INVITE_RESEND_COOLDOWN_MINUTES} minutes ago."
     return None
 
 
-def _deliver_credentials(doc: dict) -> tuple[str, str | None]:
-    """Send one teacher new credentials. Returns ``(outcome, reason)``.
+def _deliver_invite(doc: dict, dean: dict) -> tuple[str, str | None]:
+    """Email one teacher a new invitation link. Returns ``(outcome, reason)``.
 
-    The email goes first; the password is written only once the SMTP server
-    has accepted it. The write is conditional on the account still being an
-    active Teacher, so a concurrent promote / deactivate / delete wins.
+    The email goes first and the link is stored only once it was accepted, so
+    a failed send never replaces a link the teacher already has. The write is
+    conditional on the account still being an active, listed Teacher.
     """
-    temporary_password = generate_temporary_password(12)
+    token = generate_one_time_token()
     try:
-        email_service.send_teacher_credentials_email(
-            doc["email"], doc.get("name") or "Teacher", temporary_password
-        )
+        email_service.send_teacher_invitation_email(doc["email"], doc.get("name") or "there", token)
     except email_service.EmailDeliveryError:
-        logger.warning("dean_credentials_email_failed recipient_domain=%s", _domain(doc["email"]))
+        logger.warning("dean_invite_email_failed recipient_domain=%s", _domain(doc["email"]))
         return "failed", "The email could not be delivered."
 
     now = utc_now()
-    fields: dict[str, Any] = {
-        "password_hash": hash_password(temporary_password),
-        "must_change_password": True,
-        "credentials_sent_at": now,
-        "updated_at": now,
-        # The password exists only in that mailbox, so signing in with it
-        # proves ownership -- the same reasoning /auth/reset-password uses.
-        "email_verified": True,
-    }
-    if not doc.get("email_verified_at"):
-        fields["email_verified_at"] = now
-
     result = users.update_one(
-        {"_id": doc["_id"], "role": "teacher", "is_active": {"$ne": False}},
-        {"$set": fields, "$inc": {"token_version": 1}},
+        {"_id": doc["_id"], "role": "teacher", "is_active": {"$ne": False}, "removed_at": None},
+        {"$set": {
+            "invite_token_hash": hash_one_time_token(token),
+            "invite_expires_at": now + timedelta(days=settings.teacher_invite_expire_days),
+            "invited_at": now,
+            "invited_by": dean.get("id"),
+            "updated_at": now,
+        }},
     )
     if getattr(result, "matched_count", 1) == 0:
-        return "failed", "The account changed while sending. The emailed password is not active."
+        return "failed", "The account changed while sending. The emailed link will not work."
     return "sent", None
 
 
@@ -731,9 +911,9 @@ def _result_row(doc: dict | None, user_id: str, outcome: str, reason: str | None
     }
 
 
-@router.post("/send-credentials")
-def send_credentials_bulk(payload: DeanSendCredentialsRequest, dean: dict = Depends(dean_dep)):
-    """Send login credentials to several teachers; report each one's outcome.
+@router.post("/invite")
+def invite_teachers(payload: DeanInviteRequest, dean: dict = Depends(dean_dep)):
+    """Send invitations to several teachers; report each one's outcome.
 
     Every id is resolved and checked before anything is sent, so the response
     always accounts for every requested teacher: sent, skipped (with why) or
@@ -757,25 +937,26 @@ def send_credentials_bulk(payload: DeanSendCredentialsRequest, dean: dict = Depe
             results.append(_result_row(None, user_id, "skipped", "Not a Teacher account."))
             continue
 
-        reason = _credential_skip_reason(doc)
+        reason = _invite_skip_reason(doc)
         if reason:
             results.append(_result_row(doc, user_id, "skipped", reason))
             continue
 
-        outcome, reason = _deliver_credentials(doc)
+        outcome, reason = _deliver_invite(doc, dean)
         results.append(_result_row(doc, user_id, outcome, reason))
 
     sent = [r for r in results if r["status"] == "sent"]
     failed = [r for r in results if r["status"] == "failed"]
     skipped = [r for r in results if r["status"] == "skipped"]
 
-    _audit(dean, "teachers_credentials_sent", None, {
+    _audit(dean, "teachers_invited", None, {
         "result": "success" if not failed else ("failed" if not sent else "partial"),
         "requested_count": len(results),
         "sent_count": len(sent),
         "failed_count": len(failed),
         "skipped_count": len(skipped),
-        # Who and what happened -- never the passwords.
+        "email_delivery": "enabled" if email_service.delivery_enabled() else "disabled",
+        # Who and what happened -- never the links.
         "results": [
             {"user_id": r["user_id"], "email": r["email"], "status": r["status"], "reason": r["reason"]}
             for r in results
@@ -789,30 +970,37 @@ def send_credentials_bulk(payload: DeanSendCredentialsRequest, dean: dict = Depe
         "failed_count": len(failed),
         "skipped_count": len(skipped),
         "results": results,
+        "email_delivery_enabled": email_service.delivery_enabled(),
     }
 
 
-@router.post("/{user_id}/send-credentials")
-def send_credentials_single(user_id: str, dean: dict = Depends(dean_dep)):
+@router.post("/{user_id}/invite")
+def invite_teacher(user_id: str, dean: dict = Depends(dean_dep)):
     teacher = find_teacher_or_404(user_id, dean)
 
     if not email_service.is_configured():
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=EMAIL_NOT_CONFIGURED)
 
-    reason = _credential_skip_reason(teacher)
+    reason = _invite_skip_reason(teacher)
     if reason:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=reason)
 
-    outcome, reason = _deliver_credentials(teacher)
-    _audit(dean, "teacher_credentials_sent", teacher, {
+    outcome, reason = _deliver_invite(teacher, dean)
+    _audit(dean, "teacher_invited", teacher, {
         "result": "success" if outcome == "sent" else "failed",
+        "email_delivery": "enabled" if email_service.delivery_enabled() else "disabled",
         **({"reason": reason} if reason else {}),
     })
 
     if outcome != "sent":
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=reason)
 
+    days = settings.teacher_invite_expire_days
     return {
         "success": True,
-        "message": f"Login credentials were emailed to {teacher['email']}.",
+        "message": (
+            f"An invitation was emailed to {teacher['email']}. The link is valid for {days} days."
+            if email_service.delivery_enabled()
+            else f"Invitation for {teacher['email']} saved to the server outbox (email delivery is switched off)."
+        ),
     }

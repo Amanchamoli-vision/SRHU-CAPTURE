@@ -252,7 +252,7 @@ class ImportEndpointTests(DeanTeacherTestCase):
         self.assertEqual(log["details"]["created_count"], 2)
         self.assertEqual(log["details"]["via"], "dean_panel")
 
-    def test_imported_teacher_is_listed_and_can_receive_credentials(self) -> None:
+    def test_imported_teacher_is_listed_and_can_join_by_invitation(self) -> None:
         self.client.post(
             "/dean/teachers/import",
             json={"teachers": [{"name": "Rajesh Kumar", "email": "rajesh@srhu.edu.in"}]},
@@ -261,21 +261,30 @@ class ImportEndpointTests(DeanTeacherTestCase):
         listed = self.client.get("/dean/teachers?source=imported", headers=self.auth(self.dean)).json()
         self.assertEqual([t["email"] for t in listed["teachers"]], ["rajesh@srhu.edu.in"])
         self.assertEqual(listed["teachers"][0]["onboarded_via"], "dean_import")
+        self.assertEqual(listed["teachers"][0]["onboarding_status"], "not_invited")
         self.assertNotIn("password_hash", listed["teachers"][0])
         registered = self.client.get("/dean/teachers?source=registered", headers=self.auth(self.dean)).json()
         self.assertNotIn("rajesh@srhu.edu.in", [t["email"] for t in registered["teachers"]])
 
         user_id = listed["teachers"][0]["id"]
         sent = self.client.post(
-            "/dean/teachers/send-credentials", json={"user_ids": [user_id]}, headers=self.auth(self.dean)
+            "/dean/teachers/invite", json={"user_ids": [user_id]}, headers=self.auth(self.dean)
         ).json()
         self.assertEqual(sent["sent_count"], 1)
-        to, password = self.sent_credentials[-1]
+        to, token = self.sent_invites[-1]
         self.assertEqual(to, "rajesh@srhu.edu.in")
 
-        login = self.client.post("/auth/login", json={"email": "rajesh@srhu.edu.in", "password": password})
+        accepted = self.client.post("/auth/accept-invite", json={"token": token, "new_password": "Rajesh#2026"})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        login = self.client.post("/auth/login", json={"email": "rajesh@srhu.edu.in", "password": "Rajesh#2026"})
         self.assertEqual(login.status_code, 200, login.text)
-        self.assertTrue(login.json()["user"]["must_change_password"])
+        self.assertFalse(login.json()["user"]["must_change_password"])
+
+    def test_preview_flags_a_removed_teacher(self) -> None:
+        self.client.post(f"/dean/teachers/{self.teacher['_id']}/remove", headers=self.auth(self.dean))
+        data = self.upload(xlsx([["Email"], [self.teacher["email"]]])).json()
+        self.assertEqual(data["rows"][0]["status"], "exists")
+        self.assertIn("Restore them", data["rows"][0]["reason"])
 
     def test_teacher_cannot_import(self) -> None:
         self.assertEqual(self.upload(xlsx([["Email"], ["a@srhu.edu.in"]]), user=self.teacher).status_code, 403)

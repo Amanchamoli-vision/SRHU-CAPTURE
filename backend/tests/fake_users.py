@@ -1,7 +1,7 @@
 """A tiny in-memory stand-in for the MongoDB ``users`` collection.
 
-Supports just what the auth routes use: equality / ``$gt`` / ``$ne`` / ``$regex``
-filters, ``$set`` and ``$inc`` updates, and ``find_one_and_update`` returning the
+Supports just what the routes use: equality / ``$gt`` / ``$gte`` / ``$lt`` /
+``$lte`` / ``$ne`` / ``$in`` / ``$regex`` filters, ``$or`` / ``$and``, ``$set`` and ``$inc`` updates, and ``find_one_and_update`` returning the
 document before or after the update. Nothing here touches a real database.
 """
 
@@ -19,6 +19,10 @@ def _matches(document: dict, query: dict) -> bool:
             if not any(_matches(document, clause) for clause in wanted):
                 return False
             continue
+        if key == "$and":
+            if not all(_matches(document, clause) for clause in wanted):
+                return False
+            continue
 
         value = document.get(key)
         if isinstance(wanted, dict) and any(op.startswith("$") for op in wanted):
@@ -29,6 +33,15 @@ def _matches(document: dict, query: dict) -> bool:
                     continue
                 if op == "$gt":
                     if value is None or not value > operand:
+                        return False
+                elif op == "$gte":
+                    if value is None or not value >= operand:
+                        return False
+                elif op == "$lt":
+                    if value is None or not value < operand:
+                        return False
+                elif op == "$lte":
+                    if value is None or not value <= operand:
                         return False
                 elif op == "$ne":
                     if value == operand:

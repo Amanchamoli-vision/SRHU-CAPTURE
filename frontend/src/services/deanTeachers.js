@@ -4,13 +4,14 @@
 
 import { apiJson, apiUpload } from "./api";
 
-// A bulk send is split into requests of this many, so each request finishes
+// Bulk invitations are split into requests of this many, so each request finishes
 // well inside a proxy timeout while emails are delivered synchronously. The
 // server caps a request at 25.
-export const CREDENTIALS_CHUNK = 10;
+export const INVITE_CHUNK = 10;
 
 /**
- * Send login credentials to these teacher ids, a chunk at a time.
+ * Send invitations (a one-time "set your password" link) to these teacher ids,
+ * a chunk at a time.
  *
  * Resolves with `{ results, error }`: one result per id (`sent`, `skipped` or
  * `failed`, with a reason), and the message that stopped the run early, if
@@ -21,14 +22,14 @@ export const CREDENTIALS_CHUNK = 10;
  * turned out not to be a teacher); `onProgress(done, results)` runs after
  * each chunk.
  */
-export async function sendCredentialsInChunks(ids, { lookup, onProgress } = {}) {
+export async function sendInvitesInChunks(ids, { lookup, onProgress } = {}) {
   const results = [];
   let error = "";
 
-  for (let i = 0; i < ids.length; i += CREDENTIALS_CHUNK) {
-    const chunk = ids.slice(i, i + CREDENTIALS_CHUNK);
+  for (let i = 0; i < ids.length; i += INVITE_CHUNK) {
+    const chunk = ids.slice(i, i + INVITE_CHUNK);
     try {
-      const data = await apiJson("/dean/teachers/send-credentials", {
+      const data = await apiJson("/dean/teachers/invite", {
         method: "POST",
         body: { user_ids: chunk },
       });

@@ -4,7 +4,7 @@ import { ROLE_TRACK } from "../common/roles";
 import {
   importTeachers,
   previewTeacherImport,
-  sendCredentialsInChunks,
+  sendInvitesInChunks,
 } from "../../services/deanTeachers";
 import { OutcomeChip, ProgressLine, Tally } from "./CredentialReport";
 import { TRACK_ERR, TRACK_MUTED, TRACK_OK, TRACK_WARN } from "./outcomes";
@@ -22,8 +22,9 @@ import {
  *
  * upload -> preview -> working -> done. The server reads the file and says
  * what each row would do; the Dean ticks the rows to import and chooses
- * whether to email login credentials straight away. Imported teachers join
- * the teacher list either way, and credentials can be sent from there later.
+ * whether to send invitations (a one-time "set your password" link) straight
+ * away. Imported teachers join the teacher list either way, and can be
+ * invited from there later.
  */
 
 const ROW_STATUS = {
@@ -50,7 +51,7 @@ function downloadTemplate() {
   URL.revokeObjectURL(url);
 }
 
-export default function ImportTeachersModal({ open, onClose, onDone, onUnauthorized }) {
+export default function ImportTeachersModal({ open, onClose, onDone, onUnauthorized, inviteDays = 7 }) {
   const inputRef = useRef(null);
   const [step, setStep] = useState("upload");
   const [dragging, setDragging] = useState(false);
@@ -83,6 +84,7 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
   const somePicked = importable.some((r) => picked.has(r.row));
   const emailConfigured = preview?.email_configured !== false;
   const willEmail = sendEmail && emailConfigured;
+  const deliveryOff = preview?.email_delivery_enabled === false;
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -138,7 +140,7 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
       if (willEmail && created.length > 0) {
         setProgress({ phase: "email", done: 0, total: created.length });
         const byId = new Map(created.map((r) => [r.user_id, r]));
-        email = await sendCredentialsInChunks(
+        email = await sendInvitesInChunks(
           created.map((r) => r.user_id),
           {
             lookup: (id) => byId.get(id),
@@ -176,7 +178,7 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
         <button type="button" onClick={runImport} disabled={pickedCount === 0} className="btn btn-primary btn-sm">
           {willEmail ? <IconMail /> : null}
           {willEmail
-            ? `Import ${pickedCount} & send credentials`
+            ? `Import ${pickedCount} & send invitations`
             : `Import ${pickedCount} ${pickedCount === 1 ? "teacher" : "teachers"}`}
         </button>
       </>
@@ -306,14 +308,19 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
                 className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-line text-accent focus:ring-accent"
               />
               <span className="text-sm">
-                <span className="block font-semibold text-ink">Email login credentials now</span>
+                <span className="block font-semibold text-ink">Send invitations now</span>
                 <span className="block text-xs text-muted">
                   {emailConfigured
                     ? willEmail
-                      ? "Each imported teacher gets a temporary password by email and chooses their own on first sign-in."
-                      : "Teachers are added to the list without an email. Send credentials from the list whenever you are ready."
-                    : "Email is not configured on the server. Teachers are added now; send credentials once email is set up."}
+                      ? `Each imported teacher is emailed a one-time link to set their own password, valid for ${inviteDays} days. No password is sent.`
+                      : "Teachers are added to the list without an email. Invite them from the list whenever you are ready."
+                    : "Email is not configured on the server. Teachers are added now; invite them once email is set up."}
                 </span>
+                {deliveryOff && willEmail && (
+                  <span className="mt-1 block text-xs font-medium text-ink">
+                    Email delivery is switched off: invitations are saved to the server outbox, not sent.
+                  </span>
+                )}
               </span>
             </label>
           </div>
@@ -407,7 +414,7 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
       {step === "working" && (
         <div className="space-y-3 py-6">
           <p className="font-display text-sm font-semibold text-ink">
-            {progress.phase === "import" ? "Creating teacher accounts…" : "Emailing login credentials…"}
+            {progress.phase === "import" ? "Creating teacher accounts…" : "Sending invitations…"}
           </p>
           {progress.phase === "import" ? (
             <div className="progress-track"><span className="progress-bar is-indeterminate" /></div>
@@ -475,7 +482,7 @@ function ImportReport({ outcome }) {
       {!emailRequested && imported.created_count > 0 && (
         <p className="prose-muted text-sm">
           No emails were sent. The imported teachers are in the list; select them and use{" "}
-          <strong className="text-ink">Send login credentials</strong> when you are ready.
+          <strong className="text-ink">Send invitations</strong> when you are ready.
         </p>
       )}
 
@@ -485,7 +492,7 @@ function ImportReport({ outcome }) {
             <tr className="border-b hairline">
               <th scope="col" className={TH}>Teacher</th>
               <th scope="col" className={TH}>Account</th>
-              <th scope="col" className={TH}>Credentials email</th>
+              <th scope="col" className={TH}>Invitation</th>
               <th scope="col" className={TH}>Reason</th>
             </tr>
           </thead>

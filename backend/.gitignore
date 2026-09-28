@@ -17,3 +17,6 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Emails saved instead of sent when EMAIL_DELIVERY_ENABLED=false
+email_outbox/

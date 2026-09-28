@@ -179,6 +179,14 @@ export async function requestPasswordReset(email) {
   return apiJson("/auth/forgot-password", { method: "POST", auth: false, body: { email } });
 }
 
+export async function acceptInvite(token, newPassword) {
+  return apiJson("/auth/accept-invite", {
+    method: "POST",
+    auth: false,
+    body: { token, new_password: newPassword },
+  });
+}
+
 export async function resetPassword(token, newPassword) {
   return apiJson("/auth/reset-password", {
     method: "POST",
