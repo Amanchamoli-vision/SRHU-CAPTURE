@@ -61,3 +61,8 @@ export function previewTeacherImport(file, { onProgress, signal } = {}) {
 export function importTeachers(teachers) {
   return apiJson("/dean/teachers/import", { method: "POST", body: { teachers } });
 }
+
+/** Add one teacher; with `send_invite` the invitation goes out straight away. */
+export function createTeacher(teacher) {
+  return apiJson("/dean/teachers", { method: "POST", body: teacher });
+}

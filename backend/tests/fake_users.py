@@ -1,7 +1,7 @@
 """A tiny in-memory stand-in for the MongoDB ``users`` collection.
 
 Supports just what the routes use: equality / ``$gt`` / ``$gte`` / ``$lt`` /
-``$lte`` / ``$ne`` / ``$in`` / ``$regex`` filters, ``$or`` / ``$and``, ``$set`` and ``$inc`` updates, and ``find_one_and_update`` returning the
+``$lte`` / ``$ne`` / ``$in`` / ``$nin`` / ``$regex`` filters, ``$or`` / ``$and``, ``$set`` and ``$inc`` updates, and ``find_one_and_update`` returning the
 document before or after the update. Nothing here touches a real database.
 """
 
@@ -48,6 +48,9 @@ def _matches(document: dict, query: dict) -> bool:
                         return False
                 elif op == "$in":
                     if value not in operand:
+                        return False
+                elif op == "$nin":
+                    if value in operand:
                         return False
                 elif op == "$regex":
                     if not isinstance(value, str) or not re.search(operand, value, flags):

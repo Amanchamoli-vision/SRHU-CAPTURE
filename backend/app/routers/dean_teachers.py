@@ -42,6 +42,7 @@ from app.database import audit_logs, events, users
 from app.models.documents import USER_PRIVATE_FIELDS, new_user_document
 from app.routers.auth import find_user_by_email
 from app.schemas.dean import (
+    DeanCreateTeacherRequest,
     DeanImportTeachersRequest,
     DeanInviteRequest,
     DeanUpdateTeacherRequest,
@@ -75,10 +76,13 @@ INVITE_RESEND_COOLDOWN_MINUTES = 10
 STATUS_FILTERS = ("all", "active", "inactive", "pending", "removed")
 ONBOARDING_FILTERS = ("all", "not_invited", "invited", "expired", "joined")
 VERIFIED_FILTERS = ("all", "verified", "unverified")
-SOURCE_FILTERS = ("all", "imported", "registered")
+SOURCE_FILTERS = ("all", "imported", "added", "registered")
 
-# Marks an account created from a Dean's Excel import.
+# Mark an account a Dean created: from an Excel import, or one at a time with
+# the "Add teacher" form. Anything else registered itself or was onboarded by
+# the superadmin.
 IMPORT_SOURCE = "dean_import"
+ADDED_SOURCE = "dean_added"
 SORTS = {
     "newest": [("created_at", DESCENDING), ("_id", DESCENDING)],
     "oldest": [("created_at", ASCENDING), ("_id", ASCENDING)],
@@ -171,6 +175,45 @@ def _is_active(doc: dict) -> bool:
     return doc.get("is_active") is not False
 
 
+def _existing_account_reason(existing: dict) -> str:
+    """Why an email cannot be used for a new teacher, in words for the Dean."""
+    if existing.get("role") != "teacher":
+        return "This email belongs to an account that is not a Teacher."
+    if existing.get("removed_at"):
+        return "Belongs to a removed teacher. Restore them from the Removed tab."
+    return "Already in the teacher list."
+
+
+def _unusable_password_hash() -> str:
+    """A real bcrypt hash of a secret that is discarded at once.
+
+    A Dean-created teacher has no password until they accept an invitation
+    (or use Forgot password). A real hash rather than none keeps a sign-in
+    attempt on such an account as slow as any other, so timing does not
+    reveal that it exists.
+    """
+    return hash_password(secrets.token_urlsafe(32))
+
+
+def _new_teacher_document(item: Any, *, name: str, password_hash: str, extra: dict[str, Any]) -> dict:
+    """The user document for a teacher a Dean creates (Excel import or Add teacher)."""
+    document = new_user_document(
+        name=name,
+        email=item.email,
+        password_hash=password_hash,
+        role="teacher",
+        # Nothing has proved this mailbox yet. Accepting the invitation, or
+        # completing a password reset, marks it verified.
+        email_verified=False,
+        must_change_password=True,
+        phone=item.phone,
+        department=item.department,
+        designation=item.designation,
+    )
+    document.update(extra)
+    return document
+
+
 def _aware(value: datetime | None) -> datetime | None:
     """PyMongo can return naive UTC datetimes; compare them as UTC."""
     if value is not None and value.tzinfo is None:
@@ -253,8 +296,10 @@ def list_teachers(
     source_key = source.strip().lower()
     if source_key == "imported":
         base["onboarded_via"] = IMPORT_SOURCE
+    elif source_key == "added":
+        base["onboarded_via"] = ADDED_SOURCE
     elif source_key == "registered":
-        base["onboarded_via"] = {"$ne": IMPORT_SOURCE}
+        base["onboarded_via"] = {"$nin": [IMPORT_SOURCE, ADDED_SOURCE]}
 
     search_clause: dict = {}
     search = (q or "").strip()
@@ -393,12 +438,7 @@ async def preview_teacher_import(file: UploadFile = File(...)):
         existing = find_user_by_email(entry["email"])
         if existing:
             entry["status"] = "exists"
-            if existing.get("role") != "teacher":
-                entry["reason"] = "This email belongs to an account that is not a Teacher."
-            elif existing.get("removed_at"):
-                entry["reason"] = "Belongs to a removed teacher. Restore them from the Removed tab."
-            else:
-                entry["reason"] = "Already in the teacher list."
+            entry["reason"] = _existing_account_reason(existing)
         else:
             entry["status"] = "new"
 
@@ -427,15 +467,14 @@ def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dea
     passed since it. An address with any existing account is skipped, never
     overwritten.
 
-    The accounts have no usable password: the hash below is of a random
-    secret that is discarded at once, so nobody can sign in until the teacher
-    accepts an invitation (POST /dean/teachers/invite, which the panel sends
-    straight after when "send invitations" is on) or uses Forgot password. It is a real bcrypt hash rather than none so that signing in to
-    one of these accounts costs the same time as any other and does not reveal
-    that it exists. One hash is shared by the whole batch: hashing 500 would
-    take minutes, and the secret behind it is unknowable either way.
+    The accounts have no usable password (see _unusable_password_hash), so
+    nobody can sign in until the teacher accepts an invitation (POST
+    /dean/teachers/invite, which the panel sends straight after when "send
+    invitations" is on) or uses Forgot password. One hash is shared by the
+    whole batch: hashing 500 would take minutes, and the secret behind it is
+    unknowable either way.
     """
-    unusable_hash = hash_password(secrets.token_urlsafe(32))
+    unusable_hash = _unusable_password_hash()
     now = utc_now()
 
     results: list[dict] = []
@@ -454,20 +493,7 @@ def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dea
             continue
 
         name = item.name or teacher_import.name_from_email(email)
-        document = new_user_document(
-            name=name,
-            email=email,
-            password_hash=unusable_hash,
-            role="teacher",
-            # Nothing has proved this mailbox yet. Accepting the invitation,
-            # or completing a password reset, marks it verified.
-            email_verified=False,
-            must_change_password=True,
-            phone=item.phone,
-            department=item.department,
-            designation=item.designation,
-        )
-        document.update({
+        document = _new_teacher_document(item, name=name, password_hash=unusable_hash, extra={
             "onboarded_via": IMPORT_SOURCE,
             "imported_by": dean.get("id"),
             "imported_at": now,
@@ -504,6 +530,72 @@ def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dea
         "skipped_count": len(skipped),
         "results": results,
     }
+
+
+# ============================================================
+# ADD ONE TEACHER
+# ============================================================
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+def create_teacher(payload: DeanCreateTeacherRequest, dean: dict = Depends(dean_dep)):
+    """Add a single Teacher from the Dean panel's form.
+
+    The same account an Excel import creates -- no usable password, joined by
+    invitation -- and, with ``send_invite``, the invitation goes straight out.
+    An address that already has any account is refused with the reason,
+    never overwritten.
+    """
+    existing = find_user_by_email(payload.email)
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_existing_account_reason(existing))
+
+    now = utc_now()
+    document = _new_teacher_document(payload, name=payload.name, password_hash=_unusable_password_hash(), extra={
+        "onboarded_via": ADDED_SOURCE,
+        "added_by": dean.get("id"),
+        "added_at": now,
+    })
+    try:
+        inserted = users.insert_one(document)
+    except DuplicateKeyError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already in the teacher list.")
+    document["_id"] = inserted.inserted_id
+
+    invite: dict[str, Any] = {"status": "not_sent", "reason": None}
+    if payload.send_invite:
+        if not email_service.is_configured():
+            invite["reason"] = "Email is not configured on the server. Invite them from the list later."
+        else:
+            outcome, reason = _deliver_invite(document, dean)
+            invite = {"status": outcome, "reason": reason}
+
+    _audit(dean, "teacher_created", document, {
+        "result": "success",
+        "source": ADDED_SOURCE,
+        "invite": invite["status"],
+        "email_delivery": "enabled" if email_service.delivery_enabled() else "disabled",
+    })
+
+    created = users.find_one({"_id": inserted.inserted_id}) or document
+    teacher = public_user(created)
+    teacher["onboarding_status"] = onboarding_status(created)
+    teacher["event_count"] = 0
+
+    label = _label(created)
+    if invite["status"] == "sent":
+        message = (
+            f"{label} was added and invited."
+            if email_service.delivery_enabled()
+            else f"{label} was added. The invitation was saved to the server outbox (email delivery is switched off)."
+        )
+    elif invite["status"] == "failed":
+        message = f"{label} was added, but the invitation could not be sent: {invite['reason']} Try again from the list."
+    elif invite["reason"]:
+        message = f"{label} was added. {invite['reason']}"
+    else:
+        message = f"{label} was added. Send an invitation from the list when you are ready."
+
+    return {"success": True, "message": message, "teacher": teacher, "invite": invite}
 
 
 # ============================================================

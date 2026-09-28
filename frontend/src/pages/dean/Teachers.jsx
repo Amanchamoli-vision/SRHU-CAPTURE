@@ -12,7 +12,7 @@ import { PER_PAGE_OPTIONS, DEFAULT_PER_PAGE } from "../../hooks/useTableQuery";
 import { ROLE_TRACK, initialsOf } from "../../components/common/roles";
 import { DESIGNATION_SUGGESTIONS } from "../../utils/designations";
 import { isValidPhone, normalizePhoneInput } from "../../utils/phone";
-import { sendInvitesInChunks } from "../../services/deanTeachers";
+import { createTeacher, sendInvitesInChunks } from "../../services/deanTeachers";
 import CredentialReport from "../../components/dean/CredentialReport";
 import ImportTeachersModal from "../../components/dean/ImportTeachersModal";
 import {
@@ -34,6 +34,7 @@ import {
   IconSearch,
   IconTrash,
   IconUpload,
+  IconUserPlus,
   IconUsers,
   IconX,
   IconXCircle,
@@ -81,7 +82,8 @@ const VERIFIED_OPTIONS = [
 const SOURCE_OPTIONS = [
   { key: "all", label: "Any source" },
   { key: "imported", label: "Imported from Excel" },
-  { key: "registered", label: "Registered / onboarded" },
+  { key: "added", label: "Added by Dean" },
+  { key: "registered", label: "Self-registered / onboarded" },
 ];
 
 const SORT_OPTIONS = [
@@ -472,7 +474,8 @@ export default function Teachers() {
   // ------------------------------------------------------------ edit
   const [editing, setEditing] = useState(null);
 
-  // ------------------------------------------------------------ import
+  // ------------------------------------------------------------ add / import
+  const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
   // ------------------------------------------------------------ bulk send
@@ -542,6 +545,10 @@ export default function Teachers() {
               <button type="button" onClick={refreshAll} disabled={loading} className="btn btn-ghost">
                 {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
                 Refresh
+              </button>
+              <button type="button" onClick={() => setAddOpen(true)} className="btn btn-brand">
+                <IconUserPlus />
+                Add teacher
               </button>
               <button type="button" onClick={() => setImportOpen(true)} className="btn btn-primary">
                 <IconUpload />
@@ -1063,6 +1070,20 @@ export default function Teachers() {
         {bulkRun && <CredentialReport run={bulkRun} />}
       </Modal>
 
+      <AddTeacherModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onAdded={async (message, { keepOpen }) => {
+          if (!keepOpen) setAddOpen(false);
+          setSuccess(message);
+          await refreshAll();
+        }}
+        onUnauthorized={() => navigate("/login", { replace: true })}
+        emailConfigured={emailConfigured}
+        emailDeliveryEnabled={emailDeliveryEnabled}
+        inviteDays={inviteDays}
+      />
+
       <ImportTeachersModal
         open={importOpen}
         inviteDays={inviteDays}
@@ -1154,16 +1175,27 @@ function ActiveChip({ teacher }) {
 }
 
 /**
- * "Imported" for an account created from a Dean's Excel import.
+ * How a Dean-created account was made: "Imported" (Excel) or "Added by Dean"
+ * (the Add teacher form). Self-registered and onboarded teachers show nothing.
  */
 function SourceChips({ teacher }) {
-  if (teacher.onboarded_via !== "dean_import") return null;
-  return (
-    <span className="chip chip-sm chip-track" style={{ "--track": ROLE_TRACK.teacher }}>
-      <IconUpload className="h-3 w-3" />
-      Imported
-    </span>
-  );
+  if (teacher.onboarded_via === "dean_import") {
+    return (
+      <span className="chip chip-sm chip-track" style={{ "--track": ROLE_TRACK.teacher }}>
+        <IconUpload className="h-3 w-3" />
+        Imported
+      </span>
+    );
+  }
+  if (teacher.onboarded_via === "dean_added") {
+    return (
+      <span className="chip chip-sm chip-track" style={{ "--track": ROLE_TRACK.teacher }}>
+        <IconUserPlus className="h-3 w-3" />
+        Added by Dean
+      </span>
+    );
+  }
+  return null;
 }
 
 /** Where a teacher is in joining: not invited, invited, link expired, joined. */
@@ -1450,6 +1482,247 @@ function RowMenu({ label, items, onSelect }) {
 
 const EMPTY_FORM = { name: "", email: "", phone: "", department: "", designation: "" };
 
+/**
+ * The profile fields shared by the Add teacher and Edit teacher forms, so the
+ * two can never ask for different things or validate them differently.
+ */
+function TeacherFields({ idPrefix, form, setForm, emailHint = null, autoFocus = false }) {
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  const phoneInvalid = !isValidPhone(form.phone);
+  const id = (field) => `${idPrefix}-${field}`;
+
+  return (
+    <>
+      <div className="field">
+        <label htmlFor={id("name")}>Full name <span className="req">*</span></label>
+        <input
+          id={id("name")}
+          type="text"
+          required
+          maxLength={120}
+          value={form.name}
+          onChange={set("name")}
+          placeholder="e.g. Dr. Kavita Nair"
+          className="input"
+          // The Add form puts focus here when it opens (and after "add another").
+          autoFocus={autoFocus}
+        />
+      </div>
+
+      <div className="field">
+        <label htmlFor={id("email")}>Email <span className="req">*</span></label>
+        <input
+          id={id("email")}
+          type="email"
+          required
+          maxLength={254}
+          value={form.email}
+          onChange={set("email")}
+          placeholder="name@srhu.edu.in"
+          className="input"
+        />
+        {emailHint && <p className="field-hint">{emailHint}</p>}
+      </div>
+
+      <div className="field">
+        <label htmlFor={id("phone")}>
+          Mobile number <span className="ml-2 font-normal text-muted">(Optional)</span>
+        </label>
+        <input
+          id={id("phone")}
+          type="tel"
+          inputMode="numeric"
+          value={form.phone}
+          onChange={(e) => setForm((f) => ({ ...f, phone: normalizePhoneInput(e.target.value) }))}
+          placeholder="10-digit mobile number"
+          className="input"
+          aria-invalid={phoneInvalid || undefined}
+        />
+        {phoneInvalid && <p className="field-error">Mobile number must be exactly 10 digits.</p>}
+      </div>
+
+      <div className="field">
+        <label htmlFor={id("designation")}>
+          Designation <span className="ml-2 font-normal text-muted">(Optional)</span>
+        </label>
+        <input
+          id={id("designation")}
+          type="text"
+          maxLength={120}
+          list={id("designation-options")}
+          value={form.designation}
+          onChange={set("designation")}
+          className="input"
+        />
+        <datalist id={id("designation-options")}>
+          {DESIGNATION_SUGGESTIONS.map((d) => <option key={d} value={d} />)}
+        </datalist>
+      </div>
+
+      <div className="field">
+        <label htmlFor={id("department")}>
+          Department <span className="ml-2 font-normal text-muted">(Optional)</span>
+        </label>
+        <input
+          id={id("department")}
+          type="text"
+          maxLength={120}
+          value={form.department}
+          onChange={set("department")}
+          placeholder="e.g. Computer Science & Engineering"
+          className="input"
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * Add one teacher without a spreadsheet. The account is the same as an
+ * imported one: no password until the teacher accepts an invitation, which
+ * the form can send straight away. "Add & add another" keeps the form open
+ * for entering several people one after another.
+ */
+function AddTeacherModal({ open, onClose, onAdded, onUnauthorized, emailConfigured, emailDeliveryEnabled, inviteDays }) {
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [sendInvite, setSendInvite] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [lastAdded, setLastAdded] = useState("");
+  // Remounts the fields after "add another", so focus returns to Full name.
+  const [round, setRound] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+    setForm(EMPTY_FORM);
+    setSendInvite(true);
+    setError("");
+    setLastAdded("");
+  }, [open]);
+
+  const phoneInvalid = !isValidPhone(form.phone);
+  const willInvite = sendInvite && emailConfigured;
+
+  const submit = async (keepOpen) => {
+    if (phoneInvalid || busy) return;
+    try {
+      setBusy(true);
+      setError("");
+      const data = await createTeacher({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim() || null,
+        department: form.department.trim() || null,
+        designation: form.designation.trim() || null,
+        send_invite: willInvite,
+      });
+      const message = data?.message || "Teacher added.";
+      if (keepOpen) {
+        setForm(EMPTY_FORM);
+        setLastAdded(message);
+        setRound((r) => r + 1);
+      }
+      await onAdded(message, { keepOpen });
+    } catch (err) {
+      if (err?.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      setError(err?.message || "The teacher could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Enter in any field adds the teacher and closes, like the primary button.
+  const onSubmit = (e) => {
+    e.preventDefault();
+    submit(false);
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => { if (!busy) onClose(); }}
+      eyebrow="Teachers"
+      title="Add a teacher"
+      subtitle="For one person at a time. To add many, use Import from Excel."
+      footer={
+        <>
+          <button type="button" onClick={onClose} disabled={busy} className="btn btn-ghost btn-sm mr-auto">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              const formEl = e.currentTarget.closest(".modal-panel")?.querySelector("form");
+              if (formEl && !formEl.reportValidity()) return;
+              submit(true);
+            }}
+            disabled={busy || phoneInvalid}
+            className="btn btn-ghost btn-sm"
+          >
+            Add &amp; add another
+          </button>
+          <button type="submit" form="dean-add-teacher" disabled={busy || phoneInvalid} className="btn btn-primary btn-sm">
+            {busy ? <span className="spin h-4 w-4" /> : <IconUserPlus />}
+            {willInvite ? "Add & send invitation" : "Add teacher"}
+          </button>
+        </>
+      }
+    >
+      {open && (
+        <form id="dean-add-teacher" onSubmit={onSubmit} className="space-y-4">
+          {lastAdded && !error && (
+            <div className="toast toast-ok text-sm" role="status">
+              <IconCheckCircle className="h-4 w-4 shrink-0 text-ok" />
+              <span>{lastAdded} Add the next teacher below.</span>
+            </div>
+          )}
+          {error && (
+            <div className="toast toast-err text-sm" role="alert">
+              <IconAlertTriangle className="h-4 w-4 shrink-0 text-err" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <TeacherFields key={round} idPrefix="at" form={form} setForm={setForm} autoFocus />
+
+          <label
+            className={`flex items-start gap-3 rounded-2xl border hairline bg-raised/40 p-4 ${
+              emailConfigured ? "cursor-pointer" : "opacity-60"
+            }`}
+          >
+            <input
+              type="checkbox"
+              role="switch"
+              checked={willInvite}
+              disabled={!emailConfigured}
+              onChange={(e) => setSendInvite(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-line text-accent focus:ring-accent"
+            />
+            <span className="text-sm">
+              <span className="block font-semibold text-ink">Send invitation now</span>
+              <span className="block text-xs text-muted">
+                {emailConfigured
+                  ? willInvite
+                    ? `The teacher is emailed a one-time link to set their own password, valid for ${inviteDays} days. No password is sent.`
+                    : "The teacher is added without an email. Invite them from the list whenever you are ready."
+                  : "Email is not configured on the server. The teacher is added now; invite them once email is set up."}
+              </span>
+              {willInvite && !emailDeliveryEnabled && (
+                <span className="mt-1 block text-xs font-medium text-ink">
+                  Email delivery is switched off: the invitation is saved to the server outbox, not sent.
+                </span>
+              )}
+            </span>
+          </label>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
 function EditTeacherModal({ teacher, onClose, onSaved, onUnauthorized }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
@@ -1467,7 +1740,6 @@ function EditTeacherModal({ teacher, onClose, onSaved, onUnauthorized }) {
     setError("");
   }, [teacher]);
 
-  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
   const phoneInvalid = !isValidPhone(form.phone);
   const emailChanged = teacher && form.email.trim().toLowerCase() !== (teacher.email || "").toLowerCase();
 
@@ -1536,71 +1808,16 @@ function EditTeacherModal({ teacher, onClose, onSaved, onUnauthorized }) {
             </div>
           )}
 
-          <div className="field">
-            <label htmlFor="dt-name">Full name <span className="req">*</span></label>
-            <input id="dt-name" type="text" required maxLength={120} value={form.name} onChange={set("name")} className="input" />
-          </div>
-
-          <div className="field">
-            <label htmlFor="dt-email">Email <span className="req">*</span></label>
-            <input id="dt-email" type="email" required maxLength={254} value={form.email} onChange={set("email")} className="input" />
-            {emailChanged && (
-              <p className="field-hint">
-                The teacher will sign in with this address from now on. Any reset link already sent to the
-                old address stops working.
-              </p>
-            )}
-          </div>
-
-          <div className="field">
-            <label htmlFor="dt-phone">
-              Mobile number <span className="ml-2 font-normal text-muted">(Optional)</span>
-            </label>
-            <input
-              id="dt-phone"
-              type="tel"
-              inputMode="numeric"
-              value={form.phone}
-              onChange={(e) => setForm((f) => ({ ...f, phone: normalizePhoneInput(e.target.value) }))}
-              placeholder="10-digit mobile number"
-              className="input"
-              aria-invalid={phoneInvalid || undefined}
-            />
-            {phoneInvalid && <p className="field-error">Mobile number must be exactly 10 digits.</p>}
-          </div>
-
-          <div className="field">
-            <label htmlFor="dt-designation">
-              Designation <span className="ml-2 font-normal text-muted">(Optional)</span>
-            </label>
-            <input
-              id="dt-designation"
-              type="text"
-              maxLength={120}
-              list="dt-designation-options"
-              value={form.designation}
-              onChange={set("designation")}
-              className="input"
-            />
-            <datalist id="dt-designation-options">
-              {DESIGNATION_SUGGESTIONS.map((d) => <option key={d} value={d} />)}
-            </datalist>
-          </div>
-
-          <div className="field">
-            <label htmlFor="dt-department">
-              Department <span className="ml-2 font-normal text-muted">(Optional)</span>
-            </label>
-            <input
-              id="dt-department"
-              type="text"
-              maxLength={120}
-              value={form.department}
-              onChange={set("department")}
-              placeholder="e.g. Computer Science & Engineering"
-              className="input"
-            />
-          </div>
+          <TeacherFields
+            idPrefix="dt"
+            form={form}
+            setForm={setForm}
+            emailHint={
+              emailChanged
+                ? "The teacher will sign in with this address from now on. Any reset link already sent to the old address stops working."
+                : null
+            }
+          />
 
           <p className="text-xs text-muted">
             Role, account status and password are changed with their own actions, not here.
@@ -1612,6 +1829,7 @@ function EditTeacherModal({ teacher, onClose, onSaved, onUnauthorized }) {
 }
 
 const ACTIVITY_LABEL = {
+  teacher_created: "Added teacher",
   teacher_invited: "Sent invitation",
   teachers_invited: "Bulk sent invitations",
   user_removed: "Removed teacher",

@@ -62,6 +62,41 @@ class DeanUpdateTeacherRequest(BaseModel):
         return _collapse(value)
 
 
+class DeanCreateTeacherRequest(BaseModel):
+    """One teacher added by hand from the Dean panel's "Add teacher" form."""
+
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    phone: str | None = Field(default=None, max_length=24)
+    department: str | None = Field(default=None, max_length=120)
+    designation: str | None = Field(default=None, max_length=120)
+    # Email the one-time "set your password" link straight away.
+    send_invite: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = _collapse(value)
+        if not normalized:
+            raise ValueError("Name must not be empty")
+        return normalized
+
+    @field_validator("email")
+    @classmethod
+    def fold_email(cls, value: str) -> str:
+        return str(value).casefold()
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone_field(cls, value: str | None) -> str | None:
+        return normalize_phone(value)
+
+    @field_validator("department", "designation")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        return _collapse(value)
+
+
 class DeanInviteRequest(BaseModel):
     user_ids: list[str] = Field(min_length=1, max_length=MAX_BULK_INVITES)
 
