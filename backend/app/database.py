@@ -161,6 +161,11 @@ def ensure_indexes() -> None:
         name="reset_token",
         sparse=True,
     )
+    users.create_index(
+        [("invite_token_hash", ASCENDING)],
+        name="invite_token",
+        sparse=True,
+    )
 
     events.create_index([("teacher_id", ASCENDING)], name="teacher")
     events.create_index([("status", ASCENDING)], name="status")

@@ -7,9 +7,12 @@ below are plain functions so they are easy to test and to adjust.
 from __future__ import annotations
 
 import logging
+import os
 import smtplib
 import ssl
 import time
+import uuid
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import formataddr
 from html import escape
@@ -24,8 +27,30 @@ class EmailDeliveryError(RuntimeError):
     """Raised when an email could not be handed to the SMTP server."""
 
 
+def delivery_enabled() -> bool:
+    """False when EMAIL_DELIVERY_ENABLED=false: messages go to the outbox folder."""
+    return settings.email_delivery_enabled
+
+
 def is_configured() -> bool:
-    return settings.smtp_configured
+    """Whether the application can hand a message on at all.
+
+    True with working SMTP settings, and also whenever delivery is switched
+    off -- the outbox always accepts a message, so every email feature stays
+    usable (and testable) without anything being sent.
+    """
+    return settings.smtp_configured or not settings.email_delivery_enabled
+
+
+def _save_to_outbox(message: EmailMessage) -> str:
+    """Write a message to EMAIL_OUTBOX_DIR instead of sending it. Returns the path."""
+    folder = os.path.abspath(settings.email_outbox_dir)
+    os.makedirs(folder, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    path = os.path.join(folder, f"{stamp}-{uuid.uuid4().hex[:8]}.eml")
+    with open(path, "wb") as handle:
+        handle.write(bytes(message))
+    return path
 
 
 def _clean_header(value: str) -> str:
@@ -40,7 +65,10 @@ def _clean_header(value: str) -> str:
 def _build_message(to_email: str, subject: str, text: str, html: str | None) -> EmailMessage:
     message = EmailMessage()
     message["Subject"] = _clean_header(subject)
-    message["From"] = formataddr((settings.smtp_from_name, settings.smtp_from_email))
+    # Only an outbox message can lack a sender: delivery refuses to run
+    # without SMTP_FROM_EMAIL (see is_configured / send_email).
+    sender = settings.smtp_from_email or "outbox@localhost"
+    message["From"] = formataddr((settings.smtp_from_name, sender))
     message["To"] = to_email
     message.set_content(text)
     if html:
@@ -58,7 +86,24 @@ RETRY_DELAY_SECONDS = 2
 
 
 def send_email(to_email: str, subject: str, text: str, html: str | None = None) -> None:
-    """Deliver one message. Raises ``EmailDeliveryError`` on any failure."""
+    """Deliver one message. Raises ``EmailDeliveryError`` on any failure.
+
+    With delivery switched off the message is saved to the outbox folder and
+    no mail server is contacted -- checked first, before anything else.
+    """
+    if not settings.email_delivery_enabled:
+        try:
+            message = _build_message(to_email, subject, text, html)
+            path = _save_to_outbox(message)
+        except (OSError, ValueError, TypeError) as error:
+            raise EmailDeliveryError(f"Could not save the message to the outbox: {error}") from error
+        logger.warning(
+            "email_suppressed delivery=disabled recipient_domain=%s outbox=%s",
+            to_email.rsplit("@", 1)[-1],
+            os.path.basename(path),
+        )
+        return
+
     if not is_configured():
         raise EmailDeliveryError(
             "SMTP is not configured: missing " + ", ".join(settings.smtp_missing_variables)
@@ -109,6 +154,8 @@ def _log_failure(to_email: str, error: Exception, attempt: int) -> None:
 
 def _deliver(message: EmailMessage) -> None:
     """One SMTP session: connect, secure, authenticate, send."""
+    if not settings.email_delivery_enabled:
+        raise EmailDeliveryError("Email delivery is switched off (EMAIL_DELIVERY_ENABLED=false).")
     context = ssl.create_default_context()
     if settings.smtp_use_ssl:
         client = smtplib.SMTP_SSL(
@@ -485,6 +532,36 @@ def send_password_reset_email(to_email: str, name: str, token: str) -> None:
             "ignore this email and your password will stay the same.",
         ),
         preheader=f"Choose a new password. This link is valid for {minutes} minutes.",
+    )
+    send_email(to_email, subject, text, html)
+
+
+def send_teacher_invitation_email(to_email: str, name: str, token: str) -> None:
+    """A Dean's invitation: a one-time link to set a password. No password is sent."""
+    url = settings.teacher_invite_url(token)
+    days = settings.teacher_invite_expire_days
+    subject = "You're invited to Campus Capture SRHU"
+    text = (
+        f"Hello {name},\n\n"
+        "Your Dean has added you to Campus Capture SRHU, where teachers submit and "
+        "manage their events.\n\n"
+        f"Open this link to choose your password and activate your account:\n\n{url}\n\n"
+        f"Your sign-in email is {to_email}. The link works once and is valid for {days} days. "
+        "If you were not expecting this, you can ignore this email.\n"
+    )
+    html = _layout(
+        "You're invited to Campus Capture",
+        _greeting(name)
+        + _p("Your Dean has added you to Campus Capture SRHU, where teachers submit and "
+             "manage their events. Choose a password to activate your account.")
+        + _credentials([("Sign-in email", to_email, False)])
+        + _button(url, "Set my password")
+        + _link_fallback(
+            url,
+            f"The link works once and is valid for {days} days. If you were not expecting "
+            "this, you can ignore this email.",
+        ),
+        preheader=f"Choose your password to activate your account. Valid for {days} days.",
     )
     send_email(to_email, subject, text, html)
 

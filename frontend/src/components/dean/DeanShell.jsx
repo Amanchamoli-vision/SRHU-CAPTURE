@@ -15,6 +15,7 @@ import {
   IconMoon,
   IconSun,
   IconUser,
+  IconUsers,
   RidgeDivider,
 } from "../teacher/icons";
 
@@ -22,6 +23,7 @@ const NAV = [
   { key: "dashboard", to: "/dean/dashboard", label: "Dashboard", Icon: IconGrid },
   { key: "events", to: "/dean/events", label: "All Events", short: "Events", Icon: IconCalendar },
   { key: "archive", to: "/dean/archive", label: "Archive", Icon: IconArchive },
+  { key: "teachers", to: "/dean/teachers", label: "Teachers", Icon: IconUsers },
   { key: "profile", to: "/dean/profile", label: "My Profile", short: "Profile", Icon: IconUser },
 ];
 

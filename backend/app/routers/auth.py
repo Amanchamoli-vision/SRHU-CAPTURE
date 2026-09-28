@@ -536,6 +536,10 @@ def reset_password(payload: ResetPasswordRequest, request: Request):
                 "email_verified": True,
                 "verification_token_hash": None,
                 "verification_expires_at": None,
+                # A password has now been chosen, so a pending invitation link
+                # must not be able to choose another one later.
+                "invite_token_hash": None,
+                "invite_expires_at": None,
                 "must_change_password": False,
                 "updated_at": now,
             },
@@ -563,3 +567,79 @@ def reset_password(payload: ResetPasswordRequest, request: Request):
 
     logger.info("password_reset_completed recipient_domain=%s", _domain(user["email"]))
     return {"message": "Your password has been updated. You can now sign in."}
+
+
+# ============================================================
+# TEACHER INVITATION
+# ============================================================
+
+@router.post("/accept-invite")
+def accept_invite(payload: ResetPasswordRequest, request: Request):
+    """Set a password from a Dean's invitation link and activate the account.
+
+    The same guarantees as /reset-password: the token is consumed atomically,
+    following the link proves the mailbox, and every older session ends. An
+    account deactivated or removed since the invitation was sent is refused.
+    """
+    rate_limit.limit_token_use(request, "accept-invite")
+
+    token_hash = hash_one_time_token(payload.token)
+    new_hash = hash_password(payload.new_password)
+    now = utc_now()
+
+    user = users.find_one_and_update(
+        {
+            "invite_token_hash": token_hash,
+            "invite_expires_at": {"$gt": now},
+            "is_active": {"$ne": False},
+            "removed_at": None,
+        },
+        {
+            "$set": {
+                "password_hash": new_hash,
+                "invite_token_hash": None,
+                "invite_expires_at": None,
+                "invite_accepted_at": now,
+                "reset_token_hash": None,
+                "reset_expires_at": None,
+                "email_verified": True,
+                "verification_token_hash": None,
+                "verification_expires_at": None,
+                "must_change_password": False,
+                "updated_at": now,
+            },
+            "$inc": {"token_version": 1},
+        },
+    )
+
+    if not user:
+        pending = users.find_one({"invite_token_hash": token_hash}, {"invite_expires_at": 1})
+        if pending:
+            expires = pending.get("invite_expires_at")
+            if expires is not None and expires.tzinfo is None:
+                expires = expires.replace(tzinfo=now.tzinfo)
+            if expires is not None and expires <= now:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This invitation has expired. Ask your Dean to send a new one.",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This account is not active. Please contact your Dean.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation link is invalid or has already been used.",
+        )
+
+    if not user.get("email_verified_at"):
+        users.update_one(
+            {"_id": user["_id"], "email_verified_at": None},
+            {"$set": {"email_verified_at": now}},
+        )
+
+    logger.info("teacher_invite_accepted recipient_domain=%s", _domain(user["email"]))
+    return {
+        "message": "Your password is set and your account is active. You can now sign in.",
+        "email": user["email"],
+    }

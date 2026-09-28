@@ -136,6 +136,15 @@ def check_event_viewer(user: dict) -> dict:
     return require_role(user, "dean", "superadmin")
 
 
+def dean_dep(authorization: str | None = Header(default=None)) -> dict:
+    """The signed-in Dean, as a FastAPI dependency (see ``superadmin_dep``).
+
+    Deliberately Dean-only: the superadmin manages every account through
+    /superadmin, and a Teacher must never reach the Dean's management routes.
+    """
+    return require_role(get_current_user(authorization), "dean")
+
+
 def get_superadmin_user(authorization: str | None) -> dict:
     return require_role(get_current_user(authorization), "superadmin")
 

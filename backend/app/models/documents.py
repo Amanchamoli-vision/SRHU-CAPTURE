@@ -105,6 +105,9 @@ USER_PRIVATE_FIELDS = (
     "verification_expires_at",
     "reset_token_hash",
     "reset_expires_at",
+    # A Dean's invitation link. Its expiry and send time are not secret and
+    # are served, so the Dean panel can say "Invited" / "Link expired".
+    "invite_token_hash",
     # Session counter embedded in access tokens as `ver`; bumping it signs the
     # user out everywhere. Not secret, but of no use to the client.
     "token_version",

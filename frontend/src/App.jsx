@@ -21,6 +21,7 @@ import Register from "./pages/auth/Register";
 import VerifyEmail from "./pages/auth/VerifyEmail";
 import ForgotPassword from "./pages/auth/ForgotPassword";
 import ResetPassword from "./pages/auth/ResetPassword";
+import AcceptInvite from "./pages/auth/AcceptInvite";
 import NotFound from "./pages/NotFound";
 
 // The three role areas are loaded on demand.
@@ -43,6 +44,7 @@ const DeanAllEvents = lazy(() => import("./pages/dean/AllEvents"));
 const DeanArchive = lazy(() => import("./pages/dean/Archive"));
 const DeanEventDetails = lazy(() => import("./pages/dean/EventDetails"));
 const DeanProfile = lazy(() => import("./pages/dean/Profile"));
+const DeanTeachers = lazy(() => import("./pages/dean/Teachers"));
 
 // Super Admin
 const SuperAdminDashboard = lazy(
@@ -112,6 +114,7 @@ function App() {
             <Route path="/verify-email" element={<VerifyEmail />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/accept-invite" element={<AcceptInvite />} />
 
             {/* ================= TEACHER ================= */}
             <Route
@@ -192,6 +195,15 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={["dean"]}>
                   <DeanEventDetails />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/dean/teachers"
+              element={
+                <ProtectedRoute allowedRoles={["dean"]}>
+                  <DeanTeachers />
                 </ProtectedRoute>
               }
             />

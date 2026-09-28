@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     require_email_verification: bool = True
     email_verification_expire_hours: int = 24
     password_reset_expire_minutes: int = 60
+    # How long a Dean's "set your password" invitation link stays valid.
+    teacher_invite_expire_days: int = 7
 
     # ------------------------------------------------------------------
     # SMTP (outbound email)
@@ -76,6 +78,15 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
     smtp_timeout_seconds: int = 20
+
+    # Master switch for outbound email. With EMAIL_DELIVERY_ENABLED=false no
+    # SMTP connection is ever opened, whatever the SMTP_* settings say: every
+    # message is written to EMAIL_OUTBOX_DIR as an .eml file instead, so the
+    # whole application (invitations, resets, verification) can be exercised
+    # without mailing a real person. Those files contain live links -- keep
+    # this for development and testing, never for production.
+    email_delivery_enabled: bool = True
+    email_outbox_dir: str = "email_outbox"
 
     # ------------------------------------------------------------------
     # Reports
@@ -263,6 +274,9 @@ class Settings(BaseSettings):
 
     def password_reset_url(self, token: str) -> str:
         return self.frontend_route(f"/reset-password?token={token}")
+
+    def teacher_invite_url(self, token: str) -> str:
+        return self.frontend_route(f"/accept-invite?token={token}")
 
 
 settings = Settings()
