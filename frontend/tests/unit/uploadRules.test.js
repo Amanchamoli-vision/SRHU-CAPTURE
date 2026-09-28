@@ -111,6 +111,17 @@ describe("validatePick — counts", () => {
     expect(accepted).toHaveLength(12);
     expect(rejections).toHaveLength(0);
   });
+
+  it("stops at the configured document count, counting what is attached", () => {
+    const { accepted, rejections } = validatePick({
+      files: [file("b.pdf", 1, "application/pdf"), file("c.pdf", 1, "application/pdf")],
+      kind: "document",
+      savedItems: [{ file_name: "a.pdf", file_size: MB }],
+      limits: { ...DEFAULT_UPLOAD_LIMITS, max_documents_per_event: 2 },
+    });
+    expect(accepted.map((f) => f.name)).toEqual(["b.pdf"]);
+    expect(rejections[0]).toMatch(/limit is 2 documents/);
+  });
 });
 
 describe("validatePick — combined budget", () => {

@@ -12,8 +12,8 @@ import { PER_PAGE_OPTIONS, DEFAULT_PER_PAGE } from "../../hooks/useTableQuery";
 import { ROLE_TRACK, initialsOf } from "../../components/common/roles";
 import { DESIGNATION_SUGGESTIONS } from "../../utils/designations";
 import { isValidPhone, normalizePhoneInput } from "../../utils/phone";
-import { createTeacher, sendInvitesInChunks } from "../../services/deanTeachers";
-import CredentialReport from "../../components/dean/CredentialReport";
+import { bulkTeachers, createTeacher, fetchTeacherIds, sendInvites } from "../../services/deanTeachers";
+import CredentialReport, { OutcomeChip, Tally } from "../../components/dean/CredentialReport";
 import ImportTeachersModal from "../../components/dean/ImportTeachersModal";
 import {
   IconActivity,
@@ -404,15 +404,9 @@ export default function Teachers() {
   const selectAllMatching = async () => {
     try {
       setSelectingAll(true);
+      // One request for every matching id, however many pages they span.
       const next = new Map(selected);
-      for (let offset = 0; offset < total; offset += 100) {
-        const params = new URLSearchParams(filterParams);
-        params.set("skip", String(offset));
-        params.set("limit", "100");
-        const data = await apiJson(`/dean/teachers?${params}`);
-        (data?.teachers || []).forEach((t) => next.set(t.id, t));
-        if (!data?.has_more) break;
-      }
+      (await fetchTeacherIds(filterParams)).forEach((t) => next.set(t.id, t));
       setSelected(next);
     } catch (err) {
       handleApiError(err, "Could not select every matching teacher.");
@@ -482,6 +476,38 @@ export default function Teachers() {
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [bulkRun, setBulkRun] = useState(null); // { done, total, results, running }
 
+  // Bulk remove / delete of the selected teachers:
+  // { kind: "remove" | "delete", confirmText, running, result } while open.
+  const [bulkAction, setBulkAction] = useState(null);
+
+  const runBulkAction = async () => {
+    const kind = bulkAction?.kind;
+    const ids = [...selected.keys()];
+    if (!kind || ids.length === 0) return;
+    setBulkAction((a) => ({ ...a, running: true }));
+    try {
+      // The whole selection in one request.
+      const data = await bulkTeachers(kind, ids);
+      const results = data?.results || [];
+      const withNames = results.map((r) => {
+        const known = selected.get(r.user_id);
+        return { ...r, name: r.name ?? known?.name ?? null, email: r.email ?? known?.email ?? null };
+      });
+      setBulkAction((a) => ({ ...a, running: false, result: withNames }));
+      // Whoever was handled leaves the selection; the skipped stay picked.
+      setSelected((prev) => {
+        const next = new Map(prev);
+        withNames.filter((r) => r.status === (kind === "delete" ? "deleted" : "removed"))
+          .forEach((r) => next.delete(r.user_id));
+        return next;
+      });
+      await refreshAll();
+    } catch (err) {
+      setBulkAction(null);
+      handleApiError(err, kind === "delete" ? "Failed to delete the selected teachers." : "Failed to remove the selected teachers.");
+    }
+  };
+
   const runBulkSend = async () => {
     const ids = [...selected.keys()];
     if (ids.length === 0) return;
@@ -491,9 +517,8 @@ export default function Teachers() {
     let withNames;
     let fatal;
     try {
-      ({ results: withNames, error: fatal } = await sendInvitesInChunks(ids, {
+      ({ results: withNames, error: fatal } = await sendInvites(ids, {
         lookup: (id) => selected.get(id),
-        onProgress: (done, results) => setBulkRun((prev) => ({ ...prev, done, results })),
       }));
     } catch (err) {
       setBulkRun(null);
@@ -574,7 +599,7 @@ export default function Teachers() {
             value={counts.active ?? 0}
             Icon={IconCheckCircle}
             track={TRACK_OK}
-            hint="Can sign in"
+            hint="Active & email verified"
             to="/dean/teachers?status=active"
             index={1}
           />
@@ -741,6 +766,25 @@ export default function Teachers() {
               )}
               <button type="button" onClick={clearSelection} className="btn btn-ghost btn-sm">
                 Clear selection
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkAction({ kind: "remove", confirmText: "" })}
+                disabled={statusFilter === "removed"}
+                title="Hide the selected teachers and sign them out; every record is kept"
+                className="btn btn-ghost btn-sm text-err hover:bg-err/10"
+              >
+                <IconArchive />
+                Remove selected
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkAction({ kind: "delete", confirmText: "" })}
+                className="btn btn-danger btn-sm"
+                title="Delete permanently: only teachers with no events"
+              >
+                <IconTrash />
+                Delete selected
               </button>
               <button
                 type="button"
@@ -1070,6 +1114,91 @@ export default function Teachers() {
         {bulkRun && <CredentialReport run={bulkRun} />}
       </Modal>
 
+      {/* ------------------------------------------------ bulk remove / delete */}
+      <Modal
+        open={Boolean(bulkAction)}
+        onClose={() => { if (!bulkAction?.running) setBulkAction(null); }}
+        eyebrow={bulkAction?.kind === "delete" ? "Permanent" : "Remove teachers"}
+        title={
+          bulkAction?.result
+            ? bulkAction.kind === "delete" ? "Delete report" : "Remove report"
+            : bulkAction?.kind === "delete"
+              ? `Delete ${selectedCount} ${selectedCount === 1 ? "teacher" : "teachers"} permanently?`
+              : `Remove ${selectedCount} ${selectedCount === 1 ? "teacher" : "teachers"}?`
+        }
+        wide={Boolean(bulkAction?.result)}
+        footer={
+          bulkAction?.result ? (
+            <button type="button" onClick={() => setBulkAction(null)} className="btn btn-primary btn-sm">
+              Done
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setBulkAction(null)}
+                disabled={bulkAction?.running}
+                className="btn btn-ghost btn-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={runBulkAction}
+                disabled={
+                  bulkAction?.running ||
+                  (bulkAction?.kind === "delete" && bulkAction?.confirmText !== "DELETE")
+                }
+                className="btn btn-danger btn-sm"
+              >
+                {bulkAction?.running ? (
+                  <span className="spin h-4 w-4" />
+                ) : bulkAction?.kind === "delete" ? (
+                  <IconTrash />
+                ) : (
+                  <IconArchive />
+                )}
+                {bulkAction?.kind === "delete" ? `Delete ${selectedCount} permanently` : `Remove ${selectedCount}`}
+              </button>
+            </>
+          )
+        }
+      >
+        {bulkAction && !bulkAction.result && (
+          <div className="space-y-4 text-sm">
+            {bulkAction.kind === "delete" ? (
+              <>
+                <p className="prose-muted">
+                  Their accounts are erased from Campus Capture. This cannot be undone. Only teachers with{" "}
+                  <strong className="text-ink">no events</strong> can be deleted; anyone who has events is
+                  skipped, and can be removed instead, which keeps their records.
+                </p>
+                <div className="field">
+                  <label htmlFor="bulkTeacherDeleteConfirm">
+                    Type <span className="font-semibold">DELETE</span> to confirm
+                  </label>
+                  <input
+                    id="bulkTeacherDeleteConfirm"
+                    type="text"
+                    value={bulkAction.confirmText}
+                    onChange={(e) => setBulkAction((a) => ({ ...a, confirmText: e.target.value }))}
+                    autoComplete="off"
+                    placeholder="DELETE"
+                    className="input"
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="prose-muted">
+                The selected teachers are signed out, cannot sign in, and move to the Removed tab. Their events,
+                uploads and reports are all kept, and each can be restored at any time.
+              </p>
+            )}
+          </div>
+        )}
+        {bulkAction?.result && <BulkTeacherReport kind={bulkAction.kind} results={bulkAction.result} />}
+      </Modal>
+
       <AddTeacherModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
@@ -1262,6 +1391,45 @@ function TeacherSummary({ teacher }) {
         <p className="truncate text-xs text-muted">{teacher.email}</p>
       </div>
       <ActiveChip teacher={teacher} />
+    </div>
+  );
+}
+
+/** What a bulk remove / delete did to each selected teacher, and why not. */
+function BulkTeacherReport({ kind, results }) {
+  const doneStatus = kind === "delete" ? "deleted" : "removed";
+  const done = results.filter((r) => r.status === doneStatus).length;
+  const rows = [...results].sort((a, b) => (a.status === doneStatus) - (b.status === doneStatus));
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-3 gap-3">
+        <Tally label="Selected" value={results.length} track={ROLE_TRACK.teacher} />
+        <Tally label={kind === "delete" ? "Deleted" : "Removed"} value={done} track={TRACK_OK} />
+        <Tally label="Skipped" value={results.length - done} track={TRACK_WARN} />
+      </div>
+      <div className="max-h-[45vh] overflow-auto rounded-2xl border hairline">
+        <table className="w-full text-left text-sm">
+          <thead className="sticky top-0 bg-surface">
+            <tr className="border-b hairline">
+              <th scope="col" className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted">Teacher</th>
+              <th scope="col" className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted">Result</th>
+              <th scope="col" className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted">Reason</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line/8">
+            {rows.map((r) => (
+              <tr key={r.user_id}>
+                <td className="px-4 py-2.5">
+                  <p className="font-medium text-ink">{r.name || "Unknown account"}</p>
+                  {r.email && <p className="text-xs text-muted">{r.email}</p>}
+                </td>
+                <td className="px-4 py-2.5"><OutcomeChip outcome={r.status} /></td>
+                <td className="px-4 py-2.5 text-xs text-muted">{r.reason || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1829,6 +1997,8 @@ function EditTeacherModal({ teacher, onClose, onSaved, onUnauthorized }) {
 }
 
 const ACTIVITY_LABEL = {
+  teachers_bulk_deleted: "Bulk deleted teachers",
+  teachers_bulk_removed: "Bulk removed teachers",
   teacher_created: "Added teacher",
   teacher_invited: "Sent invitation",
   teachers_invited: "Bulk sent invitations",
@@ -1898,6 +2068,10 @@ function ActivityPanel({ refreshKey }) {
                   ? `${d.sent_count ?? 0} sent · ${d.failed_count ?? 0} failed · ${d.skipped_count ?? 0} skipped`
                   : log.action === "teachers_imported"
                     ? `${d.created_count ?? 0} created · ${d.skipped_count ?? 0} skipped`
+                    : log.action === "teachers_bulk_deleted"
+                    ? `${d.deleted_count ?? 0} deleted · ${d.skipped_count ?? 0} skipped`
+                    : log.action === "teachers_bulk_removed"
+                    ? `${d.removed_count ?? 0} removed · ${d.skipped_count ?? 0} skipped`
                     : d.target_name || d.target_email || "";
                 return (
                   <li key={log.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">

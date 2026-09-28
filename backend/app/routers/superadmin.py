@@ -968,6 +968,27 @@ def delete_department(
 
 
 # ============================================================
+# DELETE AN EVENT
+# ============================================================
+
+@router.delete("/events/{event_id}")
+def delete_event(event_id: str, superadmin: dict = Depends(superadmin_dep)):
+    """Delete any event permanently, with its media, documents and report."""
+    # Imported here: events.py is the events router, and this is the one
+    # superadmin route that needs its delete.
+    from app.routers.events import find_event_or_404, hard_delete_event
+
+    event = find_event_or_404(event_id)
+    if not hard_delete_event(event, superadmin):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This event was already removed.")
+
+    return {
+        "success": True,
+        "message": f"\"{event.get('event_name') or 'Event'}\" was deleted permanently.",
+    }
+
+
+# ============================================================
 # ACCREDITATION CSV EXPORT (NAAC / NIRF)
 # ============================================================
 

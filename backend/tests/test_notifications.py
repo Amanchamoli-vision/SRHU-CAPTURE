@@ -243,14 +243,14 @@ class NotificationRoutingTests(unittest.TestCase):
         event_id = self.submit()
         dean = {"Authorization": "Bearer dean-a"}
         self.client.patch(f"/dean/events/{event_id}/approve", headers=dean)
-        self.client.patch(f"/dean/events/{event_id}/stage", params={"stage": "in_progress"}, headers=dean)
         self.client.patch(f"/dean/events/{event_id}/stage", params={"stage": "completed"}, headers=dean)
         # A repeat of the current stage is not news.
         self.client.patch(f"/dean/events/{event_id}/stage", params={"stage": "completed"}, headers=dean)
+        self.client.patch(f"/dean/events/{event_id}/stage", params={"stage": "approved"}, headers=dean)
 
         notes = self.notifications.for_user(TEACHER_ID)
         self.assertEqual([n["notification_type"] for n in notes], ["approved", "progress", "progress"])
-        self.assertEqual([n["data"].get("stage") for n in notes[1:]], ["in_progress", "completed"])
+        self.assertEqual([n["data"].get("stage") for n in notes[1:]], ["completed", "approved"])
 
     def test_each_user_reads_and_clears_only_their_own(self) -> None:
         event_id = self.submit()

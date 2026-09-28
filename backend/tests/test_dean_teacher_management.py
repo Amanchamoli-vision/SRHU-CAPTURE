@@ -58,6 +58,13 @@ class Users(FakeUsers):
     def delete_one(self, query: dict):
         self.documents = [d for d in self.documents if not _matches(d, query)]
 
+    def update_many(self, query: dict, update: dict, **_kwargs):
+        self.updates.append((query, update))
+        matched = [d for d in self.documents if _matches(d, query)]
+        for document in matched:
+            self._apply(document, update)
+        return SimpleNamespace(matched_count=len(matched), modified_count=len(matched))
+
 
 class AuditLogs:
     def __init__(self) -> None:
@@ -152,6 +159,10 @@ class DeanTeacherTestCase(unittest.TestCase):
             patch("app.routers.dean_teachers.audit_logs", self.audit),
             patch("app.routers.dean_teachers.events", self.events),
             patch("app.routers.dean_teachers.delete_user_cascade", side_effect=cascade),
+            patch(
+                "app.routers.dean_teachers.delete_users_cascade",
+                side_effect=lambda user_ids: [cascade(user_id) for user_id in user_ids],
+            ),
             patch.object(email_service, "is_configured", return_value=True),
             patch.object(email_service, "delivery_enabled", return_value=True),
             patch.object(
@@ -686,7 +697,7 @@ class InviteTests(DeanTeacherTestCase):
     def test_bulk_size_is_capped(self) -> None:
         response = self.client.post(
             "/dean/teachers/invite",
-            json={"user_ids": [str(ObjectId()) for _ in range(26)]},
+            json={"user_ids": [str(ObjectId()) for _ in range(501)]},
             headers=self.auth(self.dean),
         )
         self.assertEqual(response.status_code, 422)

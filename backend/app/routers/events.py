@@ -14,6 +14,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from bson import ObjectId
 from pymongo import ASCENDING, DESCENDING
 
 from app.config import settings
@@ -28,6 +29,7 @@ from app.database import (
 from app.models.documents import (
     APPROVED_STAGES,
     DEAN_PROGRESS_STAGES,
+    LEGACY_PROGRESS_STAGES,
     TEACHER_EDITABLE_STATUSES,
     new_document_document,
     new_event_document,
@@ -37,6 +39,8 @@ from app.models.documents import (
     new_notification_document,
 )
 from app.schemas.events import (
+    DeanBulkArchiveEventsRequest,
+    DeanBulkDeleteEventsRequest,
     DeanDecisionBody,
     EventCreateRequest,
     EventUpdateRequest,
@@ -44,6 +48,7 @@ from app.schemas.events import (
     campus_now,
 )
 from app.services import email_service
+from app.services.audit_service import log_audit_event
 from app.services.event_types import resolve_event_type
 from app.services.event_fields import (
     many_with_legacy_metadata,
@@ -53,6 +58,7 @@ from app.services.storage_service import (
     absolutize,
     check_file_signature,
     delete_event_cascade,
+    delete_events_cascade,
     delete_stored,
     inspect_document,
     inspect_media,
@@ -247,8 +253,8 @@ def page(cursor, skip: int | None, limit: int | None):
 def paginate(
     collection,
     query: dict,
-    sort_field: str,
-    direction: int,
+    sort_field: str | list[tuple[str, int]],
+    direction: int | None,
     skip: int | None,
     limit: int | None,
 ) -> tuple[list[dict], int]:
@@ -257,11 +263,14 @@ def paginate(
     `total` is the size of the whole result set, not of the page -- a paging
     UI needs the former to render "1-25 of 312" and to know whether a next
     page exists. Counting with the same filter object keeps the two in step.
+
+    `sort_field` is one field (with `direction`) or a list of
+    ``(field, direction)`` pairs for a sort with tie-breakers.
     """
     total = collection.count_documents(query)
-    cursor = page(
-        collection.find(query).sort(sort_field, direction), skip, limit
-    )
+    cursor = collection.find(query)
+    cursor = cursor.sort(sort_field) if isinstance(sort_field, list) else cursor.sort(sort_field, direction)
+    cursor = page(cursor, skip, limit)
     return serialize_many(cursor), total
 
 
@@ -424,10 +433,9 @@ def safe_create_notification(
         document["_id"] = result.inserted_id
         return serialize(document)
     except Exception as err:
-        print(
-            "Notification creation warning"
-            " (non-blocking):",
-            err,
+        logger.warning(
+            "notification_create_failed user_id=%s event_id=%s type=%s error=%s (non-blocking)",
+            user_id, event_id, notification_type, err,
         )
         return None
 
@@ -615,36 +623,17 @@ def dean_dashboard_stats(
 #
 # ============================================================
 
-@router.get(
-    "/dean/events"
-)
-def get_all_events(
-    authorization: str | None = Header(
-        default=None
-    ),
+def _dean_event_query(
+    event_date: str | None,
+    event_type: str | None,
+    q: str | None,
+    status_bucket: str | None,
+) -> dict:
+    """The Dean list's filter, shared with GET /dean/events/ids.
 
-    event_date: str | None = Query(
-        default=None
-    ),
-
-    event_type: str | None = Query(
-        default=None
-    ),
-
-    # Free-text search over the event name, venue and organiser.
-    q: str | None = Query(default=None, max_length=200),
-
-    # One of the status buckets the Dean's tabs use, or "all".
-    status_bucket: str | None = Query(default=None, max_length=20),
-
-    # Optional paging. Still no default cap, so an un-paged caller keeps
-    # getting everything; the Dean page now asks for a page explicitly.
-    skip: int | None = Query(default=None, ge=0),
-    limit: int | None = Query(default=None, ge=1, le=1000),
-):
-    user = get_current_user(authorization)
-    check_event_viewer(user)
-
+    One definition, so "Select all matching" can never pick a different set of
+    events from the one the list shows under the same filters.
+    """
     # --------------------------------------------------------
     # VALIDATE DATE
     # --------------------------------------------------------
@@ -748,6 +737,41 @@ def get_all_events(
 
         query["$or"] = clauses
 
+    return query
+
+
+@router.get(
+    "/dean/events"
+)
+def get_all_events(
+    authorization: str | None = Header(
+        default=None
+    ),
+
+    event_date: str | None = Query(
+        default=None
+    ),
+
+    event_type: str | None = Query(
+        default=None
+    ),
+
+    # Free-text search over the event name, venue and organiser.
+    q: str | None = Query(default=None, max_length=200),
+
+    # One of the status buckets the Dean's tabs use, or "all".
+    status_bucket: str | None = Query(default=None, max_length=20),
+
+    # Optional paging. Still no default cap, so an un-paged caller keeps
+    # getting everything; the Dean page now asks for a page explicitly.
+    skip: int | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
+):
+    user = get_current_user(authorization)
+    check_event_viewer(user)
+
+    query = _dean_event_query(event_date, event_type, q, status_bucket)
+
     # Counts for the status tabs, under the same non-status filters, so the
     # numbers on the tabs match what selecting one would show.
     #
@@ -764,8 +788,13 @@ def get_all_events(
         {**count_query, "status": {"$ne": "draft"}}
     )
 
+    # Newest submission first, so an event lands at the very top of the Dean's
+    # list the moment it is submitted. created_at alone put it wherever its
+    # draft was *started* -- the wizard saves a draft first, often days
+    # before submitting. created_at breaks ties and orders any event stored
+    # before submitted_at existed.
     event_list, total = paginate(
-        events, query, "created_at", DESCENDING, skip, limit
+        events, query, [("submitted_at", DESCENDING), ("created_at", DESCENDING)], None, skip, limit
     )
     many_with_legacy_metadata(event_list)
     attach_teachers(event_list)
@@ -782,9 +811,40 @@ def get_all_events(
 
         "filters": {
             "event_date": event_date,
-            "event_type": normalized_event_type,
+            # The resolved spelling, which _dean_event_query put in the filter.
+            "event_type": query.get("event_type"),
         },
     }
+
+
+# ============================================================
+# SELECT ALL: THE IDS OF EVERY MATCHING EVENT
+# ============================================================
+
+@router.get(
+    "/dean/events/ids"
+)
+def get_dean_event_ids(
+    authorization: str | None = Header(default=None),
+    event_date: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=200),
+    status_bucket: str | None = Query(default=None, max_length=20),
+):
+    """Every event matching the Dean list's filters, as ids and names only.
+
+    Backs "Select all events": one light request instead of paging through
+    full event documents to collect their ids.
+    """
+    user = get_current_user(authorization)
+    check_event_viewer(user)
+
+    query = _dean_event_query(event_date, event_type, q, status_bucket)
+    cursor = events.find(query, {"_id": 1, "event_name": 1}).sort(
+        [("submitted_at", DESCENDING), ("created_at", DESCENDING)]
+    ).limit(MAX_BULK_EVENTS)
+    found = [{"id": str(doc["_id"]), "event_name": doc.get("event_name")} for doc in cursor]
+    return {"success": True, "events": found, "total": len(found)}
 
 
 # ============================================================
@@ -1217,22 +1277,213 @@ def dean_delete_event(
 
     event = find_dean_visible_event_or_404(event_id, allow_archived=True)
 
-    result = events.delete_one({"_id": event["_id"]})
-    if result.deleted_count == 0:
+    if not hard_delete_event(event, user):
         raise conflict("This event was already removed.")
-
-    delete_event_cascade(str(event["_id"]))
-
-    logger.warning(
-        "event_hard_deleted id=%s name=%s by=%s",
-        event_id,
-        event.get("event_name"),
-        user["id"],
-    )
 
     return {
         "success": True,
         "message": "Event deleted permanently",
+    }
+
+
+def hard_delete_event(event: dict, actor: dict, *, audit: bool = True) -> bool:
+    """Delete one event for good, with its media, documents and report.
+
+    Shared by the Dean's single and bulk delete and the superadmin's delete, so
+    all of them remove the same things and leave the same record. Returns
+    False when the event was already gone (a concurrent delete). Teachers
+    deleting their own unapproved events keep their own route.
+    """
+    result = events.delete_one({"_id": event["_id"]})
+    if result.deleted_count == 0:
+        return False
+
+    delete_event_cascade(str(event["_id"]))
+
+    logger.warning(
+        "event_hard_deleted id=%s name=%s by=%s role=%s",
+        event["_id"],
+        event.get("event_name"),
+        actor.get("id"),
+        actor.get("role"),
+    )
+    if audit:
+        log_audit_event(
+            actor=actor,
+            action="event_deleted",
+            target_type="event",
+            target_id=str(event["_id"]),
+            details={
+                "event_name": event.get("event_name"),
+                "status": event.get("status"),
+                "teacher_id": event.get("teacher_id"),
+            },
+        )
+    return True
+
+
+@router.post(
+    "/dean/events/bulk-delete"
+)
+def dean_bulk_delete_events(
+    payload: DeanBulkDeleteEventsRequest,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Delete the events the Dean selected ("Select All Events"), permanently.
+
+    Each id gets its own outcome: deleted, or not found (unknown, a draft --
+    which a Dean never sees -- or already removed). Nothing is deleted that a
+    Dean could not delete one at a time, and the batch is one audit entry.
+    """
+    user = get_current_user(authorization)
+    check_dean(user)
+
+    found, results = _resolve_dean_events(payload.event_ids)
+
+    # One query for the events and one per related collection, whatever the
+    # selection size -- rather than a lookup, a delete and a cascade of
+    # queries per event. Stored files are still removed one by one: object
+    # storage deletes them individually.
+    deleted_ids: set[str] = set()
+    if found:
+        ids = [str(doc["_id"]) for doc in found]
+        events.delete_many({"_id": {"$in": [doc["_id"] for doc in found]}})
+        delete_events_cascade(ids)
+        deleted_ids = set(ids)
+        logger.warning(
+            "events_bulk_hard_deleted count=%d by=%s role=%s", len(ids), user.get("id"), user.get("role")
+        )
+
+    for doc in found:
+        results.append({
+            "event_id": str(doc["_id"]),
+            "status": "deleted" if str(doc["_id"]) in deleted_ids else "not_found",
+            "event_name": doc.get("event_name"),
+        })
+
+    deleted = [r for r in results if r["status"] == "deleted"]
+    log_audit_event(
+        actor=user,
+        action="events_bulk_deleted",
+        target_type="events",
+        details={
+            "requested_count": len(results),
+            "deleted_count": len(deleted),
+            "events": [{"id": r["event_id"], "name": r["event_name"], "status": r["status"]} for r in results],
+        },
+    )
+
+    return {
+        "success": True,
+        "requested_count": len(results),
+        "deleted_count": len(deleted),
+        "not_found_count": len(results) - len(deleted),
+        "results": results,
+        "message": f"{len(deleted)} event{'s' if len(deleted) != 1 else ''} deleted permanently.",
+    }
+
+
+# Largest selection one bulk request takes (and "Select all" returns).
+MAX_BULK_EVENTS = 5000
+
+
+def _resolve_dean_events(raw_ids: list[str], extra: dict | None = None) -> tuple[list[dict], list[dict]]:
+    """Look up a selection in one query: the events a Dean can act on, plus a
+    ``not_found`` row for every other id (unknown, malformed, a draft --
+    which a Dean never sees -- or already gone)."""
+    wanted: dict[ObjectId, str] = {}
+    results: list[dict] = []
+    for raw_id in dict.fromkeys(raw_ids):
+        object_id = to_object_id(raw_id)
+        if object_id is None or object_id in wanted:
+            if object_id is None:
+                results.append({"event_id": raw_id, "status": "not_found", "event_name": None})
+            continue
+        wanted[object_id] = raw_id
+    found = list(events.find({
+        "_id": {"$in": list(wanted)},
+        "status": {"$ne": "draft"},
+        **(extra or {}),
+    })) if wanted else []
+    found_ids = {doc["_id"] for doc in found}
+    results.extend(
+        {"event_id": raw_id, "status": "not_found", "event_name": None}
+        for object_id, raw_id in wanted.items()
+        if object_id not in found_ids
+    )
+    return found, results
+
+
+@router.post(
+    "/dean/events/bulk-archive"
+)
+def dean_bulk_archive_events(
+    payload: DeanBulkArchiveEventsRequest,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Archive the events the Dean selected, in one request.
+
+    Same effect as archiving each one (record, media and history kept; each
+    event's history gains an "archived" entry), done as one update per status
+    present in the selection instead of one per event.
+    """
+    user = get_current_user(authorization)
+    check_dean(user)
+
+    found, results = _resolve_dean_events(payload.event_ids)
+    reason = (payload.reason or "").strip() or None
+    now = utc_now()
+
+    to_archive: dict[str | None, list[ObjectId]] = {}
+    for doc in found:
+        if doc.get("archived_at") is not None:
+            results.append({"event_id": str(doc["_id"]), "status": "already_archived",
+                            "event_name": doc.get("event_name")})
+        else:
+            to_archive.setdefault(doc.get("status"), []).append(doc["_id"])
+            results.append({"event_id": str(doc["_id"]), "status": "archived",
+                            "event_name": doc.get("event_name")})
+
+    # The history entry records the status each event keeps, so events are
+    # grouped by status: a handful of updates, not one per event.
+    for event_status, object_ids in to_archive.items():
+        events.update_many(
+            {"_id": {"$in": object_ids}, "archived_at": None},
+            {
+                "$set": {"archived_at": now, "archived_by": user["id"], "archive_reason": reason, "updated_at": now},
+                "$push": {"history": new_history_entry(
+                    action="archived",
+                    status=event_status,
+                    from_status=event_status,
+                    actor=user,
+                    note=reason,
+                )},
+            },
+        )
+
+    archived = [r for r in results if r["status"] == "archived"]
+    log_audit_event(
+        actor=user,
+        action="events_bulk_archived",
+        target_type="events",
+        details={
+            "requested_count": len(results),
+            "archived_count": len(archived),
+            "events": [{"id": r["event_id"], "name": r["event_name"], "status": r["status"]} for r in results],
+        },
+    )
+
+    return {
+        "success": True,
+        "requested_count": len(results),
+        "archived_count": len(archived),
+        "skipped_count": len(results) - len(archived),
+        "results": results,
+        "message": f"{len(archived)} event{'s' if len(archived) != 1 else ''} moved to the archive.",
     }
 
 
@@ -1241,7 +1492,7 @@ def dean_delete_event(
 #
 # Post-approval delivery tracking only. Approve and reject keep
 # their own endpoints; this moves an already-approved event
-# between Approved -> In Progress -> Completed.
+# between Approved and Completed.
 # ============================================================
 
 @router.patch(
@@ -1263,10 +1514,7 @@ def update_event_stage(
     if normalized_stage not in DEAN_PROGRESS_STAGES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Invalid stage. Allowed values: "
-                "approved, in_progress, completed."
-            ),
+            detail="Invalid stage. Allowed values: approved, completed.",
         )
 
     # The same visibility rule every other Dean decision uses: a draft or an
@@ -1275,8 +1523,9 @@ def update_event_stage(
     # notified the teacher about it.
     existing = find_dean_visible_event_or_404(event_id)
 
-    # Delivery stages only make sense once the event has been approved.
-    if existing.get("status") not in DEAN_PROGRESS_STAGES:
+    # Delivery stages only make sense once the event has been approved. An
+    # event still stored as the retired "in_progress" can be moved on too.
+    if existing.get("status") not in (*DEAN_PROGRESS_STAGES, *LEGACY_PROGRESS_STAGES):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -1307,7 +1556,6 @@ def update_event_stage(
     # to hear about.
     if existing.get("status") != normalized_stage:
         stage_text = {
-            "in_progress": "marked in progress",
             "completed": "marked completed",
             "approved": "moved back to approved",
         }[normalized_stage]

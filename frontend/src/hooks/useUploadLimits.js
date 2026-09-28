@@ -27,18 +27,23 @@ export default function useUploadLimits() {
     };
   }, []);
 
+  // Resolves to the limits it loaded, so a caller about to validate can use
+  // them directly instead of waiting for the next render.
   const load = useCallback(async ({ force = false } = {}) => {
     setLoading(true);
     try {
       const next = await fetchUploadLimits({ force });
       if (mounted.current && next) setLimits(next);
+      return next;
     } finally {
       if (mounted.current) setLoading(false);
     }
   }, []);
 
+  // Always fresh on mount: opening a form must show what the Super Admin set
+  // now, not what this tab cached on an earlier visit.
   useEffect(() => {
-    load();
+    load({ force: true });
   }, [load]);
 
   useEffect(() => subscribeUploadLimits(() => load({ force: true })), [load]);

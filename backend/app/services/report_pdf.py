@@ -149,6 +149,18 @@ METADATA_LABELS = (
 )
 
 
+def metadata_value(meta: dict, key: str) -> str:
+    """A blob field for the report, with the host department defaulting to SST.
+
+    The event form no longer asks for a host department (the platform is SST
+    only), so an event without one is reported under the default host.
+    """
+    value = str(meta.get(key) or "").strip()
+    if not value and key == "department":
+        return settings.default_host_department
+    return value
+
+
 # ============================================================
 # TEXT HELPERS
 # ============================================================
@@ -517,7 +529,7 @@ def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: l
         details.append(("Time", escape(time_range)))
     details.append(("Venue", rich(event.get("location"))))
     for key, label in METADATA_LABELS:
-        value = str(meta.get(key) or "").strip()
+        value = metadata_value(meta, key)
         if value:
             details.append((label, rich(value)))
 

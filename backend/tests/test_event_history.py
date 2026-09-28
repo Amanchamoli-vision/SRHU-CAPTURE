@@ -53,10 +53,18 @@ TOKENS = {"Bearer teacher": TEACHER, "Bearer dean": DEAN}
 class FakeEventCursor(list):
     """The cursor surface paginate() uses: sort, then skip/limit."""
 
-    def sort(self, key, direction):
-        return FakeEventCursor(
-            sorted(self, key=lambda d: d.get(key) or "", reverse=direction == -1)
-        )
+    def sort(self, key, direction=None):
+        """One field and a direction, or a list of (field, direction) pairs."""
+        keys = key if isinstance(key, list) else [(key, direction)]
+        docs = list(self)
+        # Stable sorts applied last-key-first give a multi-key sort. A missing
+        # value orders before any real one, as MongoDB orders null.
+        for field, order in reversed(keys):
+            docs.sort(
+                key=lambda d, f=field: (d.get(f) is not None, d.get(f) or ""),
+                reverse=order == -1,
+            )
+        return FakeEventCursor(docs)
 
     def skip(self, count):
         return FakeEventCursor(self[count:]) if count else self
@@ -149,6 +157,20 @@ class FakeEvents:
             return MagicMock(deleted_count=0)
         del self.docs[doc["_id"]]
         return MagicMock(deleted_count=1)
+
+    def delete_many(self, query: dict):
+        doomed = [key for key, doc in self.docs.items() if self._matches(doc, query)]
+        for key in doomed:
+            del self.docs[key]
+        return MagicMock(deleted_count=len(doomed))
+
+    def update_many(self, query: dict, update: dict, **_kwargs):
+        matched = [doc for doc in self.docs.values() if self._matches(doc, query)]
+        for doc in matched:
+            doc.update(update.get("$set", {}))
+            for field, value in update.get("$push", {}).items():
+                doc.setdefault(field, []).append(copy.deepcopy(value))
+        return MagicMock(matched_count=len(matched), modified_count=len(matched))
 
     def set_status(self, event_id: str, status: str) -> None:
         self.docs[ObjectId(event_id)]["status"] = status
@@ -377,7 +399,7 @@ class EventHistoryTests(unittest.TestCase):
         event_id = self.create_pending_event()
         self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
 
-        for stage in ("in_progress", "completed"):
+        for stage in ("completed", "approved"):
             response = self.client.patch(
                 f"/dean/events/{event_id}/stage", params={"stage": stage}, headers=self.as_dean()
             )
@@ -385,8 +407,27 @@ class EventHistoryTests(unittest.TestCase):
 
         tail = self.history_of(event_id)[-2:]
         self.assertEqual([entry["action"] for entry in tail], ["stage_changed", "stage_changed"])
-        self.assertEqual([entry["status"] for entry in tail], ["in_progress", "completed"])
+        self.assertEqual([entry["status"] for entry in tail], ["completed", "approved"])
         self.assertEqual(tail[0]["from_status"], "approved")
+
+    def test_in_progress_is_no_longer_a_stage(self) -> None:
+        event_id = self.create_pending_event()
+        self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+        response = self.client.patch(
+            f"/dean/events/{event_id}/stage", params={"stage": "in_progress"}, headers=self.as_dean()
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_a_legacy_in_progress_event_can_still_be_moved_on(self) -> None:
+        event_id = self.create_pending_event()
+        self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
+        # Stored before "In Progress" was retired.
+        self.events.docs[ObjectId(event_id)]["status"] = "in_progress"
+        response = self.client.patch(
+            f"/dean/events/{event_id}/stage", params={"stage": "completed"}, headers=self.as_dean()
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["event"]["status"], "completed")
 
 
 class DeanTransitionTests(EventHistoryTests):
@@ -712,12 +753,12 @@ class RevokeTests(DeanTransitionTests):
 
         response = self.client.patch(
             f"/dean/events/{event_id}/stage",
-            params={"stage": "in_progress"},
+            params={"stage": "completed"},
             headers=self.as_dean(),
         )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["event"]["status"], "in_progress")
+        self.assertEqual(response.json()["event"]["status"], "completed")
 
 
 if __name__ == "__main__":

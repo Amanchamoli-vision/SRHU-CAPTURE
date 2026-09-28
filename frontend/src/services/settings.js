@@ -29,6 +29,11 @@ const BROADCAST_KEY = "cc_upload_limits_rev";
 
 let cache = null; // { limits, fetchedAt }
 
+// The last limits the server returned, kept past cache invalidation so a failed
+// refetch falls back to them rather than to the built-in defaults -- which
+// would quietly undo a limit the Super Admin had tightened.
+let lastKnown = null;
+
 function writeStorage(key, value) {
   try {
     window.localStorage.setItem(key, value);
@@ -76,9 +81,10 @@ export function subscribeUploadLimits(onStale) {
 /**
  * The active limits, for the teacher-facing upload forms.
  *
- * Never throws: an unreachable server falls back to the defaults, because the
- * wizard warning the teacher early is a convenience and the server enforces the
- * real limits on every upload regardless.
+ * Never throws: an unreachable server falls back to the last values it served
+ * (or the defaults, before the first response), because the wizard warning the
+ * teacher early is a convenience and the server enforces the real limits on
+ * every upload regardless.
  */
 export async function fetchUploadLimits({ force = false } = {}) {
   if (force) cache = null;
@@ -91,13 +97,14 @@ export async function fetchUploadLimits({ force = false } = {}) {
         limits: { ...DEFAULT_UPLOAD_LIMITS, ...data.limits },
         fetchedAt: Date.now(),
       };
+      lastKnown = cache.limits;
       return cache.limits;
     }
   } catch (err) {
-    console.warn("Failed to fetch upload limits from server, using defaults:", err);
+    console.warn("Failed to fetch upload limits from server, using last known values:", err);
   }
 
-  return DEFAULT_UPLOAD_LIMITS;
+  return lastKnown || DEFAULT_UPLOAD_LIMITS;
 }
 
 function normalise(data) {

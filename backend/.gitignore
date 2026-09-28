@@ -20,3 +20,6 @@ env/
 
 # Emails saved instead of sent when EMAIL_DELIVERY_ENABLED=false
 email_outbox/
+
+# Rotating application log files (LOG_DIR)
+logs/

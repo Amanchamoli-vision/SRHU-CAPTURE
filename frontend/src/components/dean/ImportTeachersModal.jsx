@@ -4,7 +4,7 @@ import { ROLE_TRACK } from "../common/roles";
 import {
   importTeachers,
   previewTeacherImport,
-  sendInvitesInChunks,
+  sendInvites,
 } from "../../services/deanTeachers";
 import { OutcomeChip, ProgressLine, Tally } from "./CredentialReport";
 import { TRACK_ERR, TRACK_MUTED, TRACK_OK, TRACK_WARN } from "./outcomes";
@@ -140,13 +140,8 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
       if (willEmail && created.length > 0) {
         setProgress({ phase: "email", done: 0, total: created.length });
         const byId = new Map(created.map((r) => [r.user_id, r]));
-        email = await sendInvitesInChunks(
-          created.map((r) => r.user_id),
-          {
-            lookup: (id) => byId.get(id),
-            onProgress: (done) => setProgress({ phase: "email", done, total: created.length }),
-          },
-        );
+        // One request for all of them; the server sends in parallel.
+        email = await sendInvites(created.map((r) => r.user_id), { lookup: (id) => byId.get(id) });
       }
 
       setOutcome({ imported, email, emailRequested: willEmail });
@@ -419,7 +414,7 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
           {progress.phase === "import" ? (
             <div className="progress-track"><span className="progress-bar is-indeterminate" /></div>
           ) : (
-            <ProgressLine done={progress.done} total={progress.total} label="Emailed" />
+            <ProgressLine total={progress.total} />
           )}
         </div>
       )}

@@ -76,9 +76,17 @@ export default function TimePicker12h({
 
   const hourRef = useRef(null);
   const minuteRef = useRef(null);
+  // The last value this picker emitted through onChange.
+  const emittedRef = useRef(value);
 
   // Sync internal state when value prop changes externally (draft load, reset, etc.)
   useEffect(() => {
+    // A value that is only our own onChange coming back is not an external
+    // change. Re-parsing it padded a half-typed hour: "1" became "01" the
+    // moment it was typed, so the next digit made "010" and 10, 11 and 12
+    // could never be entered.
+    if (value === emittedRef.current) return;
+    emittedRef.current = value;
     const next = parse24hTo12h(value);
     if (next) {
       setHour(next.hour);
@@ -96,15 +104,24 @@ export default function TimePicker12h({
   const commitTime = (hVal, mVal, pVal) => {
     stateRef.current = { hour: hVal, minute: mVal, period: pVal };
     if (!hVal && !mVal) {
+      emittedRef.current = "";
       onChange("");
       return;
     }
     const val24 = to24h(hVal, mVal || "00", pVal);
+    emittedRef.current = val24;
     onChange(val24);
   };
 
+  // Clicking into a box selects its digits so typing replaces them: each box
+  // holds two characters, so a full box with no selection refuses every
+  // keystroke. (Tab already selects; the hour advancing selects the minutes.)
+  const selectOnClick = (e) => e.target.select();
+
   const handleHourChange = (e) => {
-    const raw = e.target.value.replace(/\D/g, "");
+    // Typing into a filled hour ("01" + "2") keeps the last two digits
+    // ("12"), so an hour can be overtyped without clearing it first.
+    const raw = e.target.value.replace(/\D/g, "").slice(-2);
     const curMin = stateRef.current.minute;
     const curPeriod = stateRef.current.period;
 
@@ -156,7 +173,11 @@ export default function TimePicker12h({
     }
   };
 
-  const handleHourBlur = () => {
+  const handleHourBlur = (e) => {
+    // Moving on to the minutes is not leaving the time: padding the minutes
+    // to "00" here filled the box the moment it was selected, so the minutes
+    // being typed were refused.
+    const toMinutes = e?.relatedTarget === minuteRef.current;
     const curHour = stateRef.current.hour;
     const curMin = stateRef.current.minute;
     const curPeriod = stateRef.current.period;
@@ -167,6 +188,10 @@ export default function TimePicker12h({
       const hStr = String(num).padStart(2, "0");
       setHour(hStr);
       stateRef.current.hour = hStr;
+      if (toMinutes && !curMin) {
+        commitTime(hStr, "", curPeriod);
+        return;
+      }
       const mStr = curMin ? String(parseInt(curMin, 10)).padStart(2, "0") : "00";
       setMinute(mStr);
       stateRef.current.minute = mStr;
@@ -382,6 +407,7 @@ export default function TimePicker12h({
           placeholder="HH"
           value={hour}
           onChange={handleHourChange}
+          onClick={selectOnClick}
           onBlur={handleHourBlur}
           onKeyDown={handleHourKeyDown}
           disabled={disabled}
@@ -433,6 +459,7 @@ export default function TimePicker12h({
           placeholder="MM"
           value={minute}
           onChange={handleMinuteChange}
+          onClick={selectOnClick}
           onBlur={handleMinuteBlur}
           onKeyDown={handleMinuteKeyDown}
           disabled={disabled}

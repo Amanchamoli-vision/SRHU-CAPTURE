@@ -22,7 +22,6 @@ import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
   IconArrowRight,
-  IconBuilding,
   IconCalendar,
   IconCheck,
   IconCheckCircle,
@@ -263,18 +262,13 @@ function DeanProfile() {
   };
 
   // The facts, in the order someone checking their own account reads them:
-  // what they may do, department, mobile, whether the address is confirmed, then the audit trail.
+  // what they may do, mobile, whether the address is confirmed, then the audit trail.
   const facts = [
     {
       label: "Role",
       value: labelOfRole(role),
       Icon: IconShield,
       track: trackOfRole(role),
-    },
-    {
-      label: "Department",
-      value: profile?.department?.trim() || "Not specified",
-      Icon: IconBuilding,
     },
     {
       label: "Mobile number",
@@ -332,7 +326,7 @@ function DeanProfile() {
     {
       key: "edit-profile",
       label: "Edit profile",
-      hint: "Update name, department, phone",
+      hint: "Update name, phone",
       Icon: IconEdit,
       onClick: () => setEditOpen(true),
     },
@@ -509,7 +503,6 @@ function DeanProfile() {
                   </h1>
                   <p className="mt-0.5 truncate text-sm text-muted" title={displayEmail}>
                     {displayEmail}
-                    {profile?.department ? ` · ${profile.department}` : ""}
                   </p>
                 </div>
 
@@ -560,10 +553,14 @@ function DeanProfile() {
               </div>
 
               <dl className="grid grid-cols-2 gap-2 sm:gap-2.5">
-                {facts.map((fact) => (
+                {facts.map((fact, index) => (
                   <div
                     key={fact.label}
-                    className="flex items-center gap-3 rounded-xl border hairline bg-line/2 px-3 py-2.5"
+                    // On a phone the Account ID below takes a full row, so an
+                    // odd last fact does too rather than leaving half a row empty.
+                    className={`flex items-center gap-3 rounded-xl border hairline bg-line/2 px-3 py-2.5 ${
+                      facts.length % 2 === 1 && index === facts.length - 1 ? "col-span-2 sm:col-span-1" : ""
+                    }`}
                   >
                     <span
                       className={`icon-tile hidden h-9 w-9 rounded-lg min-[480px]:inline-flex ${fact.track ? "icon-tile-track" : ""}`}
@@ -588,7 +585,14 @@ function DeanProfile() {
                 {/* Shown in full rather than truncated, in a face that makes
                     every character unambiguous, since it gets read aloud or
                     pasted into a support message. */}
-                <div className="flex items-center gap-3 rounded-xl border hairline bg-line/2 px-3 py-2.5 col-span-2">
+                {/* Fills the empty half beside the last fact when their count is
+                    odd; full width on a phone, where half is too narrow for the
+                    id and its Copy button. */}
+                <div
+                  className={`col-span-2 flex items-center gap-3 rounded-xl border hairline bg-line/2 px-3 py-2.5 ${
+                    facts.length % 2 === 1 ? "sm:col-span-1" : ""
+                  }`}
+                >
                   <span className="icon-tile hidden h-9 w-9 rounded-lg min-[480px]:inline-flex">
                     <IconKey className="h-4 w-4" />
                   </span>
@@ -619,7 +623,7 @@ function DeanProfile() {
               <p className="mt-3 flex items-start gap-2 text-xs text-muted lg:mt-auto lg:pt-3">
                 <IconInfo className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>
-                  Email comes from your university account. Use "Edit profile" to update your name, department, or mobile number.
+                  Email comes from your university account. Use "Edit profile" to update your name or mobile number.
                 </span>
               </p>
             </section>

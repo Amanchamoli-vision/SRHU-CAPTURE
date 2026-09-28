@@ -28,3 +28,7 @@ os.environ.setdefault("REQUIRE_EMAIL_VERIFICATION", "false")
 # Pinned so assertions about the deployment ceiling do not depend on whatever a
 # developer happens to have in .env (which overrides the 200 MB code default).
 os.environ.setdefault("MAX_UPLOAD_SIZE_MB", "200")
+
+# Log to the console only: the suite must not leave app.log / audit.log files
+# behind in the working tree. test_logging_config covers the file handlers.
+os.environ["LOG_TO_FILES"] = "false"

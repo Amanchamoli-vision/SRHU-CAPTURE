@@ -14,6 +14,7 @@ import {
   IconRefresh,
   IconRotateCcw,
   IconSearch,
+  IconTrash,
   IconX,
 } from "../../components/teacher/icons";
 import {
@@ -28,6 +29,7 @@ import useEventTypes from "../../hooks/useEventTypes";
 import useTableQuery from "../../hooks/useTableQuery";
 import Pagination from "../../components/common/Pagination";
 import EventsTable from "../../components/dean/EventsTable";
+import { bulkEvents, fetchEventIds } from "../../services/deanTeachers";
 
 /**
  * Table columns, ordered by how much each one drives the Dean's decision.
@@ -122,6 +124,14 @@ function AllEvents() {
   // mis-click ends up destroying an event's media.
   // { event, mode: "archive" | "delete", confirmText }
   const [removal, setRemoval] = useState(null);
+
+  // "Select All Events": ids (with names, for the confirmation) kept across
+  // pages and filters, so events can be picked from several pages at once.
+  const [selected, setSelected] = useState(() => new Map());
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [bulkDelete, setBulkDelete] = useState(null); // { confirmText } while open
+  const [bulkArchive, setBulkArchive] = useState(null); // { reason } while open
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -335,6 +345,106 @@ function AllEvents() {
   // ============================================================
   // ARCHIVE / DELETE (PRD 1)
   // ============================================================
+
+  // ============================================================
+  // SELECT ALL EVENTS + BULK DELETE
+  // ============================================================
+
+  const pageIds = events.map((event) => event.id);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const someOnPageSelected = pageIds.some((id) => selected.has(id));
+
+  const toggleEvent = (event) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(event.id)) next.delete(event.id);
+      else next.set(event.id, event.event_name || "Untitled Event");
+      return next;
+    });
+  };
+
+  const togglePage = () => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (allOnPageSelected) events.forEach((event) => next.delete(event.id));
+      else events.forEach((event) => next.set(event.id, event.event_name || "Untitled Event"));
+      return next;
+    });
+  };
+
+  /** Every event matching the current filters, across all pages. */
+  const selectAllMatching = async () => {
+    try {
+      setSelectingAll(true);
+      // One request for every matching id, however many pages they span.
+      const params = new URLSearchParams();
+      if (query.date) params.set("event_date", query.date);
+      if (query.type) params.set("event_type", query.type);
+      if (query.q) params.set("q", query.q);
+      if (query.status && query.status !== "all") params.set("status_bucket", query.status);
+      const next = new Map(selected);
+      (await fetchEventIds(params)).forEach((event) => next.set(event.id, event.event_name || "Untitled Event"));
+      setSelected(next);
+    } catch (err) {
+      handleApiError(err, "Could not select every matching event", "Select all events error");
+    } finally {
+      setSelectingAll(false);
+    }
+  };
+
+  const runBulkDelete = async () => {
+    const ids = [...selected.keys()];
+    if (ids.length === 0) return;
+    try {
+      setBulkBusy(true);
+      setError("");
+      setSuccess("");
+      // The whole selection in one request.
+      const data = await bulkEvents("delete", ids);
+      const deleted = data?.deleted_count || 0;
+      const missing = data?.not_found_count || 0;
+      setBulkDelete(null);
+      setSelected(new Map());
+      setSuccess(
+        `${deleted} event${deleted === 1 ? "" : "s"} deleted permanently.` +
+          (missing ? ` ${missing} could not be found (already removed).` : ""),
+      );
+      await loadEvents();
+    } catch (err) {
+      handleApiError(err, "Failed to delete the selected events", "Bulk delete events error");
+      setBulkDelete(null);
+      await loadEvents();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const runBulkArchive = async () => {
+    const ids = [...selected.keys()];
+    if (ids.length === 0) return;
+    try {
+      setBulkBusy(true);
+      setError("");
+      setSuccess("");
+      // The whole selection in one request.
+      const data = await bulkEvents("archive", ids, { reason: bulkArchive?.reason?.trim() || null });
+      const archived = data?.archived_count || 0;
+      const skipped = data?.skipped_count || 0;
+      setBulkArchive(null);
+      setSelected(new Map());
+      setSuccess(
+        `${archived} event${archived === 1 ? "" : "s"} moved to the archive.` +
+          (skipped ? ` ${skipped} skipped (already archived or no longer available).` : ""),
+      );
+      await loadEvents();
+    } catch (err) {
+      handleApiError(err, "Failed to archive the selected events", "Bulk archive events error");
+      setBulkArchive(null);
+      await loadEvents();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const confirmRemoval = async () => {
     const event = removal?.event;
@@ -684,9 +794,88 @@ function AllEvents() {
             </div>
           )}
 
+          {/* Select All Events: page-level on every screen size (the phone
+              cards have no header checkbox), all-matching once anything is
+              picked, and the bulk delete itself. */}
+          {events.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-2 border-b hairline px-4 py-2.5"
+              role="region"
+              aria-label="Select events"
+            >
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-ink md:hidden">
+                <input
+                  type="checkbox"
+                  checked={allOnPageSelected}
+                  onChange={togglePage}
+                  className="h-4 w-4 rounded border-line text-accent focus:ring-accent"
+                />
+                Select all on this page
+              </label>
+              {selected.size === 0 ? (
+                <p className="hidden text-xs text-muted md:block">
+                  Tick events to archive or delete several at once, or use the box in the header to select the whole page.
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-ink">
+                    <span className="num font-semibold">{selected.size}</span>{" "}
+                    {selected.size === 1 ? "event" : "events"} selected
+                  </p>
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    {total > selected.size && (
+                      <button
+                        type="button"
+                        onClick={selectAllMatching}
+                        disabled={selectingAll || bulkBusy}
+                        className="btn btn-ghost btn-xs"
+                      >
+                        {selectingAll && <span className="spin h-3.5 w-3.5" />}
+                        Select all {total} events
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelected(new Map())}
+                      disabled={bulkBusy}
+                      className="btn btn-ghost btn-xs"
+                    >
+                      Clear selection
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkArchive({ reason: "" })}
+                      disabled={bulkBusy}
+                      className="btn btn-brand btn-xs"
+                    >
+                      <IconArchive />
+                      Archive selected
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkDelete({ confirmText: "" })}
+                      disabled={bulkBusy}
+                      className="btn btn-danger btn-xs"
+                    >
+                      <IconTrash />
+                      Delete selected
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <EventsTable
             events={visibleEvents}
             loading={loading}
+            selection={{
+              isSelected: (id) => selected.has(id),
+              onToggle: toggleEvent,
+              allSelected: allOnPageSelected,
+              someSelected: someOnPageSelected,
+              onToggleAll: togglePage,
+            }}
             formatEventDate={formatEventDate}
             emptyHint={
               isFiltered
@@ -720,6 +909,112 @@ function AllEvents() {
           )}
         </div>
       </div>
+
+      {/* ==================================================================
+          BULK ARCHIVE -- reversible, so a plain confirmation with an
+          optional reason, as for archiving one event.
+      ================================================================== */}
+      <Modal
+        open={Boolean(bulkArchive)}
+        onClose={() => !bulkBusy && setBulkArchive(null)}
+        eyebrow="Archive"
+        title={`Archive ${selected.size} ${selected.size === 1 ? "event" : "events"}?`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setBulkArchive(null)}
+              disabled={bulkBusy}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button type="button" onClick={runBulkArchive} disabled={bulkBusy} className="btn btn-brand btn-sm">
+              {bulkBusy ? <span className="spin h-4 w-4" /> : <IconArchive />}
+              Archive {selected.size}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="prose-muted text-sm">
+            The events leave the review list and move to the Archive, with every record, photo and
+            document kept. Each can be restored from the Archive at any time.
+          </p>
+          <div className="field">
+            <label htmlFor="bulkArchiveReason">
+              Reason <span className="ml-2 font-normal text-muted">(Optional)</span>
+            </label>
+            <textarea
+              id="bulkArchiveReason"
+              rows={2}
+              maxLength={1000}
+              value={bulkArchive?.reason || ""}
+              onChange={(event) => setBulkArchive({ reason: event.target.value })}
+              className="input"
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* ==================================================================
+          BULK DELETE -- the irreversible outcome, so typed confirmation as
+          for a single delete.
+      ================================================================== */}
+      <Modal
+        open={Boolean(bulkDelete)}
+        onClose={() => !bulkBusy && setBulkDelete(null)}
+        eyebrow="Permanent"
+        title={`Delete ${selected.size} ${selected.size === 1 ? "event" : "events"} permanently?`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setBulkDelete(null)}
+              disabled={bulkBusy}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={runBulkDelete}
+              disabled={bulkBusy || bulkDelete?.confirmText !== "DELETE"}
+              className="btn btn-danger btn-sm"
+            >
+              {bulkBusy ? <span className="spin h-4 w-4" /> : <IconTrash />}
+              Delete {selected.size} permanently
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="prose-muted text-sm">
+            Each event is removed with its photos, videos, documents and report. This cannot be undone.
+            To keep an event&apos;s records, archive it instead.
+          </p>
+          <ul className="max-h-40 space-y-1 overflow-auto rounded-xl border hairline bg-raised/40 p-3 text-xs text-ink">
+            {[...selected.values()].slice(0, 50).map((name, index) => (
+              <li key={index} className="truncate">{name}</li>
+            ))}
+            {selected.size > 50 && <li className="text-muted">…and {selected.size - 50} more</li>}
+          </ul>
+          <div className="field">
+            <label htmlFor="bulkDeleteConfirm">
+              Type <span className="font-semibold">DELETE</span> to confirm
+            </label>
+            <input
+              id="bulkDeleteConfirm"
+              type="text"
+              value={bulkDelete?.confirmText || ""}
+              onChange={(event) => setBulkDelete({ confirmText: event.target.value })}
+              autoComplete="off"
+              placeholder="DELETE"
+              className="input"
+            />
+          </div>
+        </div>
+      </Modal>
 
       {/* ==================================================================
           ARCHIVE OR DELETE

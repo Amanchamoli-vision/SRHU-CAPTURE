@@ -547,6 +547,59 @@ def delete_event_cascade(event_id: str) -> None:
     event_reports.delete_many({"event_id": event_id})
 
 
+def delete_events_cascade(event_ids: list[str]) -> None:
+    """``delete_event_cascade`` for many events, one query per collection.
+
+    Stored files are still removed one at a time (object storage deletes
+    them individually); every database step covers the whole selection.
+    """
+    ids: list[str] = []
+    for event_id in event_ids:
+        try:
+            ids.append(str(ObjectId(str(event_id))))
+        except (InvalidId, TypeError):
+            ids.append(str(event_id))
+    if not ids:
+        return
+
+    object_ids = [oid for oid in (to_object_id(i) for i in ids) if oid is not None]
+    if object_ids:
+        events.delete_many({"_id": {"$in": object_ids}})
+
+    for media in event_media.find({"event_id": {"$in": ids}}, {"file_id": 1, "object_key": 1}):
+        delete_stored(media)
+    event_media.delete_many({"event_id": {"$in": ids}})
+
+    for document in event_documents.find({"event_id": {"$in": ids}}, {"file_id": 1, "object_key": 1}):
+        delete_stored(document)
+    event_documents.delete_many({"event_id": {"$in": ids}})
+
+    notifications.delete_many({"event_id": {"$in": ids}})
+    event_reports.delete_many({"event_id": {"$in": ids}})
+
+
+def delete_users_cascade(user_ids: list[str]) -> None:
+    """``delete_user_cascade`` for many users, one query per collection."""
+    ids: list[str] = []
+    for user_id in user_ids:
+        try:
+            ids.append(str(ObjectId(str(user_id))))
+        except (InvalidId, TypeError):
+            ids.append(str(user_id))
+    if not ids:
+        return
+
+    owned = [str(event["_id"]) for event in events.find({"teacher_id": {"$in": ids}}, {"_id": 1})]
+    if owned:
+        delete_events_cascade(owned)
+
+    notifications.delete_many({"user_id": {"$in": ids}})
+
+    object_ids = [oid for oid in (to_object_id(i) for i in ids) if oid is not None]
+    if object_ids:
+        users.delete_many({"_id": {"$in": object_ids}})
+
+
 def delete_user_cascade(user_id: str) -> None:
     """Remove a user together with everything they own."""
     # Events and notifications store the id in its canonical lower-case

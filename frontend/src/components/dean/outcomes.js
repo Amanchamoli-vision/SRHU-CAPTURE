@@ -12,4 +12,6 @@ export const OUTCOME = {
   failed: { label: "Failed", track: TRACK_ERR },
   skipped: { label: "Skipped", track: TRACK_WARN },
   not_sent: { label: "Not sent", track: TRACK_MUTED },
+  deleted: { label: "Deleted", track: TRACK_ERR },
+  removed: { label: "Removed", track: TRACK_WARN },
 };

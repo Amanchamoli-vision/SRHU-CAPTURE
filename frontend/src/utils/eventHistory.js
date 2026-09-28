@@ -127,7 +127,8 @@ function inferHistory(event) {
       actor_role: "dean",
     });
 
-    if (status === "in_progress" || status === "completed") {
+    // "in_progress" was retired and now reads as Approved: nothing to add.
+    if (status === "completed") {
       entries.push({
         action: "stage_changed",
         status,

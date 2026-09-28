@@ -16,6 +16,13 @@
 
 import { decodeEventMetadata } from "./draftStorage";
 
+/**
+ * The host of every event. The platform serves SST (School of Science &
+ * Technology) only, so the form no longer asks for a host department or
+ * school: new events store this, and an event without one reads as this.
+ */
+export const DEFAULT_HOST_DEPARTMENT = "SST";
+
 const firstNonEmpty = (...values) => {
   for (const value of values) {
     const text = value == null ? "" : String(value).trim();
@@ -46,7 +53,7 @@ export function readEventFields(event = {}) {
     ),
     // Still blob-only, but read through the same helper so call sites never
     // need to know which fields were promoted and which were not.
-    department: firstNonEmpty(event.department, meta.department),
+    department: firstNonEmpty(event.department, meta.department, DEFAULT_HOST_DEPARTMENT),
     expectedParticipants: firstNonEmpty(
       event.expectedParticipants,
       meta.expectedParticipants,

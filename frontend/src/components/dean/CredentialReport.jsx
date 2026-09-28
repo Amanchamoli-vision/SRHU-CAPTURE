@@ -21,15 +21,18 @@ export function Tally({ label, value, track }) {
   );
 }
 
-export function ProgressLine({ done, total, label = "Processed" }) {
-  const pct = total ? Math.round((done / total) * 100) : 0;
+/**
+ * A bulk action in flight. The whole selection is one request, so there are
+ * no intermediate counts to show -- the bar slides until the report arrives.
+ */
+export function ProgressLine({ total, noun = "invitations" }) {
   return (
     <div>
       <div className="progress-track">
-        <span className="progress-bar" style={{ width: `${pct}%` }} />
+        <span className="progress-bar is-indeterminate" />
       </div>
       <p className="prose-muted mt-2 text-xs">
-        {label} {done} of {total}. Keep this page open until it finishes.
+        Sending {total} {noun}. Keep this page open until it finishes.
       </p>
     </div>
   );
@@ -49,7 +52,7 @@ export default function CredentialReport({ run }) {
 
   return (
     <div className="space-y-5">
-      {run.running && <ProgressLine done={run.done} total={run.total} />}
+      {run.running && <ProgressLine total={run.total} />}
 
       {run.error && (
         <div className="toast toast-err text-sm" role="alert">

@@ -49,8 +49,9 @@ export default function UploadPanel({
   const [dragging, setDragging] = useState(false);
 
   const active = items.length + uploads.filter((u) => !u.error).length;
+  const countFull = max != null && active >= max;
   const budgetFull = totalLimitBytes != null && usedBytes >= totalLimitBytes;
-  const full = (max != null && active >= max) || budgetFull;
+  const full = countFull || budgetFull;
   const locked = disabled || full;
 
   const budgetPct =
@@ -103,7 +104,11 @@ export default function UploadPanel({
         </span>
 
         <p className="mt-3 font-display text-sm font-semibold text-ink">
-          {full ? `You have added the maximum of ${max}` : emptyLabel}
+          {countFull
+            ? `You have added the maximum of ${max}`
+            : budgetFull
+              ? `You have used the full ${formatFileSize(totalLimitBytes)} allowed`
+              : emptyLabel}
         </p>
         <p className="prose-muted mt-1 text-xs">{hint}</p>
 
