@@ -36,12 +36,14 @@ from reportlab.platypus import (
     CondPageBreak,
     Flowable,
     KeepTogether,
+    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
 )
+from reportlab.platypus.tableofcontents import TableOfContents
 
 from app.config import settings
 from app.schemas.event_manager import MAX_REPORT_PHOTOS
@@ -51,6 +53,9 @@ from app.services.report_pdf import (
     MARGIN,
     MUTED,
     NAVY,
+    PAGE_WIDTH,
+    REPORT_SCHOOL,
+    REPORT_UNIVERSITY,
     RULE,
     _boxed_text,
     _key_value_table,
@@ -449,9 +454,14 @@ def _attachments_table(attachments: list[Attachment], styles) -> list:
     return [table]
 
 
-def _event_sections(entry: ReportEntry, styles) -> list:
+def _event_sections(entry: ReportEntry, styles, *, attachments_first: bool = False) -> list:
     """Details and description always; photos and attachments only when the
-    event has them, so an event without files takes no empty sections."""
+    event has them, so an event without files takes no empty sections.
+
+    ``attachments_first`` (the consolidated report) lists the files before the
+    photos: the photo block then ends the event's page and can shrink into
+    the space left, instead of pushing a short file list onto a page of its
+    own."""
     event = entry.event
     # CondPageBreak keeps each heading off the foot of a page (it needs room
     # for itself and a few lines below it) without tying it to the whole
@@ -465,17 +475,28 @@ def _event_sections(entry: ReportEntry, styles) -> list:
         *_boxed_text(str(event.get("description") or "").strip(), styles["body"]),
     ]
     number = 3
-    if entry.photos or entry.photo_failures:
+
+    def photos_section(number: int) -> list:
         heading = Paragraph(f"{number}. Event Photos", styles["section"])
-        story += _photo_flowables(entry, heading, styles)
-        number += 1
-    if entry.attachments:
-        story += [
+        return _photo_flowables(entry, heading, styles)
+
+    def attachments_section(number: int) -> list:
+        return [
             CondPageBreak(SECTION_ROOM),
             Paragraph(f"{number}. Attachments", styles["section"]),
             *_attachments_table(entry.attachments, styles),
         ]
-        number += 1
+
+    parts = [
+        (bool(entry.photos or entry.photo_failures), photos_section),
+        (bool(entry.attachments), attachments_section),
+    ]
+    if attachments_first:
+        parts.reverse()
+    for present, section in parts:
+        if present:
+            story += section(number)
+            number += 1
     if entry.approval:
         approved_by, approved_on = entry.approval
         story += [
@@ -496,6 +517,208 @@ def _event_divider() -> Table:
     return rule
 
 
+def _links_note(entries: list[ReportEntry], links_valid_until: datetime | None, styles) -> list:
+    if not (links_valid_until and any(e.attachments for e in entries)):
+        return []
+    return [
+        Spacer(1, 2 * mm),
+        Paragraph(
+            f"<font color='#5B6475'>Download links in this report work until "
+            f"{escape(format_date(links_valid_until.date().isoformat()))}.</font>",
+            styles["reference"],
+        ),
+    ]
+
+
+# ============================================================
+# CONSOLIDATED REPORT (several events)
+# ============================================================
+
+class _ConsolidatedDoc(SimpleDocTemplate):
+    """Collects the contents entries and PDF bookmarks as the events are laid
+    out, and remembers the page count of each pass so the footer can print
+    "Page X of Y" on the final one.
+
+    The single-event report counts pages by holding every page until the end
+    (_NumberedCanvas); that would point every bookmark and contents link at
+    page 1 here, so this report numbers its pages from the previous pass of
+    the multi-pass build instead (the pass count settles the table of
+    contents anyway).
+    """
+
+    total_pages = 0
+
+    def afterFlowable(self, flowable):
+        marker = getattr(flowable, "_report_mark", None)
+        if not marker:
+            return
+        toc_text, outline_text, key = marker
+        self.canv.bookmarkPage(key)
+        self.canv.addOutlineEntry(outline_text, key, level=0, closed=False)
+        if toc_text:
+            self.notify("TOCEntry", (0, toc_text, self.page, key))
+
+    def build(self, flowables, **kwargs):
+        super().build(flowables, **kwargs)
+        self.total_pages = self.page
+
+
+def _consolidated_footer(canvas, doc) -> None:
+    """The same footer as every other report page."""
+    y = 11 * mm
+    canvas.saveState()
+    canvas.setStrokeColor(RULE)
+    canvas.setLineWidth(0.5)
+    canvas.line(MARGIN, y + 4 * mm, PAGE_WIDTH - MARGIN, y + 4 * mm)
+    canvas.setFont("Helvetica", 7.5)
+    canvas.setFillColor(MUTED)
+    canvas.drawString(MARGIN, y, f"Campus Capture  ·  {REPORT_SCHOOL}  ·  Official event record")
+    total = doc.total_pages or doc.page
+    canvas.drawRightString(PAGE_WIDTH - MARGIN, y, f"Page {doc.page} of {total}")
+    canvas.restoreState()
+
+
+def _marked(flowable, toc_text: str | None, outline_text: str, key: str):
+    flowable._report_mark = (toc_text, outline_text, key)
+    return flowable
+
+
+def consolidated_reference(count: int, when: datetime | None = None) -> str:
+    return f"CC/EM/CR-{(when or datetime.now()):%Y%m%d}-{count}"
+
+
+def _cover_page(entries: list[ReportEntry], styles, issued: str, prepared_by: dict | None) -> list:
+    count = len(entries)
+    days = sorted(
+        day
+        for entry in entries
+        for day in (entry.event.get("event_date"), entry.event.get("end_date"))
+        if day
+    )
+    period = format_date_range(days[0], days[-1]) if days else "Not recorded"
+    if days and days[0] == days[-1]:
+        period = format_date(days[0])
+    # Whoever generated the report; the first event's owner if not given.
+    preparer = prepared_by or entries[0].recorded_by or {}
+    prepared = rich(preparer.get("name") or "Not available")
+    if preparer.get("email"):
+        prepared += f"<br/><font color='#5B6475'>{escape(preparer['email'])}</font>"
+    departments = sorted({str(e.event.get("department") or "").strip() for e in entries} - {""})
+
+    rows = [
+        ("Reference", escape(consolidated_reference(count))),
+        ("Events covered", f"{count} event{'s' if count != 1 else ''}"),
+        ("Period", escape(period)),
+        ("Department", rich(", ".join(departments) or "SST")),
+        ("Prepared by", prepared),
+        ("Issued on", issued),
+    ]
+    return [
+        *_letterhead(styles),
+        Spacer(1, 38 * mm),
+        _marked(Paragraph("CONSOLIDATED EVENT REPORT", styles["cover_title"]), None, "Cover", "cover"),
+        Spacer(1, 3 * mm),
+        Paragraph(f"{escape(REPORT_SCHOOL)} &nbsp;·&nbsp; {escape(REPORT_UNIVERSITY)}", styles["cover_sub"]),
+        Spacer(1, 4 * mm),
+        _event_divider(),
+        Spacer(1, 12 * mm),
+        _key_value_table(rows, styles),
+        Spacer(1, 10 * mm),
+        Paragraph(
+            "This report brings together the records of the events listed on the "
+            "next page. Each event has its own section: its details, description, "
+            "photographs, and every uploaded file with a download link.",
+            styles["cover_note"],
+        ),
+    ]
+
+
+def _contents_page(styles) -> list:
+    toc = TableOfContents(dotsMinLevel=0)
+    toc.levelStyles = [styles["toc_entry"]]
+    return [
+        _marked(Paragraph("Contents", styles["toc_title"]), None, "Contents", "contents"),
+        Spacer(1, 4 * mm),
+        toc,
+    ]
+
+
+def _build_consolidated(
+    entries: list[ReportEntry],
+    styles,
+    issued: str,
+    links_valid_until: datetime | None,
+    subject: str,
+    prepared_by: dict | None = None,
+) -> BytesIO:
+    styles["cover_title"] = ParagraphStyle(
+        "CoverTitle", parent=styles["title"], fontSize=24, leading=30,
+    )
+    styles["cover_sub"] = ParagraphStyle(
+        "CoverSub", parent=styles["reference"], fontSize=11, leading=15, textColor=NAVY,
+    )
+    styles["cover_note"] = ParagraphStyle(
+        "CoverNote", parent=styles["body"], textColor=MUTED, fontSize=9.5, leading=14,
+    )
+    styles["toc_title"] = ParagraphStyle(
+        "TocTitle", parent=styles["title"], alignment=0, fontSize=16, leading=20, spaceAfter=2,
+    )
+    styles["toc_entry"] = ParagraphStyle(
+        "TocEntry", parent=styles["body"], fontSize=10.5, leading=19,
+    )
+
+    count = len(entries)
+    story = _cover_page(entries, styles, issued, prepared_by)
+    story += [PageBreak(), *_contents_page(styles)]
+
+    for number, entry in enumerate(entries, start=1):
+        ev = entry.event
+        name = str(ev.get("event_name") or "Untitled event")
+        when = format_date_range(ev.get("event_date"), ev.get("end_date"))
+        toc_text = (
+            f"{number}. {rich(name)}"
+            + (f" &nbsp;<font color='#5B6475' size='9'>({escape(when)})</font>" if when else "")
+        )
+        story += [
+            # Each event opens on its own page, as a section of the report.
+            PageBreak(),
+            Paragraph(
+                f"EVENT {number} OF {count} &nbsp;·&nbsp; "
+                f"Ref. {escape(entry.reference or managed_reference(ev))}",
+                styles["event_kicker"],
+            ),
+            _marked(
+                Paragraph(rich(name), styles["event_title"]),
+                toc_text,
+                f"{number}. {name}",
+                f"event-{number}",
+            ),
+            Spacer(1, 1.5 * mm),
+            _event_divider(),
+            Spacer(1, 1 * mm),
+        ]
+        story += _event_sections(entry, styles, attachments_first=True)
+
+    story += _links_note(entries, links_valid_until, styles)
+    story.append(_signature_block(styles))
+
+    buffer = BytesIO()
+    doc = _ConsolidatedDoc(
+        buffer,
+        pagesize=A4,
+        leftMargin=MARGIN,
+        rightMargin=MARGIN,
+        topMargin=16 * mm,
+        bottomMargin=22 * mm,
+        title=f"Consolidated Event Report - {count} events",
+        author="Campus Capture, Swami Rama Himalayan University",
+        subject=subject,
+    )
+    doc.multiBuild(story, onFirstPage=_consolidated_footer, onLaterPages=_consolidated_footer)
+    buffer.seek(0)
+    return buffer
+
+
 def managed_reference(event: dict) -> str:
     return f"CC/EM/{str(event.get('id') or event.get('_id') or '')[-6:].upper() or 'NA'}"
 
@@ -509,6 +732,7 @@ def build_managed_report_pdf(
     *,
     links_valid_until: datetime | None = None,
     subject: str = "Event report",
+    prepared_by: dict | None = None,
 ) -> BytesIO:
     """One report for one event, or a consolidated report for several."""
     if not entries:
@@ -527,6 +751,8 @@ def build_managed_report_pdf(
     )
     issued = escape(format_date(datetime.now().isoformat()))
     single = len(entries) == 1
+    if not single:
+        return _build_consolidated(entries, styles, issued, links_valid_until, subject, prepared_by)
 
     story = _letterhead(styles)
     if single:
@@ -542,60 +768,6 @@ def build_managed_report_pdf(
             ),
         ]
         story += _event_sections(entries[0], styles)
-    else:
-        story += [
-            Spacer(1, 5 * mm),
-            Paragraph("CONSOLIDATED EVENT REPORT", styles["title"]),
-            Spacer(1, 1.5 * mm),
-            Paragraph(
-                f"{len(entries)} events &nbsp;&nbsp;|&nbsp;&nbsp; Issued {issued}",
-                styles["reference"],
-            ),
-            Paragraph("Events in this report", styles["section"]),
-        ]
-        index = [[Paragraph(t, styles["label"]) for t in ("#", "Event", "Date", "Venue")]]
-        for number, entry in enumerate(entries, start=1):
-            ev = entry.event
-            index.append([
-                Paragraph(str(number), styles["value"]),
-                Paragraph(rich(ev.get("event_name")), styles["value"]),
-                Paragraph(escape(format_date_range(ev.get("event_date"), ev.get("end_date"))), styles["value"]),
-                Paragraph(rich(ev.get("location")), styles["value"]),
-            ])
-        table = Table(
-            index,
-            colWidths=[10 * mm, CONTENT_WIDTH - 10 * mm - 46 * mm - 50 * mm, 46 * mm, 50 * mm],
-            repeatRows=1,
-        )
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), LABEL_FILL),
-            ("BOX", (0, 0), (-1, -1), 0.6, RULE),
-            ("INNERGRID", (0, 0), (-1, -1), 0.4, RULE),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ]))
-        story.append(table)
-
-        for number, entry in enumerate(entries, start=1):
-            ev = entry.event
-            # Events follow one another with a rule between them rather than
-            # a page each, which left most pages half empty.
-            story += [
-                CondPageBreak(EVENT_ROOM),
-                Spacer(1, 7 * mm),
-                _event_divider(),
-                Spacer(1, 3 * mm),
-                Paragraph(
-                    f"EVENT {number} OF {len(entries)} &nbsp;·&nbsp; "
-                    f"Ref. {escape(entry.reference or managed_reference(ev))}",
-                    styles["event_kicker"],
-                ),
-                Paragraph(rich(ev.get("event_name") or "Untitled event"), styles["event_title"]),
-            ]
-            story += _event_sections(entry, styles)
 
     if links_valid_until and any(e.attachments for e in entries):
         story += [

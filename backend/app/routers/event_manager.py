@@ -19,7 +19,6 @@ superadmin flows never see them.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 
 from bson import ObjectId
@@ -72,6 +71,7 @@ from app.services.storage_service import (
     stream_upload,
 )
 from app.services.upload_config_service import REQUIREMENT_FIELDS, get_upload_limits
+from app.utils.file_names import report_file_name
 from app.utils.auth import get_current_user, require_role
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
@@ -609,8 +609,8 @@ def _pdf_response(buffer, file_name: str) -> StreamingResponse:
 
 
 def _report_file_name(name: str | None) -> str:
-    stem = re.sub(r"[^A-Za-z0-9]+", "_", name or "Event").strip("_") or "Event"
-    return f"{stem[:80]}_Report.pdf"
+    """The event's title as the file name: "IEEE Conference.pdf"."""
+    return report_file_name(name)
 
 
 @router.get("/events/{event_id}/report")
@@ -646,12 +646,16 @@ def multi_event_report(payload: ManagedReportRequest, request: Request, user: di
 
     exp = report_files.links_expiry()
     entries = [_report_entry(request, found[oid], exp) for oid in wanted]
-    pdf = build_managed_report_pdf(entries, links_valid_until=datetime.fromtimestamp(exp, tz=timezone.utc))
+    pdf = build_managed_report_pdf(
+        entries,
+        links_valid_until=datetime.fromtimestamp(exp, tz=timezone.utc),
+        prepared_by={"name": user.get("name"), "email": user.get("email")},
+    )
     logger.info("managed_report_generated events=%d owner=%s", len(entries), user["id"])
     name = (
         _report_file_name(entries[0].event.get("event_name"))
         if len(entries) == 1
-        else f"Events_Report_{len(entries)}_events_{utc_now():%Y-%m-%d}.pdf"
+        else report_file_name(f"Consolidated_Event_Report_{utc_now():%Y-%m-%d}")
     )
     return _pdf_response(pdf, name)
 

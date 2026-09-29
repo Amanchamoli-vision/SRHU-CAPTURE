@@ -538,6 +538,16 @@ class ReportTests(EventManagerTestCase):
         self.assertLess(text.rindex("Second Talk"), text.rindex("First Talk"))
         self.assertNotIn("Approv", text)
 
+    def test_multi_report_file_name(self) -> None:
+        first = self.seeded(event_name="First Talk")
+        second = self.seeded(event_name="Second Talk")
+        response = self.call("POST", "/event-manager/reports", json={"event_ids": [first["id"], second["id"]]})
+        self.assertRegex(
+            response.headers["content-disposition"],
+            r"filename\*=UTF-8''Consolidated_Event_Report_\d{4}-\d{2}-\d{2}\.pdf",
+        )
+        self.assertIn("Asha Verma", pdf_text(response.content).split("Contents")[0])  # the requester
+
     def test_multi_report_refuses_someone_elses_event(self) -> None:
         mine = self.draft()
         theirs = self.draft(token="mgr2")
@@ -702,12 +712,44 @@ class PhotoLayoutTests(unittest.TestCase):
         self.assertNotIn("Attachments", text)
         self.assertIn("2. Event Description", text)
 
-    def test_consolidated_report_does_not_start_every_event_on_a_new_page(self) -> None:
+    def test_consolidated_report_structure(self) -> None:
         from pypdf import PdfReader
 
-        entries = [ReportEntry(event={"event_name": f"Talk {n}", "description": "Short."}) for n in range(4)]
-        pages = len(PdfReader(io.BytesIO(build_managed_report_pdf(entries).getvalue())).pages)
-        self.assertLess(pages, 4)
+        entries = [
+            ReportEntry(
+                event={"event_name": f"Talk {n}", "event_date": "2026-09-0" + str(n), "description": "Short."},
+                recorded_by={"name": "Owner", "email": "owner@srhu.edu.in"},
+            )
+            for n in range(1, 5)
+        ]
+        pdf = build_managed_report_pdf(entries, prepared_by={"name": "Asha Verma", "email": "asha@srhu.edu.in"})
+        reader = PdfReader(io.BytesIO(pdf.getvalue()))
+        pages = [page.extract_text() or "" for page in reader.pages]
+
+        # Cover, contents, then one page per event.
+        self.assertEqual(len(pages), 6)
+        self.assertIn("CONSOLIDATED EVENT REPORT", pages[0])
+        self.assertIn("4 events", pages[0])
+        self.assertIn("Asha Verma", pages[0])           # whoever generated it
+        self.assertIn("1 - 4 September 2026", pages[0])  # the period covered
+        self.assertIn("Contents", pages[1])
+        for number in range(1, 5):
+            self.assertIn(f"EVENT {number} OF 4", pages[number + 1])
+            self.assertIn(f"{number}. Talk {number}", pages[1])
+        # Contents page numbers and PDF bookmarks both point at the events.
+        self.assertEqual(re.findall(r"\.{5,}(\d+)", pages[1].replace(" ", "")), ["3", "4", "5", "6"])
+        outline = {o.title: reader.get_destination_page_number(o) + 1 for o in reader.outline}
+        self.assertEqual(outline, {"Cover": 1, "Contents": 2, "1. Talk 1": 3, "2. Talk 2": 4, "3. Talk 3": 5, "4. Talk 4": 6})
+        # Every page carries the footer with the right total.
+        for number, text in enumerate(pages, start=1):
+            self.assertIn(f"Page {number} of 6", text)
+
+    def test_single_report_has_no_cover_or_contents(self) -> None:
+        pdf = build_managed_report_pdf([ReportEntry(event={"event_name": "Solo"})]).getvalue()
+        text = pdf_text(pdf)
+        self.assertIn("EVENT REPORT", text)
+        self.assertNotIn("CONSOLIDATED", text)
+        self.assertNotIn("Contents", text)
 
     def test_attachment_rows_carry_links(self) -> None:
         entry = ReportEntry(

@@ -117,6 +117,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Lets the page read the file name of a download (a generated report):
+    # without it the browser hides the header on a cross-origin response and
+    # the page could only guess a name.
+    expose_headers=["Content-Disposition"],
 )
 
 

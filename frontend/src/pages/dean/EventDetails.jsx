@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiFetch, apiJson, errorFromResponse } from "../../services/api";
+import { fileNameFromResponse, reportFileName } from "../../utils/fileNames";
 import useMediaRefresh from "../../components/common/useMediaRefresh";
 import DeanShell from "../../components/dean/DeanShell";
 import Modal from "../../components/teacher/Modal";
@@ -500,9 +501,9 @@ function EventDetails() {
 
       link.href = downloadUrl;
 
-      link.download = `${event.event_name
-        .replace(/[^a-z0-9]/gi, "_")
-        .replace(/_+/g, "_")}_Report.pdf`;
+      // Named after the event ("IEEE Conference.pdf"): the server's name,
+      // or the same rule applied here if the header cannot be read.
+      link.download = fileNameFromResponse(response) || reportFileName(event.event_name);
 
       document.body.appendChild(link);
 

@@ -7,6 +7,7 @@
  * each event's report shows up to four chosen photos.
  */
 import { apiFetch, apiJson, errorFromResponse } from "./api";
+import { fileNameFromResponse, reportFileName } from "../utils/fileNames";
 
 const BASE = "/event-manager";
 
@@ -72,7 +73,7 @@ function saveBlob(blob, fileName) {
 async function fetchReport(path, options, fallbackName) {
   const response = await apiFetch(path, options);
   if (!response.ok) throw await errorFromResponse(response, "Could not generate the report.");
-  return saveBlob(await response.blob(), fileNameFrom(response, fallbackName));
+  return saveBlob(await response.blob(), fileNameFromResponse(response) || fallbackName);
 }
 
 /**
@@ -85,26 +86,13 @@ export function reportNotice(outcome, what = "Report") {
   return outcome === "opened" ? `${what} opened in a new tab.` : `${what} downloaded.`;
 }
 
-function fileNameFrom(response, fallback) {
-  const header = response.headers.get("Content-Disposition") || "";
-  const star = header.match(/filename\*=UTF-8''([^;]+)/i);
-  if (star) {
-    try {
-      return decodeURIComponent(star[1]);
-    } catch {
-      /* fall through */
-    }
-  }
-  const plain = header.match(/filename="?([^";]+)"?/i);
-  return plain ? plain[1] : fallback;
-}
 
 /** Download (or, on plain http, open) the report for one event. Resolves with the outcome. */
-export function downloadEventReport(id) {
-  return fetchReport(`${BASE}/events/${id}/report`, {}, "Event_Report.pdf");
+export function downloadEventReport(id, eventName) {
+  return fetchReport(`${BASE}/events/${id}/report`, {}, reportFileName(eventName));
 }
 
 /** One consolidated report for several events, in the order given. */
 export function downloadEventsReport(ids) {
-  return fetchReport(`${BASE}/reports`, { method: "POST", body: { event_ids: ids } }, "Events_Report.pdf");
+  return fetchReport(`${BASE}/reports`, { method: "POST", body: { event_ids: ids } }, reportFileName(`Consolidated_Event_Report_${new Date().toISOString().slice(0, 10)}`));
 }
