@@ -426,7 +426,7 @@ def _attachments_table(attachments: list[Attachment], styles) -> list:
     if not attachments:
         return [Paragraph("<i>No files were uploaded for this event.</i>", styles["value"])]
 
-    head = [Paragraph(text, styles["label"]) for text in ("#", "File (click to download)", "Type", "Size")]
+    head = [Paragraph(text, styles["label"]) for text in ("S. No.", "File (click to download)", "Type", "Size")]
     data = [head]
     for number, item in enumerate(attachments, start=1):
         name = item.name or "file"
@@ -438,7 +438,7 @@ def _attachments_table(attachments: list[Attachment], styles) -> list:
         ])
     table = Table(
         data,
-        colWidths=[10 * mm, CONTENT_WIDTH - 10 * mm - 26 * mm - 24 * mm, 26 * mm, 24 * mm],
+        colWidths=[15 * mm, CONTENT_WIDTH - 15 * mm - 26 * mm - 24 * mm, 26 * mm, 24 * mm],
         repeatRows=1,
     )
     table.setStyle(TableStyle([
@@ -583,10 +583,6 @@ def _marked(flowable, toc_text: str | None, outline_text: str, key: str):
     return flowable
 
 
-def consolidated_reference(count: int, when: datetime | None = None) -> str:
-    return f"CC/EM/CR-{(when or datetime.now()):%Y%m%d}-{count}"
-
-
 def _cover_page(entries: list[ReportEntry], styles, issued: str, prepared_by: dict | None) -> list:
     count = len(entries)
     days = sorted(
@@ -606,7 +602,6 @@ def _cover_page(entries: list[ReportEntry], styles, issued: str, prepared_by: di
     departments = sorted({str(e.event.get("department") or "").strip() for e in entries} - {""})
 
     rows = [
-        ("Reference", escape(consolidated_reference(count))),
         ("Events covered", f"{count} event{'s' if count != 1 else ''}"),
         ("Period", escape(period)),
         ("Department", rich(", ".join(departments) or "SST")),
@@ -683,8 +678,7 @@ def _build_consolidated(
             # Each event opens on its own page, as a section of the report.
             PageBreak(),
             Paragraph(
-                f"EVENT {number} OF {count} &nbsp;·&nbsp; "
-                f"Ref. {escape(entry.reference or managed_reference(ev))}",
+                f"EVENT {number} OF {count}",
                 styles["event_kicker"],
             ),
             _marked(
@@ -717,10 +711,6 @@ def _build_consolidated(
     doc.multiBuild(story, onFirstPage=_consolidated_footer, onLaterPages=_consolidated_footer)
     buffer.seek(0)
     return buffer
-
-
-def managed_reference(event: dict) -> str:
-    return f"CC/EM/{str(event.get('id') or event.get('_id') or '')[-6:].upper() or 'NA'}"
 
 
 # ============================================================
@@ -756,16 +746,11 @@ def build_managed_report_pdf(
 
     story = _letterhead(styles)
     if single:
-        event = entries[0].event
         story += [
             Spacer(1, 5 * mm),
             Paragraph("EVENT REPORT", styles["title"]),
             Spacer(1, 1.5 * mm),
-            Paragraph(
-                f"Ref. {escape(entries[0].reference or managed_reference(event))} "
-                f"&nbsp;&nbsp;|&nbsp;&nbsp; Issued {issued}",
-                styles["reference"],
-            ),
+            Paragraph(f"Issued {issued}", styles["reference"]),
         ]
         story += _event_sections(entries[0], styles)
 
