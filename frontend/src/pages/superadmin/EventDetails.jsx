@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch, apiJson, errorFromResponse } from "../../services/api";
+import { fileNameFromResponse, reportFileName } from "../../utils/fileNames";
 import { useAuth } from "../../context/AuthContext";
 import SuperAdminShell from "../../components/superadmin/SuperAdminShell";
 import PageHero from "../../components/teacher/PageHero";
@@ -113,7 +114,7 @@ export default function SuperAdminEventDetails() {
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${(event?.event_name || "Event").replace(/[^a-z0-9]+/gi, "_")}_Report.pdf`;
+      link.download = fileNameFromResponse(response) || reportFileName(event?.event_name);
       document.body.appendChild(link);
       link.click();
       link.remove();

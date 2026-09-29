@@ -675,7 +675,7 @@ function RowActions({ item, onDuplicate, onDelete, onTrack, originState }) {
             onClick={async () => {
               setReporting(true);
               try {
-                await downloadEventReport(item.id);
+                await downloadEventReport(item.id, item.event_name);
               } catch (err) {
                 alert(err?.message || "Could not generate the report.");
               } finally {

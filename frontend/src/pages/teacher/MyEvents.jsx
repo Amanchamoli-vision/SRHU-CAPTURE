@@ -451,7 +451,7 @@ function MyEvents() {
   const handleReportOne = async (item) => {
     try {
       setReportingId(item.id);
-      const outcome = await downloadEventReport(item.id);
+      const outcome = await downloadEventReport(item.id, item.event_name);
       const notice = reportNotice(outcome, `Report for "${item.event_name}"`);
       if (notice) setSuccessMessage(notice);
     } catch (err) {

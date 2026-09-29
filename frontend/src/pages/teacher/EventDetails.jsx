@@ -179,7 +179,7 @@ function EventDetails() {
     try {
       setReporting(true);
       setReportError("");
-      const notice = reportNotice(await downloadEventReport(event.id));
+      const notice = reportNotice(await downloadEventReport(event.id, event.event_name));
       if (notice) setActionNotice(notice);
     } catch (err) {
       setReportError(err?.message || "Could not generate the report.");

@@ -21,6 +21,7 @@ from app.services.managed_report_pdf import (
 )
 from app.services.report_pdf import approval_record, report_reference, split_description
 from app.services.storage_service import absolute_url, absolutize, content_disposition
+from app.utils.file_names import report_file_name
 from app.utils.auth import check_dean, check_event_viewer, get_current_user
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
@@ -89,7 +90,8 @@ def validate_social_url(url: str) -> str:
 
 
 def report_download_name(event_name: str | None) -> str:
-    return f"{(event_name or '').strip() or 'Event'}_Report.pdf"
+    """The event's title as the file name: "IEEE Conference.pdf"."""
+    return report_file_name(event_name)
 
 
 def get_event_media(event_id: str):
@@ -400,7 +402,7 @@ def download_report(
             "Content-Disposition": content_disposition(
                 "attachment",
                 report_download_name(event.get("event_name")),
-                fallback="Event_Report",
+                fallback="Event_Report.pdf",
             ),
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, no-store",

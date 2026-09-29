@@ -162,7 +162,10 @@ class DownloadEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.headers["content-type"], "application/pdf")
         self.assertTrue(response.content.startswith(b"%PDF"))
-        self.assertIn('filename="AI_Workshop_Report.pdf"', response.headers["content-disposition"])
+        disposition = response.headers["content-disposition"]
+        # Named after the event: the real name in filename*, ASCII in filename.
+        self.assertIn("filename*=UTF-8''AI%20Workshop.pdf", disposition)
+        self.assertIn('filename="AI_Workshop.pdf"', disposition)
 
     def test_hindi_event_name_download_header(self) -> None:
         # B-11: a Devanagari name raised UnicodeEncodeError in the header.
@@ -175,7 +178,7 @@ class DownloadEndpointTests(unittest.TestCase):
         fallback = disposition.split('filename="')[1].split('"')[0]
         self.assertTrue(fallback.isascii() and fallback.endswith(".pdf"), fallback)
         self.assertIn(
-            "filename*=UTF-8''" + quote("वार्षिक खेल दिवस_Report.pdf", safe=""), disposition
+            "filename*=UTF-8''" + quote("वार्षिक खेल दिवस.pdf", safe=""), disposition
         )
 
     def test_numeric_start_time_downloads(self) -> None:
