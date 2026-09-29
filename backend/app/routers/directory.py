@@ -56,7 +56,7 @@ def add_event_type(
     spelling, so two teachers racing on "Hackathon" both end up on one row.
     """
     user = get_current_user(authorization)
-    require_role(user, "teacher")
+    require_role(user, "teacher", "event_manager")
 
     name = resolve_event_type(payload.name, created_by=user["id"])
     return {
@@ -172,7 +172,7 @@ def add_faculty_coordinator(
     rather than failing, which is what a teacher correcting a typo expects.
     """
     user = get_current_user(authorization)
-    require_role(user, "teacher")
+    require_role(user, "teacher", "event_manager")
 
     document = new_faculty_coordinator_document(
         name=payload.name,

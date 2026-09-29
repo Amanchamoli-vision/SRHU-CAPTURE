@@ -23,8 +23,6 @@ const ACTION_FILTERS = [
   { key: "user_profile_updated", label: "Profile Updates" },
   { key: "dean_created", label: "Dean Created" },
   { key: "user_deleted", label: "Deletions" },
-  { key: "department_created", label: "Dept Created" },
-  { key: "department_updated", label: "Dept Updated" },
   { key: "upload_limits_updated", label: "Upload Limits" },
   { key: "events_exported", label: "Exports" },
 ];

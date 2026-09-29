@@ -20,12 +20,19 @@ const MB = 1024 * 1024;
 
 export const isOptional = (field) => OPTIONAL_LIMIT_FIELDS.includes(field);
 
-/** Server values -> form values. Numbers become strings; null means "no cap". */
+/**
+ * Server values -> form values. Numbers become strings; null means "no cap".
+ * The mandatory-upload switches are booleans and stay that way.
+ */
 export function fromServer(limits) {
   return Object.fromEntries(
     Object.entries(limits).map(([field, value]) => [
       field,
-      value === null || value === undefined ? null : String(value),
+      value === null || value === undefined
+        ? null
+        : typeof value === "boolean"
+          ? value
+          : String(value),
     ]),
   );
 }
@@ -35,7 +42,11 @@ export function toWire(values) {
   return Object.fromEntries(
     Object.entries(values).map(([field, value]) => [
       field,
-      value === null || value === "" ? null : Number(value),
+      value === null || value === ""
+        ? null
+        : typeof value === "boolean"
+          ? value
+          : Number(value),
     ]),
   );
 }

@@ -1,13 +1,26 @@
-from fastapi import APIRouter, HTTPException, Header, Request
+from datetime import datetime, timezone
+from io import BytesIO
+from typing import Callable
+
+from fastapi import APIRouter, HTTPException, Header, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pymongo import ASCENDING
 
-from app.database import event_documents, event_media, event_reports, events, users
+from app.config import settings
+from app.database import event_documents, event_media, event_reports, events, fs, users
 from app.models.documents import APPROVED_STAGES, new_report_document
 from app.schemas.events import normalize_social_url
-from app.services.report_pdf import build_event_report_pdf, split_description
-from app.services.storage_service import absolutize, content_disposition
+from app.services import report_files
+from app.services.event_fields import with_legacy_metadata
+from app.services.managed_report_pdf import (
+    Attachment,
+    ReportEntry,
+    build_managed_report_pdf,
+    prepare_photo,
+)
+from app.services.report_pdf import approval_record, report_reference, split_description
+from app.services.storage_service import absolute_url, absolutize, content_disposition
 from app.utils.auth import check_dean, check_event_viewer, get_current_user
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
@@ -34,6 +47,18 @@ class SocialLinkRequest(BaseModel):
 
 def is_approved(event) -> bool:
     return (event or {}).get("status") in APPROVED_STAGES
+
+
+# The report is the record of an event that took place, so it exists only once
+# the Dean has marked the event Completed -- approved alone is not enough.
+REPORTABLE_STATUS = "completed"
+NOT_COMPLETED_DETAIL = (
+    "The report can be generated once the Dean has marked the event Completed."
+)
+
+
+def is_completed(event) -> bool:
+    return (event or {}).get("status") == REPORTABLE_STATUS
 
 
 def get_event(event_id: str):
@@ -270,14 +295,11 @@ def generate_report(
     event = get_event(event_id)
 
     # --------------------------------------------------------
-    # Event must be approved
+    # Event must be completed (approved alone is not enough)
     # --------------------------------------------------------
 
-    if not is_approved(event):
-        raise HTTPException(
-            status_code=400,
-            detail="Report can only be generated for approved events"
-        )
+    if not is_completed(event):
+        raise HTTPException(status_code=400, detail=NOT_COMPLETED_DETAIL)
 
     # --------------------------------------------------------
     # Collect event information
@@ -332,6 +354,7 @@ def generate_report(
 @router.get("/dean/events/{event_id}/report/download")
 def download_report(
     event_id: str,
+    request: Request,
     authorization: str | None = Header(default=None)
 ):
     user = get_current_user(authorization)
@@ -339,11 +362,10 @@ def download_report(
 
     event = get_event(event_id)
 
-    if not is_approved(event):
-        raise HTTPException(
-            status_code=400,
-            detail="Only approved events can have a report"
-        )
+    # Also refuses a report generated before this rule, while the event was
+    # only approved.
+    if not is_completed(event):
+        raise HTTPException(status_code=400, detail=NOT_COMPLETED_DETAIL)
 
     report = get_report(event["id"])
 
@@ -357,7 +379,17 @@ def download_report(
     documents = get_event_documents(event["id"])
     teacher = get_teacher(event)
 
-    pdf = build_event_report_pdf(event, teacher, media, documents)
+    exp = report_files.links_expiry()
+
+    def file_link(kind: str, file_id: str) -> str:
+        sig = report_files.link_signature(LINK_SCOPE, kind, file_id, exp)
+        return absolute_url(request, f"/reports/files/{kind}/{file_id}?exp={exp}&sig={sig}")
+
+    pdf = build_dean_report(
+        event, teacher, media, documents,
+        file_link=file_link,
+        links_valid_until=datetime.fromtimestamp(exp, tz=timezone.utc),
+    )
 
     # ASCII fallback in filename=, the real (possibly Hindi) name in
     # filename*=UTF-8''..., so the latin-1 header can always be encoded.
@@ -374,3 +406,106 @@ def download_report(
             "Cache-Control": "private, no-store",
         }
     )
+
+
+# ============================================================
+# THE REPORT DOCUMENT
+# ============================================================
+
+# Download links in a Dean report are signed with this scope, so they open
+# only teacher-event files (the Event Manager's links use "managed").
+LINK_SCOPE = "event"
+
+
+def build_dean_report(
+    event: dict,
+    teacher: dict,
+    media: list,
+    documents: list,
+    *,
+    file_link: Callable[[str, str], str],
+    links_valid_until: datetime | None = None,
+) -> BytesIO:
+    """The Dean's report, in the same design and structure as the Event
+    Manager's (app/services/managed_report_pdf.py): event details, the
+    description, the chosen photos laid out as one block, every file with a
+    download link -- then the approval, which only this workflow has.
+
+    ``event``, ``media`` and ``documents`` are serialized rows (``id``).
+    """
+    photo_rows = sorted(
+        (row for row in media if row.get("media_type") == "image"), key=lambda row: row["id"]
+    )
+    by_id = {row["id"]: row for row in photo_rows}
+    chosen = report_files.choose_photo_ids(event.get("report_photo_ids"), list(by_id))
+
+    photos, failures = [], 0
+    for pid in chosen:
+        data = report_files.read_file_bytes(by_id[pid], fs)
+        prepared = prepare_photo(data) if data else None
+        del data
+        if prepared:
+            photos.append(prepared)
+        else:
+            failures += 1
+
+    def name(row: dict) -> str:
+        return row.get("original_name") or row.get("file_name") or "file"
+
+    attachments = [
+        Attachment(
+            name=name(row),
+            kind="photo" if row.get("media_type") == "image" else "video",
+            size=row.get("file_size"),
+            url=file_link("media", row["id"]),
+        )
+        for row in media
+    ] + [
+        Attachment(
+            name=name(row),
+            kind="document",
+            size=row.get("file_size"),
+            url=file_link("documents", row["id"]),
+        )
+        for row in documents
+    ]
+
+    # Department and expected participants stay in the description's metadata
+    # blob (see services/event_fields.py); the other fields are real columns,
+    # filled from the blob for events created before they existed.
+    item = with_legacy_metadata(dict(event))
+    description, meta = split_description(item.get("description"))
+    item["description"] = description
+    item["expected_participants"] = meta.get("expectedParticipants")
+    item["department"] = meta.get("department") or settings.default_host_department
+
+    entry = ReportEntry(
+        event=item,
+        photos=photos,
+        photo_failures=failures,
+        attachments=attachments,
+        recorded_by={"name": teacher.get("name"), "email": teacher.get("email")},
+        recorded_label="Submitted",
+        show_recorded_on=False,
+        approval=approval_record(event),
+        reference=report_reference(event),
+    )
+    return build_managed_report_pdf(
+        [entry], links_valid_until=links_valid_until, subject="Official event report"
+    )
+
+
+@router.get("/reports/files/{kind}/{file_id}")
+def download_report_file(
+    kind: str,
+    file_id: str,
+    exp: int = Query(...),
+    sig: str = Query(..., max_length=128),
+):
+    """A file linked from a Dean report. The signature is the credential: the
+    link is opened from a PDF, without the app's login token."""
+    object_id = to_object_id(file_id)
+    if not report_files.valid_link(LINK_SCOPE, kind, object_id, exp, sig):
+        raise HTTPException(status_code=403, detail="This download link has expired or is invalid.")
+    collection = event_media if kind == "media" else event_documents
+    return report_files.download_response(collection.find_one({"_id": object_id}), fs)

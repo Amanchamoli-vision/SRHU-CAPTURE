@@ -8,6 +8,8 @@ import {
 } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/common/ProtectedRoute";
+import { PanelProvider } from "./components/teacher/panel";
+import { EVENT_MANAGER_PANEL } from "./components/teacher/panelConfig";
 import PublicOnlyRoute from "./components/common/PublicOnlyRoute";
 import EndSessionOnHistoryReturn from "./components/common/EndSessionOnHistoryReturn";
 
@@ -52,14 +54,15 @@ const SuperAdminDashboard = lazy(
 );
 const UserManagement = lazy(() => import("./pages/superadmin/UserManagement"));
 const CreateDean = lazy(() => import("./pages/superadmin/CreateDean"));
+const CreateEventManager = lazy(() => import("./pages/superadmin/CreateEventManager"));
 const SuperAdminEvents = lazy(() => import("./pages/superadmin/Events"));
 const SuperAdminEventDetails = lazy(
   () => import("./pages/superadmin/EventDetails"),
 );
 const Settings = lazy(() => import("./pages/superadmin/Settings"));
-const Departments = lazy(() => import("./pages/superadmin/Departments"));
 const AuditLogs = lazy(() => import("./pages/superadmin/AuditLogs"));
 const SuperAdminProfile = lazy(() => import("./pages/superadmin/Profile"));
+
 
 /** Shown only while a role area's chunk is being fetched. */
 function RouteFallback() {
@@ -254,13 +257,11 @@ function App() {
               }
             />
 
+            {/* The department registry was removed: the platform serves SST
+                only. Old bookmarks land on the dashboard. */}
             <Route
               path="/superadmin/departments"
-              element={
-                <ProtectedRoute allowedRoles={["superadmin"]}>
-                  <Departments />
-                </ProtectedRoute>
-              }
+              element={<Navigate to="/superadmin/dashboard" replace />}
             />
 
             <Route
@@ -282,6 +283,15 @@ function App() {
             />
 
             <Route
+              path="/superadmin/create-event-manager"
+              element={
+                <ProtectedRoute allowedRoles={["superadmin"]}>
+                  <CreateEventManager />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
               path="/superadmin/settings"
               element={
                 <ProtectedRoute allowedRoles={["superadmin"]}>
@@ -295,6 +305,60 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={["superadmin"]}>
                   <SuperAdminProfile />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* ================= EVENT MANAGER =================
+                The Teacher panel's own screens, in the Event Manager panel:
+                same UI, no Dean approval workflow. */}
+            <Route
+              path="/event_manager/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={["event_manager"]}>
+                  <PanelProvider panel={EVENT_MANAGER_PANEL}>
+                    <TeacherDashboard />
+                  </PanelProvider>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/event_manager/create-event"
+              element={
+                <ProtectedRoute allowedRoles={["event_manager"]}>
+                  <PanelProvider panel={EVENT_MANAGER_PANEL}>
+                    <CreateEventRoute />
+                  </PanelProvider>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/event_manager/my-events"
+              element={
+                <ProtectedRoute allowedRoles={["event_manager"]}>
+                  <PanelProvider panel={EVENT_MANAGER_PANEL}>
+                    <MyEvents />
+                  </PanelProvider>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/event_manager/events/:eventId"
+              element={
+                <ProtectedRoute allowedRoles={["event_manager"]}>
+                  <PanelProvider panel={EVENT_MANAGER_PANEL}>
+                    <TeacherEventDetails />
+                  </PanelProvider>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/event_manager/profile"
+              element={
+                <ProtectedRoute allowedRoles={["event_manager"]}>
+                  <PanelProvider panel={EVENT_MANAGER_PANEL}>
+                    <TeacherProfile />
+                  </PanelProvider>
                 </ProtectedRoute>
               }
             />

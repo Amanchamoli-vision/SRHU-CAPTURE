@@ -3,8 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   AreaChart,
   Area,
-  BarChart,
-  Bar,
   PieChart,
   Pie,
   Cell,
@@ -27,7 +25,6 @@ import {
   IconAlertTriangle,
   IconArrowRight,
   IconAward,
-  IconBuilding,
   IconCalendar,
   IconClock,
   IconRefresh,
@@ -42,6 +39,7 @@ const EMPTY_STATS = {
   teachers: 0,
   deans: 0,
   superadmins: 0,
+  event_managers: 0,
   pending_events: 0,
 };
 
@@ -67,7 +65,6 @@ function SuperAdminDashboard() {
     kpis: {},
     monthly_trends: [],
     category_distribution: [],
-    department_leaderboard: [],
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -148,6 +145,7 @@ function SuperAdminDashboard() {
     { key: "teacher", label: "Teachers", value: stats.teachers, track: ROLE_TRACK.teacher },
     { key: "dean", label: "Deans", value: stats.deans, track: ROLE_TRACK.dean },
     { key: "superadmin", label: "Super Admins", value: stats.superadmins, track: ROLE_TRACK.superadmin },
+    { key: "event_manager", label: "Event Managers", value: stats.event_managers, track: ROLE_TRACK.event_manager },
   ];
   const roleTotal = roleShare.reduce((sum, r) => sum + (r.value || 0), 0);
 
@@ -160,15 +158,6 @@ function SuperAdminDashboard() {
       title: "User Management",
       body: "Directory of all accounts with soft-deactivation, profile edit overrides, and password resets.",
       cta: "Manage users",
-    },
-    {
-      key: "departments",
-      to: "/superadmin/departments",
-      track: "#8B5CF6",
-      Icon: IconBuilding,
-      title: "Department Registry",
-      body: "Canonical academic departments and schools used for event tagging and faculty affiliation.",
-      cta: "Manage departments",
     },
     {
       key: "audit-logs",
@@ -187,6 +176,15 @@ function SuperAdminDashboard() {
       title: "Create Dean",
       body: "Register a verified Dean account with a temporary password to oversee events.",
       cta: "Create a Dean",
+    },
+    {
+      key: "create-event-manager",
+      to: "/superadmin/create-event-manager",
+      track: ROLE_TRACK.event_manager,
+      Icon: IconUserPlus,
+      title: "Create Event Manager",
+      body: "Invite an Event Manager by email; they verify their address and set their own password.",
+      cta: "Invite an Event Manager",
     },
   ];
 
@@ -215,7 +213,7 @@ function SuperAdminDashboard() {
           eyebrow="Super Admin"
           title="Super Admin"
           accent="Console"
-          subtitle={`Welcome back, ${profile?.name || "Super Admin"}. Manage accounts, roles, departments and accreditation data for Campus Capture.`}
+          subtitle={`Welcome back, ${profile?.name || "Super Admin"}. Manage accounts, roles and accreditation data for Campus Capture.`}
           actions={
             <>
               <button
@@ -329,7 +327,10 @@ function SuperAdminDashboard() {
                 key={card.key}
                 to={card.to}
                 style={{ "--track": card.track, "--i": 6 + i }}
-                className="stat-card reveal group"
+                // An odd card out spans the row, so the grid never ends in a gap.
+                className={`stat-card reveal group ${
+                  managementCards.length % 2 === 1 && i === managementCards.length - 1 ? "sm:col-span-2" : ""
+                }`}
               >
                 <div className="relative">
                   <span className="icon-tile icon-tile-track">
@@ -463,43 +464,6 @@ function SuperAdminDashboard() {
             </section>
           </div>
 
-          {/* Department Leaderboard */}
-          {analytics.department_leaderboard?.length > 0 && (
-            <section className="glass reveal p-6" style={{ "--i": 9 }}>
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h3 className="h3 text-ink">Department Participation Leaderboard</h3>
-                  <p className="prose-muted text-xs">Event activity ranked by academic department</p>
-                </div>
-                <Link to="/superadmin/departments" className="btn btn-ghost btn-xs">
-                  View Departments
-                </Link>
-              </div>
-
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={analytics.department_leaderboard}
-                    layout="vertical"
-                    margin={{ top: 5, right: 30, left: 40, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-                    <XAxis type="number" stroke="currentColor" className="text-xs text-muted" allowDecimals={false} />
-                    <YAxis dataKey="department" type="category" stroke="currentColor" className="text-xs text-muted" width={120} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "rgba(15, 23, 42, 0.85)",
-                        border: "1px solid rgba(255, 255, 255, 0.1)",
-                        borderRadius: "12px",
-                        color: "#fff",
-                      }}
-                    />
-                    <Bar dataKey="events" name="Total Events" fill="#0EA5E9" radius={[0, 8, 8, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </section>
-          )}
         </div>
       </div>
     </SuperAdminShell>

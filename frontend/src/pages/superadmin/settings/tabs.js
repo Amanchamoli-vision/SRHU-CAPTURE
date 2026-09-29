@@ -20,13 +20,15 @@ export const SETTINGS_TABS = [
       "max_videos_per_event",
       "max_video_size_mb",
       "max_video_total_mb",
+      "photos_required",
+      "videos_required",
     ],
   },
   {
     key: "documents",
     label: "Documents",
     Component: DocumentLimitsTab,
-    fields: ["max_documents_per_event", "max_documents_total_mb"],
+    fields: ["max_documents_per_event", "max_documents_total_mb", "documents_required"],
   },
 ];
 

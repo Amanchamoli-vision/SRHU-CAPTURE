@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     email_delivery_enabled: bool = True
     email_outbox_dir: str = "email_outbox"
 
+    # How long the file download links printed in an Event Manager report keep
+    # working. A report is a document people keep, so these are long-lived
+    # signed links rather than the few-hour links the app itself uses.
+    report_link_expiry_days: int = Field(default=365, ge=1, le=3650)
+
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { updateSessionUser } from "../../services/session";
+import { usePanel } from "../teacher/panel";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -15,6 +16,7 @@ import {
 
 export default function FirstLoginPasswordModal({ isOpen = true }) {
   const navigate = useNavigate();
+  const panel = usePanel();
   const { user, setUser } = useAuth();
 
   const [currentPassword, setCurrentPassword] = useState("");
@@ -88,7 +90,7 @@ export default function FirstLoginPasswordModal({ isOpen = true }) {
       }
 
       // Redirect directly to Teacher Dashboard
-      navigate("/teacher/dashboard", { replace: true });
+      navigate(`${panel.base}/dashboard`, { replace: true });
     } catch (err) {
       setError(err?.message || "Failed to update password. Please check your temporary password.");
     } finally {

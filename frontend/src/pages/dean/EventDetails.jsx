@@ -603,6 +603,9 @@ function EventDetails() {
   const nextStage = getNextStage(event.status);
   const previousStage = getPreviousStage(event.status);
   const isApproved = getStatusBucket(event.status) === "approved";
+  // The report exists only once the event is Completed (the server enforces
+  // the same rule on generate and download).
+  const canReport = event.status === "completed";
 
   // Its own action now, not a rejection wearing a different label (PRD 18).
   const isRevoking = decisionKind === "revoke";
@@ -894,7 +897,7 @@ function EventDetails() {
                       </div>
                     </div>
 
-                    {reportGenerated && (
+                    {canReport && reportGenerated && (
                       <span
                         className="chip chip-track"
                         style={{ "--track": trackOf("approved") }}
@@ -945,7 +948,7 @@ function EventDetails() {
                       <button
                         type="button"
                         onClick={handleGenerateReport}
-                        disabled={reportLoading}
+                        disabled={reportLoading || !canReport}
                         className="btn btn-brand btn-sm flex-1"
                       >
                         {reportLoading ? (
@@ -963,7 +966,7 @@ function EventDetails() {
                       <button
                         type="button"
                         onClick={handleDownloadReport}
-                        disabled={reportLoading || !reportGenerated}
+                        disabled={reportLoading || !reportGenerated || !canReport}
                         className="btn btn-ghost btn-sm flex-1"
                       >
                         <IconDownload />
@@ -971,7 +974,14 @@ function EventDetails() {
                       </button>
                     </div>
 
-                    {generatedAt && (
+                    {!canReport && (
+                      <p className="prose-muted text-xs" role="note">
+                        The report can be generated once the event is marked
+                        Completed.
+                      </p>
+                    )}
+
+                    {canReport && generatedAt && (
                       <p className="num text-[11px] text-muted">
                         Last generated {formatStamp(generatedAt)}
                       </p>

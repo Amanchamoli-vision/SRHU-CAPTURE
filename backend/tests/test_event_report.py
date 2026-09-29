@@ -12,13 +12,22 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
+from app.routers.reports import build_dean_report  # noqa: E402
 from app.services.report_pdf import (  # noqa: E402
     LOGO_PATH,
     approval_record,
-    build_event_report_pdf,
     split_description,
     verbatim_markup,
 )
+from tests.test_event_manager import image_bytes, pdf_links, pdf_text  # noqa: E402
+
+
+def file_link(kind: str, file_id: str) -> str:
+    return f"https://api.example/reports/files/{kind}/{file_id}?exp=1&sig=a"
+
+
+def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: list):
+    return build_dean_report(event, teacher, media, documents, file_link=file_link)
 
 TEACHER_TEXT = "Line one & <two>\n\n  Indented   with  gaps\nLast line"
 META = '{"startTime":"09:30","endTime":"16:45","department":"CSE"}'
@@ -38,6 +47,11 @@ def approved_event(**overrides) -> dict:
     }
     event.update(overrides)
     return event
+
+
+def completed_event(**overrides) -> dict:
+    """An event the Dean has marked Completed: the only kind with a report."""
+    return approved_event(**{"status": "completed", **overrides})
 
 
 class DescriptionTests(unittest.TestCase):
@@ -143,7 +157,7 @@ def download(event: dict):
 
 class DownloadEndpointTests(unittest.TestCase):
     def test_dean_downloads_the_report(self) -> None:
-        response = download(approved_event())
+        response = download(completed_event())
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.headers["content-type"], "application/pdf")
@@ -152,7 +166,7 @@ class DownloadEndpointTests(unittest.TestCase):
 
     def test_hindi_event_name_download_header(self) -> None:
         # B-11: a Devanagari name raised UnicodeEncodeError in the header.
-        response = download(approved_event(event_name="वार्षिक खेल दिवस"))
+        response = download(completed_event(event_name="वार्षिक खेल दिवस"))
         self.assertEqual(response.status_code, 200, response.text)
         disposition = response.headers["content-disposition"]
         disposition.encode("latin-1")  # the header must be encodable
@@ -165,14 +179,14 @@ class DownloadEndpointTests(unittest.TestCase):
         )
 
     def test_numeric_start_time_downloads(self) -> None:
-        event = approved_event(description='Text\n<!--CC_METADATA:{"startTime":930}-->')
+        event = completed_event(description='Text\n<!--CC_METADATA:{"startTime":930}-->')
         self.assertEqual(download(event).status_code, 200)
 
     def test_download_without_social_link(self) -> None:
         # PRD 17: previously 400 "Social Network Link is required".
         for missing in (None, "", "   "):
             with self.subTest(social=missing):
-                response = download(approved_event(social_network_url=missing))
+                response = download(completed_event(social_network_url=missing))
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertTrue(response.content.startswith(b"%PDF"))
 
@@ -185,7 +199,7 @@ class GenerateWithoutSocialLinkTests(unittest.TestCase):
         reports = MagicMock()
         with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
                 patch("app.routers.reports.get_event",
-                      return_value=approved_event(social_network_url=None)), \
+                      return_value=completed_event(social_network_url=None)), \
                 patch("app.routers.reports.get_event_media", return_value=[]), \
                 patch("app.routers.reports.get_event_documents", return_value=[]), \
                 patch("app.routers.reports.get_teacher", return_value={"name": "T"}), \
@@ -197,6 +211,28 @@ class GenerateWithoutSocialLinkTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(reports.replace_one.called)
+
+    def test_generate_is_refused_until_the_event_is_completed(self) -> None:
+        client = TestClient(app)
+        reports = MagicMock()
+        for status_value in ("approved", "pending", "revoked"):
+            with self.subTest(status=status_value), \
+                    patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
+                    patch("app.routers.reports.get_event", return_value=approved_event(status=status_value)), \
+                    patch("app.routers.reports.event_reports", reports):
+                response = client.post(
+                    "/dean/events/6aac7ecbee2ad335979f1268/generate-report",
+                    headers={"Authorization": "Bearer t"},
+                )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("Completed", response.json()["detail"])
+        self.assertFalse(reports.replace_one.called)
+
+    def test_download_is_refused_until_the_event_is_completed(self) -> None:
+        # Also covers a report generated before the rule, while only approved.
+        response = download(approved_event())
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Completed", response.json()["detail"])
 
     def test_generated_body_says_not_provided(self) -> None:
         from app.routers.reports import build_report_content
@@ -250,3 +286,107 @@ class HostDepartmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ============================================================
+# SAME DESIGN AS THE EVENT MANAGER'S REPORT
+# ============================================================
+
+class FakeFS:
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self.files = files
+
+    def get(self, file_id):
+        import io
+
+        data = self.files[str(file_id)]
+        out = io.BytesIO(data)
+        out.length = len(data)  # like GridOut
+        return out
+
+
+def photo_row(file_id: str, n: int) -> dict:
+    return {"id": f"66aa0000000000000000000{n}", "media_type": "image", "file_id": file_id,
+            "file_name": f"photo{n}.png", "file_size": 100}
+
+
+class DeanReportDesignTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from bson import ObjectId
+
+        self.media, files = [], {}
+        for n in range(6):
+            file_id = str(ObjectId())
+            files[file_id] = image_bytes(80, 60, shade=30 * n)
+            self.media.append(photo_row(file_id, n))
+        patcher = patch("app.routers.reports.fs", FakeFS(files))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.documents = [{"id": "66bb00000000000000000001", "file_name": "agenda.pdf", "file_size": 2048}]
+
+    def build(self, **event_overrides) -> bytes:
+        return build_event_report_pdf(
+            approved_event(**event_overrides), {"name": "Prof. T", "email": "t@srhu.edu.in"},
+            self.media, self.documents,
+        ).getvalue()
+
+    def test_sections_match_the_event_manager_report_plus_approval(self) -> None:
+        text = pdf_text(self.build())
+        headings = ["1. Event Details", "2. Event Description", "3. Event Photos", "4. Attachments", "5. Approval"]
+        positions = [text.index(h) for h in headings]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("Submitted by", text)
+        self.assertNotIn("Recorded by", text)
+        self.assertIn("Ref. CC/ER/", text)
+        self.assertNotIn("Supporting Material", text)
+
+    def test_default_photos_are_the_first_four(self) -> None:
+        pdf = self.build()
+        self.assertEqual(pdf.count(b"/Subtype /Image"), 4 + 1)  # four photos + the crest
+
+    def test_the_teachers_choice_is_used(self) -> None:
+        chosen = [self.media[5]["id"], self.media[2]["id"]]
+        pdf = self.build(report_photo_ids=chosen)
+        self.assertEqual(pdf.count(b"/Subtype /Image"), 2 + 1)
+
+    def test_every_file_is_listed_with_a_download_link(self) -> None:
+        links = pdf_links(self.build())
+        files = [u for u in links if "/reports/files/" in u]
+        self.assertEqual(len(files), len(self.media) + len(self.documents))
+        self.assertTrue(any("/reports/files/documents/66bb00000000000000000001" in u for u in files))
+
+    def test_no_photo_section_without_photos(self) -> None:
+        text = pdf_text(build_event_report_pdf(approved_event(), {"name": "T"}, [], []).getvalue())
+        self.assertNotIn("Event Photos", text)
+        self.assertNotIn("Attachments", text)
+        self.assertIn("3. Approval", text)
+
+
+class DeanReportLinkTests(unittest.TestCase):
+    def test_signed_link_downloads_and_tampering_is_refused(self) -> None:
+        from bson import ObjectId
+
+        from app.services.report_files import link_signature
+
+        client = TestClient(app)
+        doc_id, file_id = ObjectId(), str(ObjectId())
+        row = {"_id": doc_id, "file_id": file_id, "file_name": "agenda.pdf", "content_type": "application/pdf"}
+        documents = MagicMock()
+        documents.find_one.side_effect = lambda query: row if query == {"_id": doc_id} else None
+        with patch("app.routers.reports.event_documents", documents), \
+                patch("app.routers.reports.fs", FakeFS({file_id: b"%PDF-1.4 test"})):
+            good = link_signature("event", "documents", str(doc_id), 9999999999)
+            response = client.get(f"/reports/files/documents/{doc_id}?exp=9999999999&sig={good}")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.content, b"%PDF-1.4 test")
+
+            for sig in (
+                "00",
+                link_signature("managed", "documents", str(doc_id), 9999999999),  # an Event Manager link
+                link_signature("event", "media", str(doc_id), 9999999999),        # the other kind
+            ):
+                self.assertEqual(
+                    client.get(f"/reports/files/documents/{doc_id}?exp=9999999999&sig={sig}").status_code, 403
+                )
+            expired = link_signature("event", "documents", str(doc_id), 1000)
+            self.assertEqual(client.get(f"/reports/files/documents/{doc_id}?exp=1000&sig={expired}").status_code, 403)

@@ -1,0 +1,110 @@
+/**
+ * Event Manager reports (backend: routers/event_manager.py).
+ *
+ * The Event Manager uses the Teacher panel's screens against its own event
+ * API (see components/teacher/panel.jsx); what it adds is here: reports are
+ * generated directly -- for one event or for a selection of several -- and
+ * each event's report shows up to four chosen photos.
+ */
+import { apiFetch, apiJson, errorFromResponse } from "./api";
+
+const BASE = "/event-manager";
+
+/** Most events one consolidated report may cover (backend MAX_EVENTS_PER_REPORT). */
+export const MAX_EVENTS_PER_REPORT = 50;
+
+/** Photos per event report (backend MAX_REPORT_PHOTOS). */
+export const MAX_REPORT_PHOTOS = 4;
+
+/** Delete these events (with their files) in one request. */
+export const bulkDeleteEvents = (ids) =>
+  apiJson(`${BASE}/events/bulk-delete`, { method: "POST", body: { event_ids: ids } });
+
+/**
+ * Save which photos go into the event's report. Both panels choose them the
+ * same way: `api` is the panel's event API ("/teacher" for the Dean's report,
+ * "/event-manager" by default).
+ */
+export const saveReportPhotos = (id, photoIds, api = BASE) =>
+  apiJson(`${api}/events/${id}/report-photos`, { method: "PUT", body: { photo_ids: photoIds } });
+
+/**
+ * A generated report, once it is ready, is handed to the browser:
+ *
+ * - on https (the deployed app) it downloads directly as a file;
+ * - on plain http (the app reached at http://<LAN address>) Chrome blocks
+ *   every download ("Insecure download blocked") but not a PDF shown in a
+ *   tab, so it opens in Chrome's PDF viewer instead.
+ *
+ * Nothing opens or navigates until the report exists: the page stays put,
+ * with the button's spinner, while it is generated. A tab opened after the
+ * request can be stopped by the pop-up blocker (the click's permission lasts
+ * a few seconds); then REPORT_READY_EVENT is dispatched and ReportReadyPrompt
+ * offers an "Open report" button, which is a fresh click the blocker allows.
+ */
+export const REPORT_READY_EVENT = "campus:report-ready";
+
+function saveBlob(blob, fileName) {
+  const pdf = blob.type === "application/pdf" ? blob : new Blob([blob], { type: "application/pdf" });
+  const url = window.URL.createObjectURL(pdf);
+
+  if (!window.isSecureContext) {
+    const tab = window.open(url, "_blank");
+    if (!tab) {
+      window.dispatchEvent(new CustomEvent(REPORT_READY_EVENT, { detail: { url, fileName } }));
+      return "ready";
+    }
+    // The tab is still reading it; release the memory once it has.
+    setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    return "opened";
+  }
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => window.URL.revokeObjectURL(url), 1_000);
+  return "downloaded";
+}
+
+async function fetchReport(path, options, fallbackName) {
+  const response = await apiFetch(path, options);
+  if (!response.ok) throw await errorFromResponse(response, "Could not generate the report.");
+  return saveBlob(await response.blob(), fileNameFrom(response, fallbackName));
+}
+
+/**
+ * What to tell the user once a report call resolves: "downloaded", "opened"
+ * (in a new tab) or "ready" (ReportReadyPrompt is asking for a click -- say
+ * nothing more).
+ */
+export function reportNotice(outcome, what = "Report") {
+  if (outcome === "ready") return "";
+  return outcome === "opened" ? `${what} opened in a new tab.` : `${what} downloaded.`;
+}
+
+function fileNameFrom(response, fallback) {
+  const header = response.headers.get("Content-Disposition") || "";
+  const star = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1]);
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = header.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : fallback;
+}
+
+/** Download (or, on plain http, open) the report for one event. Resolves with the outcome. */
+export function downloadEventReport(id) {
+  return fetchReport(`${BASE}/events/${id}/report`, {}, "Event_Report.pdf");
+}
+
+/** One consolidated report for several events, in the order given. */
+export function downloadEventsReport(ids) {
+  return fetchReport(`${BASE}/reports`, { method: "POST", body: { event_ids: ids } }, "Events_Report.pdf");
+}

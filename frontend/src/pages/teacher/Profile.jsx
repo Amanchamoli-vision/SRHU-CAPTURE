@@ -9,6 +9,7 @@ import {
 } from "../../services/auth";
 import { useOriginState } from "../../hooks/useOriginState";
 import TeacherShell from "../../components/teacher/TeacherShell";
+import { usePanel } from "../../components/teacher/panel";
 import LogoutConfirmModal from "../../components/common/LogoutConfirmModal";
 import EditProfileModal from "../../components/common/EditProfileModal";
 import PasswordField from "../../components/common/PasswordField";
@@ -67,6 +68,7 @@ const ACTION_CLASS =
 
 export default function TeacherProfile() {
   const navigate = useNavigate();
+  const panel = usePanel();
   const originState = useOriginState();
   const { user: authUser } = useAuth();
 
@@ -135,11 +137,11 @@ export default function TeacherProfile() {
     setNotice({ kind: "ok", text: "Profile updated successfully." });
   };
 
-  const displayName = profile?.name?.trim() || "Teacher";
+  const displayName = profile?.name?.trim() || panel.roleLabel;
   const displayEmail = profile?.email || account?.email || "—";
   const accountId = profile?.id || account?.id || "";
   const isVerified = Boolean(account?.emailConfirmedAt);
-  const role = profile?.role || "teacher";
+  const role = profile?.role || panel.role;
   // The rank the teacher registered with ("Assistant Professor", ...). Every
   // account on this page is a teacher, so the bare role word says nothing;
   // it is only the fallback for an account with no designation on record.
@@ -290,23 +292,23 @@ export default function TeacherProfile() {
   const navActions = [
     {
       key: "dashboard",
-      to: "/teacher/dashboard",
+      to: `${panel.base}/dashboard`,
       label: "Dashboard",
       hint: "Overview and draft events",
       Icon: IconGrid,
     },
     {
       key: "create",
-      to: "/teacher/create-event",
+      to: `${panel.base}/create-event`,
       label: "Create event",
-      hint: "Submit a new proposal",
+      hint: panel.approval ? "Submit a new proposal" : "Record a new event",
       Icon: IconPlus,
     },
     {
       key: "events",
-      to: "/teacher/my-events",
+      to: `${panel.base}/my-events`,
       label: "My events",
-      hint: "Track proposal progress",
+      hint: panel.approval ? "Track proposal progress" : "View events and download reports",
       Icon: IconList,
     },
   ];

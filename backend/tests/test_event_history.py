@@ -164,6 +164,17 @@ class FakeEvents:
             del self.docs[key]
         return MagicMock(deleted_count=len(doomed))
 
+    def update_one(self, query: dict, update: dict, **_kwargs):
+        doc = self._find(query)
+        if doc is None:
+            return MagicMock(matched_count=0, modified_count=0)
+        doc.update(copy.deepcopy(update.get("$set", {})))
+        for field, value in update.get("$push", {}).items():
+            doc.setdefault(field, []).append(copy.deepcopy(value))
+        for field, value in update.get("$pull", {}).items():
+            doc[field] = [item for item in doc.get(field) or [] if item != value]
+        return MagicMock(matched_count=1, modified_count=1)
+
     def update_many(self, query: dict, update: dict, **_kwargs):
         matched = [doc for doc in self.docs.values() if self._matches(doc, query)]
         for doc in matched:
@@ -398,16 +409,21 @@ class EventHistoryTests(unittest.TestCase):
         event_id = self.create_pending_event()
         self.client.patch(f"/dean/events/{event_id}/approve", headers=self.as_dean())
 
-        for stage in ("completed", "approved"):
-            response = self.client.patch(
-                f"/dean/events/{event_id}/stage", params={"stage": stage}, headers=self.as_dean()
-            )
-            self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.patch(
+            f"/dean/events/{event_id}/stage", params={"stage": "completed"}, headers=self.as_dean()
+        )
+        self.assertEqual(response.status_code, 200, response.text)
 
-        tail = self.history_of(event_id)[-2:]
-        self.assertEqual([entry["action"] for entry in tail], ["stage_changed", "stage_changed"])
-        self.assertEqual([entry["status"] for entry in tail], ["completed", "approved"])
-        self.assertEqual(tail[0]["from_status"], "approved")
+        # Completed is final: there is no stepping back to Approved.
+        back = self.client.patch(
+            f"/dean/events/{event_id}/stage", params={"stage": "approved"}, headers=self.as_dean()
+        )
+        self.assertEqual(back.status_code, 400, back.text)
+        self.assertIn("cannot be moved back", back.json()["detail"])
+
+        tail = self.history_of(event_id)[-1]
+        self.assertEqual((tail["action"], tail["status"], tail["from_status"]), ("stage_changed", "completed", "approved"))
+        self.assertEqual(self.events.docs[ObjectId(event_id)]["status"], "completed")
 
     def test_in_progress_is_no_longer_a_stage(self) -> None:
         event_id = self.create_pending_event()

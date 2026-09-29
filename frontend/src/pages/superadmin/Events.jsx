@@ -225,7 +225,7 @@ export default function SuperAdminEvents() {
           accent="Events"
           subtitle="Every event submitted across campus, with the photos, videos and documents attached to it."
           actions={
-            <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:gap-3 lg:justify-end">
               <button type="button" onClick={loadEvents} disabled={loading} className="btn btn-ghost">
                 {loading ? <span className="spin h-4 w-4" /> : <IconRefresh />}
                 Refresh

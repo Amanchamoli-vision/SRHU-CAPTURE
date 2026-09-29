@@ -11,6 +11,8 @@ import {
   decodeEventMetadata,
 } from "../../utils/draftStorage";
 import TeacherShell from "../../components/teacher/TeacherShell";
+import { usePanel } from "../../components/teacher/panel";
+import { downloadEventReport } from "../../services/eventManager";
 import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
 import Lifecycle from "../../components/teacher/Lifecycle";
@@ -29,6 +31,7 @@ import {
   IconCheckCircle,
   IconClock,
   IconCopy,
+  IconDownload,
   IconEdit,
   IconEye,
   IconInbox,
@@ -44,6 +47,7 @@ const TABLE_COLUMNS = ["Event", "Date", "Venue", "Status", "Action"];
 function TeacherDashboard() {
   const navigate = useNavigate();
   const originState = useOriginState();
+  const panel = usePanel();
 
   const [profile, setProfile] = useState(null);
   const [events, setEvents] = useState([]);
@@ -69,7 +73,7 @@ function TeacherDashboard() {
         return;
       }
 
-      if (userProfile.role !== "teacher") {
+      if (userProfile.role !== panel.role) {
         navigate("/", { replace: true });
         return;
       }
@@ -77,7 +81,7 @@ function TeacherDashboard() {
       setProfile(userProfile);
 
       // Fetch teacher's events from the API (MongoDB)
-      const { events: teacherEvents } = await apiJson("/teacher/events");
+      const { events: teacherEvents } = await apiJson(`${panel.api}/events`);
 
       // Fetch teacher's local drafts
       const teacherDrafts = getTeacherDrafts(userProfile.id);
@@ -113,7 +117,7 @@ function TeacherDashboard() {
       const newDraft = duplicateEventAsDraft(profile.id, targetEvent);
       setActionNotice(`Event "${targetEvent.event_name || targetEvent.eventName}" duplicated as draft.`);
       setTimeout(() => {
-        navigate(`/teacher/create-event?draftId=${newDraft.id}`, { state: originState });
+        navigate(`${panel.base}/create-event?draftId=${newDraft.id}`, { state: originState });
       }, 700);
     } catch (err) {
       console.error("Duplicate error:", err);
@@ -128,7 +132,7 @@ function TeacherDashboard() {
       if (deletingEvent.isDraft) {
         deleteTeacherDraft(profile.id, deletingEvent.id);
       } else {
-        await apiJson(`/teacher/events/${deletingEvent.id}`, { method: "DELETE" });
+        await apiJson(`${panel.api}/events/${deletingEvent.id}`, { method: "DELETE" });
       }
 
       setActionNotice("Event deleted successfully.");
@@ -161,7 +165,36 @@ function TeacherDashboard() {
     return timeB - timeA;
   });
 
-  const summaryCards = [
+  const recordedEvents = events.filter((event) => event.status === "recorded").length;
+
+  // Without a Dean there is nothing pending, approved or rejected: an Event
+  // Manager's events are either saved (recorded) or still drafts.
+  const summaryCards = !panel.approval ? [
+    {
+      key: "all",
+      label: "Total Events",
+      value: totalEvents,
+      hint: "View all",
+      track: "#0EA5E9",
+      Icon: IconLayers,
+    },
+    {
+      key: "recorded",
+      label: "Recorded",
+      value: recordedEvents,
+      hint: "View recorded",
+      track: trackOf("recorded"),
+      Icon: IconCheckCircle,
+    },
+    {
+      key: "draft",
+      label: "Drafts",
+      value: drafts.length + events.filter((event) => event.status === "draft").length,
+      hint: "View drafts",
+      track: trackOf("draft"),
+      Icon: IconClock,
+    },
+  ] : [
     {
       key: "all",
       label: "Total Events",
@@ -213,7 +246,11 @@ function TeacherDashboard() {
       profile={profile}
       onLogout={handleLogout}
       railBadge={totalEvents}
-      railNote="Review event status, duplicate previous proposals, or submit new ones."
+      railNote={
+        panel.approval
+          ? "Review event status, duplicate previous proposals, or submit new ones."
+          : "Record events, duplicate previous ones, and download their reports."
+      }
     >
       <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
 
@@ -243,12 +280,12 @@ function TeacherDashboard() {
 
         <PageHero
           eyebrow="Overview"
-          title="Teacher"
+          title={panel.approval ? "Teacher" : "Event Manager"}
           accent="Portal"
-          subtitle={`Welcome back, ${profile?.name || "Teacher"}. Manage your campus events and proposals from one place.`}
+          subtitle={`Welcome back, ${profile?.name || panel.roleLabel}. Manage your campus events and proposals from one place.`}
           actions={
             <Link
-              to="/teacher/create-event"
+              to={`${panel.base}/create-event`}
               state={originState}
               className="btn btn-primary"
             >
@@ -261,12 +298,12 @@ function TeacherDashboard() {
         {/* ------------------------------------------------ summary cards
             The shared KPI card, identical on the Dean and Super Admin
             dashboards. */}
-        <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <div className={`mt-6 grid gap-3 sm:gap-4 ${summaryCards.length === 3 ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-2 lg:grid-cols-4"}`}>
           {summaryCards.map((card, i) => (
             <StatCard
               key={card.key}
               index={i}
-              to={`/teacher/my-events?filter=${card.key}`}
+              to={`${panel.base}/my-events?filter=${card.key}`}
               label={card.label}
               value={card.value}
               Icon={card.Icon}
@@ -289,7 +326,7 @@ function TeacherDashboard() {
               </p>
             </div>
 
-            <Link to="/teacher/my-events" className="btn btn-ghost btn-sm">
+            <Link to={`${panel.base}/my-events`} className="btn btn-ghost btn-sm">
               View All Events
               <IconArrowRight />
             </Link>
@@ -305,7 +342,7 @@ function TeacherDashboard() {
                 No events submitted or saved yet.
               </p>
               <Link
-                to="/teacher/create-event"
+                to={`${panel.base}/create-event`}
                 state={originState}
                 className="btn btn-primary mt-6"
               >
@@ -419,7 +456,9 @@ function TeacherDashboard() {
         eyebrow="Confirm"
         title="Delete Event"
         subtitle={
-          deletingEvent?.isDraft ? "Draft event deletion" : "Submitted event deletion"
+          deletingEvent?.isDraft
+            ? "Draft event deletion"
+            : panel.approval ? "Submitted event deletion" : "Recorded event deletion"
         }
         footer={
           <>
@@ -469,7 +508,7 @@ function TeacherDashboard() {
 
       {/* ------------------------------------------------------- track modal */}
       <Modal
-        open={Boolean(trackingEvent)}
+        open={panel.approval && Boolean(trackingEvent)}
         onClose={() => setTrackingEvent(null)}
         wide
         eyebrow="Status Tracking"
@@ -487,7 +526,7 @@ function TeacherDashboard() {
 
             {isRefusedStatus(trackingEvent?.status) && (
               <Link
-                to={`/teacher/create-event?editEventId=${trackingEvent.id}`}
+                to={`${panel.base}/create-event?editEventId=${trackingEvent.id}`}
                 state={originState}
                 className="btn btn-danger btn-sm"
               >
@@ -497,7 +536,7 @@ function TeacherDashboard() {
             )}
 
             {trackingEvent && !trackingEvent.isDraft && (
-              <Link to={`/teacher/events/${trackingEvent.id}`} className="btn btn-brand btn-sm">
+              <Link to={`${panel.base}/events/${trackingEvent.id}`} className="btn btn-brand btn-sm">
                 View Full Details
                 <IconArrowRight />
               </Link>
@@ -542,18 +581,20 @@ const NotSet = () => <span className="italic text-muted/70">Not set</span>;
  * the desktop table so the two can never offer different actions.
  */
 function RowActions({ item, onDuplicate, onDelete, onTrack, originState }) {
+  const panel = usePanel();
+  const [reporting, setReporting] = useState(false);
   // Editable until the Dean approves it; mirrors TEACHER_EDITABLE_STATUSES in
   // backend/app/models/documents.py (the server enforces it).
   const canEdit = item.isDraft || canTeacherEditEvent(item);
   const canDelete = item.isDraft || canTeacherEditEvent(item);
 
   const viewTo = item.isDraft
-    ? `/teacher/create-event?draftId=${item.id}`
-    : `/teacher/events/${item.id}`;
+    ? `${panel.base}/create-event?draftId=${item.id}`
+    : `${panel.base}/events/${item.id}`;
 
   const editTo = item.isDraft
-    ? `/teacher/create-event?draftId=${item.id}`
-    : `/teacher/create-event?editEventId=${item.id}`;
+    ? `${panel.base}/create-event?draftId=${item.id}`
+    : `${panel.base}/create-event?editEventId=${item.id}`;
 
   return (
     <>
@@ -617,15 +658,39 @@ function RowActions({ item, onDuplicate, onDelete, onTrack, originState }) {
         </span>
       )}
 
-      <button
-        type="button"
-        onClick={() => onTrack(item)}
-        title="Track approval status"
-        aria-label="Track approval status"
-        className="icon-btn icon-btn-sm hover:border-accent/60 hover:text-accent"
-      >
-        <IconActivity />
-      </button>
+      {panel.approval ? (
+        <button
+          type="button"
+          onClick={() => onTrack(item)}
+          title="Track approval status"
+          aria-label="Track approval status"
+          className="icon-btn icon-btn-sm hover:border-accent/60 hover:text-accent"
+        >
+          <IconActivity />
+        </button>
+      ) : (
+        !item.isDraft && item.status === "recorded" && (
+          <button
+            type="button"
+            onClick={async () => {
+              setReporting(true);
+              try {
+                await downloadEventReport(item.id);
+              } catch (err) {
+                alert(err?.message || "Could not generate the report.");
+              } finally {
+                setReporting(false);
+              }
+            }}
+            disabled={reporting}
+            title="Download report"
+            aria-label="Download report"
+            className="icon-btn icon-btn-sm hover:border-accent/60 hover:text-accent"
+          >
+            {reporting ? <span className="spin h-3.5 w-3.5" /> : <IconDownload />}
+          </button>
+        )
+      )}
     </>
   );
 }

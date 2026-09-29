@@ -11,6 +11,9 @@ import {
   duplicateEventAsDraft,
 } from "../../utils/draftStorage";
 import TeacherShell from "../../components/teacher/TeacherShell";
+import { usePanel } from "../../components/teacher/panel";
+import ReportPhotoPicker from "../../components/teacher/ReportPhotoPicker";
+import { downloadEventReport, reportNotice } from "../../services/eventManager";
 import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
 import Lifecycle from "../../components/teacher/Lifecycle";
@@ -72,6 +75,10 @@ function getFileExt(fileName) {
 function EventDetails() {
   const { eventId } = useParams();
   const navigate = useNavigate();
+  const panel = usePanel();
+  const [reporting, setReporting] = useState(false);
+  // Report problems are shown in place; `error` is the page's load failure.
+  const [reportError, setReportError] = useState("");
 
   const [event, setEvent] = useState(null);
   const [media, setMedia] = useState([]);
@@ -97,7 +104,7 @@ function EventDetails() {
         return;
       }
 
-      if (userProfile.role !== "teacher") {
+      if (userProfile.role !== panel.role) {
         navigate("/", { replace: true });
         return;
       }
@@ -106,7 +113,7 @@ function EventDetails() {
 
       // Event, media and supporting documents in one API call
       const { event: eventData, media: mediaData, documents: docData } =
-        await apiJson(`/teacher/events/${eventId}`);
+        await apiJson(`${panel.api}/events/${eventId}`);
 
       setEvent(eventData);
       setMedia(mediaData || []);
@@ -126,7 +133,7 @@ function EventDetails() {
   // Media and document links are signed and expire; when one fails to load,
   // fetch fresh ones (quietly, without the full-page loading state).
   const refreshMediaLinks = useMediaRefresh(async () => {
-    const { media: mediaData, documents: docData } = await apiJson(`/teacher/events/${eventId}`);
+    const { media: mediaData, documents: docData } = await apiJson(`${panel.api}/events/${eventId}`);
     setMedia(mediaData || []);
     setDocuments(docData || []);
   });
@@ -144,7 +151,7 @@ function EventDetails() {
       const newDraft = duplicateEventAsDraft(profile.id, event);
       setActionNotice("Event duplicated as new draft.");
       setTimeout(() => {
-        navigate(`/teacher/create-event?draftId=${newDraft.id}`, { state: originState });
+        navigate(`${panel.base}/create-event?draftId=${newDraft.id}`, { state: originState });
       }, 700);
     } catch (err) {
       console.error("Duplicate error:", err);
@@ -156,15 +163,28 @@ function EventDetails() {
     if (!event || !profile) return;
     try {
       setDeletingLoading(true);
-      await apiJson(`/teacher/events/${event.id}`, { method: "DELETE" });
+      await apiJson(`${panel.api}/events/${event.id}`, { method: "DELETE" });
 
-      navigate("/teacher/my-events", { replace: true });
+      navigate(`${panel.base}/my-events`, { replace: true });
     } catch (err) {
       console.error("Delete error:", err);
       alert("Failed to delete event: " + (err.message || "Unknown error"));
     } finally {
       setDeletingLoading(false);
       setShowDeleteModal(false);
+    }
+  };
+
+  const handleDownloadReport = async () => {
+    try {
+      setReporting(true);
+      setReportError("");
+      const notice = reportNotice(await downloadEventReport(event.id));
+      if (notice) setActionNotice(notice);
+    } catch (err) {
+      setReportError(err?.message || "Could not generate the report.");
+    } finally {
+      setReporting(false);
     }
   };
 
@@ -200,7 +220,7 @@ function EventDetails() {
           <p className="prose-muted mt-2 text-sm">
             {error || "This event could not be found."}
           </p>
-          <Link to="/teacher/my-events" className="btn btn-brand mt-6">
+          <Link to={`${panel.base}/my-events`} className="btn btn-brand mt-6">
             <IconArrowLeft />
             Back to My Events
           </Link>
@@ -271,7 +291,11 @@ function EventDetails() {
       active="events"
       profile={profile}
       onLogout={handleLogout}
-      railNote="Complete review records, history, and uploaded assets for this event."
+      railNote={
+        panel.approval
+          ? "Complete review records, history, and uploaded assets for this event."
+          : "Event details, uploaded files, and the photos that go into its report."
+      }
     >
       <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
 
@@ -282,18 +306,39 @@ function EventDetails() {
           </div>
         )}
 
+        {reportError && (
+          <div className="toast toast-err mb-5" role="alert">
+            <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
+            <p className="text-sm font-medium text-ink">{reportError}</p>
+          </div>
+        )}
+
         {/* ------------------------------------------------- back + actions */}
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <Link to="/teacher/my-events" className="btn btn-ghost btn-sm">
+          <Link to={`${panel.base}/my-events`} className="btn btn-ghost btn-sm">
             <IconArrowLeft />
             Back to My Events
           </Link>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={scrollToLifecycle} className="btn btn-ghost btn-xs">
-              <IconActivity />
-              Track Status
-            </button>
+            {panel.approval ? (
+              <button type="button" onClick={scrollToLifecycle} className="btn btn-ghost btn-xs">
+                <IconActivity />
+                Track Status
+              </button>
+            ) : (
+              panel.reports && event.status === "recorded" && (
+                <button
+                  type="button"
+                  onClick={handleDownloadReport}
+                  disabled={reporting}
+                  className="btn btn-primary btn-xs"
+                >
+                  {reporting ? <span className="spin h-3 w-3" /> : <IconDownload />}
+                  Download Report
+                </button>
+              )
+            )}
 
             <button
               type="button"
@@ -317,7 +362,7 @@ function EventDetails() {
 
             {isRefusedStatus(event.status) && (
               <Link
-                to={`/teacher/create-event?editEventId=${event.id}`}
+                to={`${panel.base}/create-event?editEventId=${event.id}`}
                 state={originState}
                 className="btn btn-danger btn-xs"
               >
@@ -330,7 +375,7 @@ function EventDetails() {
                 own Edit & Resubmit above. */}
             {!isRefusedStatus(event.status) && canTeacherEditEvent(event) && (
               <Link
-                to={`/teacher/create-event?editEventId=${event.id}`}
+                to={`${panel.base}/create-event?editEventId=${event.id}`}
                 state={originState}
                 className="btn btn-ghost btn-xs"
               >
@@ -345,7 +390,7 @@ function EventDetails() {
         <PageHero
           eyebrow={event.event_type}
           title={event.event_name}
-          subtitle={`Organized by ${meta.organizer || profile?.name || "Teacher"}`}
+          subtitle={`Organized by ${meta.organizer || profile?.name || panel.roleLabel}`}
           actions={<StatusChip status={event.status} size="md" />}
         >
           <dl className="grid gap-4 border-t hairline pt-5 sm:grid-cols-3">
@@ -388,7 +433,9 @@ function EventDetails() {
           </section>
         )}
 
-        {/* ------------------------------------------- progress and updates */}
+        {/* ------------------------------------------- progress and updates
+            The approval tracker: only where the Dean reviews events. */}
+        {panel.approval && (
         <section id="approval-lifecycle-section" className="glass reveal mt-6 p-6">
           <p className="eyebrow">Tracking</p>
           <h2 className="h3 mt-1 text-ink">Event progress &amp; updates</h2>
@@ -408,12 +455,13 @@ function EventDetails() {
             <ProgressTimeline event={event} viewerId={profile?.id} perspective="teacher" />
           </div>
         </section>
+        )}
 
         {/* --------------------------------------------------- Dean remarks */}
         {/* The Dean must give a reason for either kind of refusal, and the
             teacher has to be able to read it -- a revocation reason used to be
             written, stored, and then shown nowhere at all. */}
-        {refusalReason && (
+        {panel.approval && refusalReason && (
           <section
             style={{ "--track": trackOf(event.status) }}
             data-tint="rejected"
@@ -432,7 +480,7 @@ function EventDetails() {
 
               {canTeacherEditEvent(event) && (
                 <Link
-                  to={`/teacher/create-event?editEventId=${event.id}`}
+                  to={`${panel.base}/create-event?editEventId=${event.id}`}
                   state={originState}
                   className="btn btn-danger btn-xs"
                 >
@@ -561,6 +609,23 @@ function EventDetails() {
             onLoadError={refreshMediaLinks}
           />
         </div>
+
+        {/* A teacher can change the Dean report's photos while the event is
+            still editable; the Event Manager's events always are. */}
+        {(panel.reports || canTeacherEditEvent(event)) && (
+          <ReportPhotoPicker
+            key={(event.report_photo_ids || []).join(",")}
+            eventId={event.id}
+            api={panel.api}
+            photos={media.filter((item) => item.media_type === "image")}
+            initial={event.report_photo_ids || []}
+            onSaved={(ids) => {
+              setEvent((current) => ({ ...current, report_photo_ids: ids }));
+              setActionNotice("Report photos saved.");
+            }}
+            onError={setReportError}
+          />
+        )}
       </div>
 
       {/* ----------------------------------------------------- delete modal */}

@@ -9,7 +9,17 @@ from starlette.datastructures import MutableHeaders
 from app.config import settings
 from app.database import ensure_indexes, ping
 from app.logging_config import configure_logging
-from app.routers import auth, dean_teachers, directory, events, files, reports, superadmin, users
+from app.routers import (
+    auth,
+    dean_teachers,
+    directory,
+    event_manager,
+    events,
+    files,
+    reports,
+    superadmin,
+    users,
+)
 
 
 # Application log lines (registration, email_sent, audit, errors, ...) go to
@@ -174,6 +184,9 @@ app.include_router(dean_teachers.router)
 
 # Uploaded files served from GridFS
 app.include_router(files.router)
+
+# Event Manager role: events recorded and reported without Dean review
+app.include_router(event_manager.router)
 
 
 # ============================================================

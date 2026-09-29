@@ -540,8 +540,8 @@ function SuperAdminProfile() {
               <p className="mt-3 flex items-start gap-2 text-xs text-muted lg:mt-auto lg:pt-3">
                 <IconInfo className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>
-                  Email comes from your university account. Department and mobile
-                  number are recorded for teachers and Deans only.
+                  Email comes from your university account. A mobile number is
+                  recorded for teachers and Deans only.
                 </span>
               </p>
             </section>

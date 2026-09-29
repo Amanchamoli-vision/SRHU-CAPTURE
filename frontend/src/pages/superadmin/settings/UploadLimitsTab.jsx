@@ -1,5 +1,6 @@
 import NumberLimitField from "../../../components/superadmin/settings/NumberLimitField";
 import OptionalLimit from "../../../components/superadmin/settings/OptionalLimit";
+import RequirementToggle from "../../../components/superadmin/settings/RequirementToggle";
 import SettingsCard from "../../../components/superadmin/settings/SettingsCard";
 import { IconCamera, IconFilm } from "../../../components/teacher/icons";
 
@@ -27,6 +28,14 @@ export default function UploadLimitsTab({ values, bounds, errors, disabled, onCh
         chip="JPEG, PNG, WebP, GIF"
         description="How many photos a teacher may attach to an event, and how large each one may be."
       >
+        <RequirementToggle
+          id="photos-required"
+          noun="photo"
+          value={values.photos_required}
+          disabled={disabled}
+          onChange={(on) => onChange("photos_required", on)}
+        />
+
         {field("max_photos_per_event", {
           label: "Max photos per event",
           hint: "The number of images permitted for a single event.",
@@ -67,6 +76,14 @@ export default function UploadLimitsTab({ values, bounds, errors, disabled, onCh
         chip="MP4, WebM, MOV"
         description="Videos are budgeted by combined size, so a teacher can choose between a few large files or many small ones."
       >
+        <RequirementToggle
+          id="videos-required"
+          noun="video"
+          value={values.videos_required}
+          disabled={disabled}
+          onChange={(on) => onChange("videos_required", on)}
+        />
+
         <OptionalLimit
           id="video-count"
           label="Enforce a maximum video count"

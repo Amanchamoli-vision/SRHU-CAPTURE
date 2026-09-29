@@ -33,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
@@ -520,9 +521,10 @@ def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dea
     overwritten.
 
     The accounts have no usable password (see _unusable_password_hash), so
-    nobody can sign in until the teacher accepts an invitation (POST
-    /dean/teachers/invite, which the panel sends straight after when "send
-    invitations" is on) or uses Forgot password. One hash is shared by the
+    nobody can sign in until the teacher accepts an invitation or uses Forgot
+    password. With ``send_invites`` the new accounts are invited in this same
+    request (the panel's "send invitations" option), rather than by a second
+    call to POST /dean/teachers/invite. One hash is shared by the
     whole batch: hashing 500 would take minutes, and the secret behind it is
     unknowable either way.
     """
@@ -575,13 +577,23 @@ def import_teachers(payload: DeanImportTeachersRequest, dean: dict = Depends(dea
         ],
     })
 
-    return {
+    response = {
         "success": True,
         "requested_count": len(results),
         "created_count": len(created),
         "skipped_count": len(skipped),
         "results": results,
     }
+
+    if payload.send_invites and created:
+        if not email_service.is_configured():
+            response["invite_error"] = EMAIL_NOT_CONFIGURED
+        else:
+            ids = [ObjectId(r["user_id"]) for r in created]
+            teachers = list(users.find({"_id": {"$in": ids}, "role": "teacher"}))
+            response["invites"] = _send_invitations(teachers, dean)
+
+    return response
 
 
 # ============================================================
@@ -1172,18 +1184,11 @@ def _result_row(doc: dict | None, user_id: str, outcome: str, reason: str | None
     }
 
 
-@router.post("/invite")
-def invite_teachers(payload: DeanInviteRequest, dean: dict = Depends(dean_dep)):
-    """Send invitations to the whole selection in one request; report each outcome.
-
-    Every id is resolved (in one query) and checked before anything is sent,
-    so the response always accounts for every requested teacher: sent,
-    skipped (with why) or failed (with why).
-    """
-    if not email_service.is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=EMAIL_NOT_CONFIGURED)
-
-    teachers, results = _resolve_teachers(payload.user_ids, dean)
+def _send_invitations(teachers: list[dict], dean: dict, results: list[dict] | None = None) -> dict:
+    """Invite these teachers in parallel and report every one (sent, skipped
+    with why, or failed with why). Shared by POST /invite and by the Excel
+    import, which invites the accounts it created in the same request."""
+    results = list(results or [])
 
     to_send: list[dict] = []
     for doc in teachers:
@@ -1222,7 +1227,6 @@ def invite_teachers(payload: DeanInviteRequest, dean: dict = Depends(dean_dep)):
     })
 
     return {
-        "success": True,
         "requested_count": len(results),
         "sent_count": len(sent),
         "failed_count": len(failed),
@@ -1230,6 +1234,21 @@ def invite_teachers(payload: DeanInviteRequest, dean: dict = Depends(dean_dep)):
         "results": results,
         "email_delivery_enabled": email_service.delivery_enabled(),
     }
+
+
+@router.post("/invite")
+def invite_teachers(payload: DeanInviteRequest, dean: dict = Depends(dean_dep)):
+    """Send invitations to the whole selection in one request; report each outcome.
+
+    Every id is resolved (in one query) and checked before anything is sent,
+    so the response always accounts for every requested teacher: sent,
+    skipped (with why) or failed (with why).
+    """
+    if not email_service.is_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=EMAIL_NOT_CONFIGURED)
+
+    teachers, results = _resolve_teachers(payload.user_ids, dean)
+    return {"success": True, **_send_invitations(teachers, dean, results)}
 
 
 @router.post("/{user_id}/invite")

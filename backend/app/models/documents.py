@@ -11,7 +11,9 @@ from typing import Any
 from app.utils.serializers import utc_now
 
 
-ROLES = ("teacher", "dean", "superadmin")
+# event_manager records events and generates their reports directly, with no
+# Dean review; its events live in their own collection (managed_events).
+ROLES = ("teacher", "dean", "superadmin", "event_manager")
 
 # Full event lifecycle. Drafts live in the teacher's browser, but the value is
 # reserved so that dean views can always exclude it.
@@ -186,24 +188,6 @@ def new_audit_log_document(
         "target_id": str(target_id) if target_id else None,
         "details": details or {},
         "created_at": utc_now(),
-    }
-
-
-def new_department_document(
-    *,
-    name: str,
-    code: str,
-    school: str | None = None,
-    is_active: bool = True,
-) -> dict[str, Any]:
-    now = utc_now()
-    return {
-        "name": name.strip(),
-        "code": code.strip().upper(),
-        "school": school.strip() if school else None,
-        "is_active": is_active,
-        "created_at": now,
-        "updated_at": now,
     }
 
 

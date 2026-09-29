@@ -26,6 +26,7 @@ import {
 } from "../../utils/uploadRules";
 import useUploadLimits from "../../hooks/useUploadLimits";
 import { checkUploadNames } from "../../services/directory";
+import { MAX_REPORT_PHOTOS, saveReportPhotos } from "../../services/eventManager";
 import Combobox from "../../components/common/Combobox";
 import EventSummary from "../../components/common/EventSummary";
 import EventTypeSelect from "../../components/common/EventTypeSelect";
@@ -37,7 +38,9 @@ import {
   listFacultyCoordinators,
 } from "../../services/directory";
 import TeacherShell from "../../components/teacher/TeacherShell";
+import { usePanel } from "../../components/teacher/panel";
 import Modal from "../../components/teacher/Modal";
+import RequirementNotice from "../../components/teacher/RequirementNotice";
 import UploadPanel from "../../components/teacher/UploadPanel";
 import useMediaRefresh from "../../components/common/useMediaRefresh";
 import StatusChip from "../../components/teacher/StatusChip";
@@ -56,11 +59,13 @@ import {
   IconLayers,
 } from "../../components/teacher/icons";
 
+// Whether an upload step is mandatory is a Super Admin setting, so it is read
+// from the upload limits at render time rather than fixed here.
 const STEPS = [
-  { key: "details", label: "Details", Icon: IconLayers, required: true },
-  { key: "photos", label: "Photos", Icon: IconImagePlus, required: true },
-  { key: "videos", label: "Videos", Icon: IconFilm, required: false },
-  { key: "documents", label: "Documents", Icon: IconFilePlus, required: true },
+  { key: "details", label: "Details", Icon: IconLayers },
+  { key: "photos", label: "Photos", Icon: IconImagePlus },
+  { key: "videos", label: "Videos", Icon: IconFilm },
+  { key: "documents", label: "Documents", Icon: IconFilePlus },
 ];
 
 const REQUIRED_DETAILS = [
@@ -188,6 +193,9 @@ const snapshotOf = (data) => JSON.stringify(data);
 
 function CreateEvent() {
   const navigate = useNavigate();
+  const panel = usePanel();
+  // Event Manager: no Dean. Submitting records the event straight away.
+  const direct = !panel.approval;
   const location = useLocation();
   const [searchParams] = useSearchParams();
 
@@ -205,7 +213,7 @@ function CreateEvent() {
    */
   const originPath =
     location.state?.from ||
-    (draftIdParam || editEventIdParam ? "/teacher/my-events" : "/teacher/dashboard");
+    (draftIdParam || editEventIdParam ? `${panel.base}/my-events` : `${panel.base}/dashboard`);
 
   const [step, setStep] = useState(1);
   const [maxStepReached, setMaxStepReached] = useState(1);
@@ -218,13 +226,25 @@ function CreateEvent() {
   const [autoSave, setAutoSave] = useState("idle"); // idle | saving | error
 
   const [fieldErrors, setFieldErrors] = useState({});
-  const [uploadErrors, setUploadErrors] = useState({ photos: false, documents: false });
+  const [uploadErrors, setUploadErrors] = useState({
+    photos: false,
+    videos: false,
+    documents: false,
+  });
 
   // Files live on the server from the moment they are picked, so these hold
   // saved records rather than browser File objects.
   const [mediaItems, setMediaItems] = useState([]);
   const [documentItems, setDocumentItems] = useState([]);
   const [uploads, setUploads] = useState([]);
+
+  // The report's photos are picked while uploading them -- for the Event
+  // Manager's own report and for the Dean's report on a teacher's event
+  // alike. null while the report still uses its default -- the first photos
+  // uploaded -- so new uploads keep filling the ticks until the user makes a
+  // choice of their own.
+  const [reportChoice, setReportChoice] = useState(null);
+  const [savingReportPhotos, setSavingReportPhotos] = useState(false);
 
   // Event categories and the coordinator directory (PRD 4 / 5 / 14).
   const {
@@ -282,6 +302,14 @@ function CreateEvent() {
   const { limits: uploadLimits, reload: reloadUploadLimits } = useUploadLimits();
   // The combined document budget, from the same settings as the checks below.
   const documentLimitBytes = limitFor("document", uploadLimits);
+  // Which upload steps must have at least one file before submitting. The
+  // Super Admin sets these; the server applies the same rule on submit.
+  const required = {
+    details: true,
+    photos: Boolean(uploadLimits.photos_required),
+    videos: Boolean(uploadLimits.videos_required),
+    documents: Boolean(uploadLimits.documents_required),
+  };
 
   // The event id is also held in a ref: several files picked at once each need
   // it, and React state would still be null for all of them.
@@ -306,6 +334,10 @@ function CreateEvent() {
   }, [formData]);
 
   const photos = mediaItems.filter((m) => m.media_type === "image");
+  // The server's default is the first photos by _id; ObjectId hex strings
+  // sort the same way, so this matches what the report would show.
+  const reportPhotoIds =
+    reportChoice ?? photos.map((p) => p.id).sort().slice(0, MAX_REPORT_PHOTOS);
   const videos = mediaItems.filter((m) => m.media_type === "video");
 
   const photoUploads = uploads.filter((u) => u.kind === "image");
@@ -391,7 +423,7 @@ function CreateEvent() {
         //    rejected event being corrected. Both bring their files with them.
         if (editEventIdParam) {
           try {
-            const result = await apiJson(`/teacher/events/${editEventIdParam}`);
+            const result = await apiJson(`${panel.api}/events/${editEventIdParam}`);
             const event = result?.event || null;
 
             if (cancelled) return;
@@ -413,6 +445,9 @@ function CreateEvent() {
               eventIdRef.current = event.id;
               setMediaItems(result.media || []);
               setDocumentItems(result.documents || []);
+              if (event.report_photos_chosen) {
+                setReportChoice(event.report_photo_ids || []);
+              }
               const loaded = {
                 eventName: event.event_name || "",
                 eventDate: event.event_date || "",
@@ -454,7 +489,7 @@ function CreateEvent() {
     return () => {
       cancelled = true;
     };
-  }, [draftIdParam, editEventIdParam, navigate]);
+  }, [draftIdParam, editEventIdParam, navigate, panel.api]);
 
   // --------------------------------------------------
   // Form change
@@ -624,7 +659,7 @@ function CreateEvent() {
 
     creatingEventRef.current = (async () => {
       const sent = formDataRef.current;
-      const { event } = await apiJson("/teacher/events", {
+      const { event } = await apiJson(`${panel.api}/events`, {
         method: "POST",
         body: buildEventBody(true),
         signal: abortRef.current?.signal,
@@ -653,7 +688,7 @@ function CreateEvent() {
       creatingEventRef.current = null;
     }
     // buildEventBody reads through refs, so this needs no dependencies.
-  }, []);
+  }, [panel.api]);
 
   // --------------------------------------------------
   // Auto-save step-1 edits once a server draft exists
@@ -673,7 +708,7 @@ function CreateEvent() {
       if (isGone()) return;
       setAutoSave("saving");
       try {
-        await apiJson(`/teacher/events/${serverEventId}`, {
+        await apiJson(`${panel.api}/events/${serverEventId}`, {
           method: "PATCH",
           body: buildEventBody(true),
           signal: abortRef.current?.signal,
@@ -724,8 +759,8 @@ function CreateEvent() {
       if (signal?.aborted) return;
       const path =
         entry.kind === "document"
-          ? `/teacher/events/${eventId}/documents`
-          : `/teacher/events/${eventId}/media`;
+          ? `${panel.api}/events/${eventId}/documents`
+          : `${panel.api}/events/${eventId}/media`;
 
       const result = await apiUpload(path, {
         file: entry.file,
@@ -741,9 +776,8 @@ function CreateEvent() {
         }
       } else if (result?.media) {
         setMediaItems((prev) => [...prev, result.media]);
-        if (result.media.media_type === "image") {
-          setUploadErrors((prev) => ({ ...prev, photos: false }));
-        }
+        const bucket = result.media.media_type === "image" ? "photos" : "videos";
+        setUploadErrors((prev) => ({ ...prev, [bucket]: false }));
       }
 
       setUploads((prev) => prev.filter((item) => item.key !== entry.key));
@@ -756,7 +790,7 @@ function CreateEvent() {
         progress: null,
       });
     }
-  }, [ensureEventId]);
+  }, [ensureEventId, panel.api]);
 
   /**
    * Validate a batch against the per-step caps and queue what survives.
@@ -801,6 +835,7 @@ function CreateEvent() {
         eventIdRef.current,
         Array.from(files).map((file) => file.name),
         "media",
+        panel.api,
       );
       existingNames = [
         ...existingNames,
@@ -848,8 +883,10 @@ function CreateEvent() {
     );
 
     try {
-      await apiJson(`/teacher/events/${eventId}/media/${item.id}`, { method: "DELETE" });
+      await apiJson(`${panel.api}/events/${eventId}/media/${item.id}`, { method: "DELETE" });
       setMediaItems((prev) => prev.filter((m) => m.id !== item.id));
+      // The server drops a deleted photo from the saved choice too.
+      setReportChoice((chosen) => chosen && chosen.filter((id) => id !== item.id));
     } catch (err) {
       console.error("Remove media error:", err);
       setError(err?.message || "Could not remove that file.");
@@ -868,7 +905,7 @@ function CreateEvent() {
     );
 
     try {
-      await apiJson(`/teacher/events/${eventId}/documents/${item.id}`, { method: "DELETE" });
+      await apiJson(`${panel.api}/events/${eventId}/documents/${item.id}`, { method: "DELETE" });
       setDocumentItems((prev) => prev.filter((d) => d.id !== item.id));
     } catch (err) {
       console.error("Remove document error:", err);
@@ -879,11 +916,35 @@ function CreateEvent() {
     }
   };
 
+  /** Tick or untick a photo for the report; saved at once, reverted on failure. */
+  const toggleReportPhoto = async (photoId) => {
+    const eventId = eventIdRef.current;
+    if (!eventId || savingReportPhotos) return;
+
+    const next = reportPhotoIds.includes(photoId)
+      ? reportPhotoIds.filter((id) => id !== photoId)
+      : [...reportPhotoIds, photoId];
+    if (next.length > MAX_REPORT_PHOTOS) return;
+
+    const previous = reportChoice;
+    setReportChoice(next);
+    setSavingReportPhotos(true);
+    try {
+      const result = await saveReportPhotos(eventId, next, panel.api);
+      setReportChoice(result?.report_photo_ids || next);
+    } catch (err) {
+      setReportChoice(previous);
+      setError(err?.message || "Could not save the report photos.");
+    } finally {
+      setSavingReportPhotos(false);
+    }
+  };
+
   // Saved files' links are signed and expire; refetch them when one fails.
   const refreshMediaLinks = useMediaRefresh(async () => {
     const eventId = eventIdRef.current;
     if (!eventId || isGone()) return;
-    const result = await apiJson(`/teacher/events/${eventId}`, {
+    const result = await apiJson(`${panel.api}/events/${eventId}`, {
       signal: abortRef.current?.signal,
     });
     if (isGone()) return;
@@ -908,21 +969,26 @@ function CreateEvent() {
    * The first required step before `target` that is not done yet, or null.
    *
    * Moving forward -- "Next" or a later step in the rail -- goes through this,
-   * so the photo step cannot be skipped: an edit opened from My Events starts
-   * with every step reachable, and the rail used to jump straight past it.
-   * Documents are the last step, so the submit check covers them.
+   * so a mandatory upload step cannot be skipped: an edit opened from My Events
+   * starts with every step reachable, and the rail used to jump straight past
+   * it. Documents are the last step, so the submit check covers them.
    */
   const blockerBefore = (target) => {
     if (target > 1 && !validateDetails()) {
       return { step: 1, message: "Please complete the required fields before continuing." };
     }
-    if (target > 2 && photos.length === 0) {
-      setUploadErrors((prev) => ({ ...prev, photos: true }));
+    const uploadSteps = [
+      { step: 2, bucket: "photos", noun: "photo", items: photos, pending: photoUploads },
+      { step: 3, bucket: "videos", noun: "video", items: videos, pending: videoUploads },
+    ];
+    for (const { step: at, bucket, noun, items, pending } of uploadSteps) {
+      if (target <= at || !required[bucket] || items.length > 0) continue;
+      setUploadErrors((prev) => ({ ...prev, [bucket]: true }));
       return {
-        step: 2,
-        message: photoUploads.some((u) => !u.error)
-          ? "Please wait for your photo to finish uploading before continuing."
-          : "Photo upload is mandatory. Please upload at least one photo before continuing.",
+        step: at,
+        message: pending.some((u) => !u.error)
+          ? `Please wait for your ${noun} to finish uploading before continuing.`
+          : `${noun === "photo" ? "Photo" : "Video"} upload is mandatory. Please upload at least one ${noun} before continuing.`,
       };
     }
     return null;
@@ -984,7 +1050,7 @@ function CreateEvent() {
 
       if (eventIdRef.current) {
         // Already on the server, with its files attached.
-        await apiJson(`/teacher/events/${eventIdRef.current}`, {
+        await apiJson(`${panel.api}/events/${eventIdRef.current}`, {
           method: "PATCH",
           body: buildEventBody(true),
         });
@@ -1061,31 +1127,31 @@ function CreateEvent() {
       return;
     }
 
-    const missingPhotos = photos.length === 0;
-    const missingDocs = documentItems.length === 0;
+    // Only the kinds the Super Admin has made mandatory, in step order.
+    const missing = [
+      { step: 2, bucket: "photos", noun: "photo", label: "Photo", count: photos.length },
+      { step: 3, bucket: "videos", noun: "video", label: "Video", count: videos.length },
+      { step: 4, bucket: "documents", noun: "document", label: "Document", count: documentItems.length },
+    ].filter(({ bucket, count }) => required[bucket] && count === 0);
 
-    if (missingPhotos || missingDocs) {
+    if (missing.length > 0) {
       setUploadErrors({
-        photos: missingPhotos,
-        documents: missingDocs,
+        photos: missing.some((m) => m.bucket === "photos"),
+        videos: missing.some((m) => m.bucket === "videos"),
+        documents: missing.some((m) => m.bucket === "documents"),
       });
 
-      if (missingPhotos && missingDocs) {
-        setError(
-          "Photo and Document uploads are both mandatory. Please upload at least one photo and at least one document before submitting."
-        );
-        setStep(2);
-      } else if (missingPhotos) {
-        setError(
-          "Photo upload is mandatory. Please upload at least one photo before submitting."
-        );
-        setStep(2);
-      } else {
-        setError(
-          "Document upload is mandatory. Please upload at least one document before submitting."
-        );
-        setStep(4);
-      }
+      const joinList = (words) =>
+        words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+      const labels = joinList(missing.map((m) => m.label));
+      const each = joinList(missing.map((m) => `at least one ${m.noun}`));
+
+      setError(
+        missing.length === 1
+          ? `${labels} upload is mandatory. Please upload ${each} before submitting.`
+          : `${labels} uploads are mandatory. Please upload ${each} before submitting.`
+      );
+      setStep(missing[0].step);
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
@@ -1109,21 +1175,21 @@ function CreateEvent() {
     setLoading(true);
 
     try {
-      const user = await fetchCurrentUser();
+      // The user loaded with the page; no extra /auth/me round trip per
+      // submit. An expired session still surfaces: the PATCH below gets 401.
+      const user = userRef.current || (await fetchCurrentUser());
       if (!user) throw new Error("Your session has expired. Please log in again.");
 
-      // A draft or a rejected event already exists and is edited in place,
-      // with its files attached; otherwise nothing was uploaded and the event
-      // is created now. Either way the server sets it to pending.
-      const result = eventIdRef.current
-        ? await apiJson(`/teacher/events/${eventIdRef.current}`, {
-            method: "PATCH",
-            body: buildEventBody(false),
-          })
-        : await apiJson("/teacher/events", {
-            method: "POST",
-            body: buildEventBody(false),
-          });
+      // The server only creates events as drafts (files attach to a draft),
+      // then submits them with a PATCH. An upload normally creates that draft
+      // along the way; when the Super Admin has made every upload optional
+      // and nothing was attached, it is created here first -- sending the
+      // event straight to POST as a submission is refused by the API.
+      const eventId = eventIdRef.current || (await ensureEventId());
+      const result = await apiJson(`${panel.api}/events/${eventId}`, {
+        method: "PATCH",
+        body: buildEventBody(false),
+      });
 
       if (editingDraftRef.current) {
         deleteTeacherDraft(user.id, editingDraftRef.current);
@@ -1143,7 +1209,7 @@ function CreateEvent() {
   /** Leaving the success dialog leaves the form: it has done its job. */
   const finishSubmission = () => {
     setSubmitted(null);
-    navigate("/teacher/my-events?filter=submitted");
+    navigate(`${panel.base}/my-events?filter=${direct ? "recorded" : "submitted"}`);
   };
 
   const handleLogout = async () => {
@@ -1160,7 +1226,28 @@ function CreateEvent() {
   const resumedExisting = Boolean(draftIdParam || editEventIdParam);
   const mode = resubmitting ? "resubmit" : resumedExisting ? "draft" : "new";
 
-  const heroCopy = {
+  const heroCopy = direct ? {
+    resubmit: {
+      eyebrow: "Edit Event",
+      title: "Edit",
+      accent: "Event",
+      subtitle: "Update the event's details and files, then save the changes.",
+    },
+    draft: {
+      eyebrow: "Draft Mode",
+      title: "Edit Event",
+      accent: "Draft",
+      subtitle:
+        "Resume your saved draft. Anything you upload is kept, so you can finish this later.",
+    },
+    new: {
+      eyebrow: "New Event",
+      title: "Create",
+      accent: "Event",
+      subtitle:
+        "Record the event's details and files, or save a draft and finish it later.",
+    },
+  }[mode] : {
     resubmit: {
       eyebrow: "Resubmission",
       title: "Edit &",
@@ -1303,7 +1390,7 @@ function CreateEvent() {
                       <i>{done ? <IconCheck className="h-3 w-3" /> : number}</i>
                       <span className={number === step ? "" : "hidden sm:inline"}>
                         {item.label}
-                        {item.required && <span className="req ml-0.5">*</span>}
+                        {required[item.key] && <span className="req ml-0.5">*</span>}
                       </span>
                     </button>
                   </div>
@@ -1319,13 +1406,17 @@ function CreateEvent() {
               {step === 1 && "Event Information"}
               {step === 2 && (
                 <>
-                  Photo Upload <span className="req">*</span>
+                  Photo Upload {required.photos && <span className="req">*</span>}
                 </>
               )}
-              {step === 3 && "Video Upload"}
+              {step === 3 && (
+                <>
+                  Video Upload {required.videos && <span className="req">*</span>}
+                </>
+              )}
               {step === 4 && (
                 <>
-                  Document Upload <span className="req">*</span>
+                  Document Upload {required.documents && <span className="req">*</span>}
                 </>
               )}
               <span className="ml-2 text-[11px] font-semibold uppercase tracking-wider text-accent">
@@ -1341,14 +1432,22 @@ function CreateEvent() {
               )}
               {step === 2 && (
                 <>
-                  <span className="font-semibold text-ink">Required.</span> Posters, banners and photographs — upload at least 1 photo, up to {uploadLimits.max_photos_per_event} images, {formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each{uploadLimits.max_photo_total_mb ? ` (${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total)` : ""}.
+                  {required.photos ? (
+                    <><span className="font-semibold text-ink">Required.</span> Posters, banners and photographs — upload at least 1 photo, up to</>
+                  ) : (
+                    <>Optional. Posters, banners and photographs — up to</>
+                  )} {uploadLimits.max_photos_per_event} images, {formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each{uploadLimits.max_photo_total_mb ? ` (${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total)` : ""}.
                 </>
               )}
               {step === 3 &&
-                `Optional. Teasers and recordings — ${formatMb(uploadLimits.max_video_total_mb * 1024 * 1024)} in total${uploadLimits.max_videos_per_event ? `, up to ${uploadLimits.max_videos_per_event} videos` : ", across any number of videos"}.`}
+                `${required.videos ? "Required. Teasers and recordings — upload at least 1 video," : "Optional. Teasers and recordings —"} ${formatMb(uploadLimits.max_video_total_mb * 1024 * 1024)} in total${uploadLimits.max_videos_per_event ? `, up to ${uploadLimits.max_videos_per_event} videos` : ", across any number of videos"}.`}
               {step === 4 && (
                 <>
-                  <span className="font-semibold text-ink">Required.</span> PDF, Word, Excel, PowerPoint, Text or CSV — upload at least 1 document, up to {formatMb(documentLimitBytes)} in total.
+                  {required.documents ? (
+                    <><span className="font-semibold text-ink">Required.</span> PDF, Word, Excel, PowerPoint, Text or CSV — upload at least 1 document, up to</>
+                  ) : (
+                    <>Optional. PDF, Word, Excel, PowerPoint, Text or CSV — up to</>
+                  )} {formatMb(documentLimitBytes)} in total.
                 </>
               )}
             </p>
@@ -1610,40 +1709,30 @@ function CreateEvent() {
           {/* ------------------------------------------------- step 2: photos */}
           {step === 2 && (
             <div className="px-4 py-5 sm:px-6">
-              {photos.length === 0 ? (
-                // The notice uses the Document step's accent info styling in
-                // the Video step's compact bar, with "Mandatory Upload" in the
-                // required-marker red; the amber it used before read as a
-                // faint yellow. A failed attempt to continue still turns it red.
-                <div
-                  className={`mb-4 flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-xs ${
-                    uploadErrors.photos
-                      ? "border-err/30 bg-err/10 text-err"
-                      : "border-accent/15 bg-accent/6 text-ink"
-                  }`}
-                >
-                  {uploadErrors.photos ? (
-                    <IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-err" />
-                  ) : (
-                    <IconInfo className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
-                  )}
-                  <div>
-                    <span className="font-semibold text-err">
-                      {uploadErrors.photos ? "Photo upload is required to continue:" : "Mandatory Upload:"}
-                    </span>{" "}
+              <RequirementNotice
+                required={required.photos}
+                count={photos.length}
+                noun="photo"
+                plural="photos"
+                example="e.g. event poster, banner, or photograph"
+                blocksNextStep
+                failed={uploadErrors.photos}
+                detail={`Up to ${uploadLimits.max_photos_per_event} photos allowed`}
+              />
+
+              {photos.length > 0 && (
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/15 bg-accent/6 px-3.5 py-2 text-xs text-ink">
+                  <span className="flex items-center gap-2">
+                    <IconInfo className="h-4 w-4 shrink-0 text-accent" />
                     <span>
-                      At least one photo (e.g. event poster, banner, or photograph) must be uploaded before you can move on to the next step or submit this event for approval.
+                      Tick up to {MAX_REPORT_PHOTOS} photos to include in the event report; it
+                      arranges them to suit their mix of portrait and landscape.
+                      {reportChoice === null &&
+                        ` Until you choose, the first ${MAX_REPORT_PHOTOS} uploaded are used.`}
                     </span>
-                  </div>
-                </div>
-              ) : (
-                <div className="mb-4 flex items-center justify-between rounded-xl border border-ok/20 bg-ok/10 px-3.5 py-2 text-xs text-ok">
-                  <span className="flex items-center gap-2 font-medium">
-                    <IconCheckCircle className="h-4 w-4" />
-                    Photo requirement met ({photos.length} {photos.length === 1 ? "photo" : "photos"} uploaded)
                   </span>
-                  <span className="text-[11px] text-muted">
-                    Up to {uploadLimits.max_photos_per_event} photos allowed
+                  <span className="font-semibold text-accent">
+                    {savingReportPhotos ? "Saving…" : `${reportPhotoIds.length} of ${MAX_REPORT_PHOTOS} chosen`}
                   </span>
                 </div>
               )}
@@ -1664,7 +1753,13 @@ function CreateEvent() {
                 emptyLabel="Drag photos here"
                 hint="Posters, banners, and photographs of the event."
                 disabled={busy}
-                required={true}
+                required={required.photos}
+                reportSelection={{
+                  ids: reportPhotoIds,
+                  max: MAX_REPORT_PHOTOS,
+                  busy: savingReportPhotos,
+                  onToggle: toggleReportPhoto,
+                }}
                 onPick={(files) => handlePick(files, "image")}
                 onRemove={handleRemoveMedia}
                 onRetry={runUpload}
@@ -1677,16 +1772,15 @@ function CreateEvent() {
           {/* ------------------------------------------------- step 3: videos */}
           {step === 3 && (
             <div className="px-4 py-5 sm:px-6">
-              <div className="mb-4 flex items-center justify-between rounded-xl border hairline bg-raised/40 px-3.5 py-2 text-xs text-muted">
-                <span>
-                  Video upload is <strong className="font-semibold text-ink">optional</strong>. You may submit your event with or without video recordings.
-                </span>
-                {videos.length > 0 && (
-                  <span className="font-medium text-ink">
-                    {videos.length} {videos.length === 1 ? "video" : "videos"} attached
-                  </span>
-                )}
-              </div>
+              <RequirementNotice
+                required={required.videos}
+                count={videos.length}
+                noun="video"
+                plural="videos"
+                example="e.g. a teaser, highlights, or a recording"
+                blocksNextStep
+                failed={uploadErrors.videos}
+              />
 
               <UploadPanel
                 kind="video"
@@ -1700,6 +1794,7 @@ function CreateEvent() {
                 emptyLabel="Drag videos here"
                 hint="Teasers, highlights, or a recording of the event."
                 disabled={busy}
+                required={required.videos}
                 onPick={(files) => handlePick(files, "video")}
                 onRemove={handleRemoveMedia}
                 onRetry={runUpload}
@@ -1712,39 +1807,15 @@ function CreateEvent() {
           {/* ---------------------------------------------- step 4: documents */}
           {step === 4 && (
             <div className="px-4 py-5 sm:px-6">
-              {documentItems.length === 0 ? (
-                <div
-                  className={`mb-4 flex items-start gap-2.5 rounded-xl border p-3 text-xs ${
-                    uploadErrors.documents
-                      ? "border-err/30 bg-err/10 text-err"
-                      : "border-amber-500/25 bg-amber-500/10 text-amber-800 dark:text-amber-300"
-                  }`}
-                >
-                  <IconAlertTriangle
-                    className={`mt-0.5 h-4 w-4 shrink-0 ${
-                      uploadErrors.documents ? "text-err" : "text-amber-600 dark:text-amber-400"
-                    }`}
-                  />
-                  <div>
-                    <span className="font-semibold">
-                      {uploadErrors.documents ? "Document upload is required before submission:" : "Mandatory Upload:"}
-                    </span>{" "}
-                    <span>
-                      At least one supporting document (e.g. event proposal, agenda, circular, or approval letter) must be uploaded before submitting this event for approval.
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <div className="mb-4 flex items-center justify-between rounded-xl border border-ok/20 bg-ok/10 px-3.5 py-2 text-xs text-ok">
-                  <span className="flex items-center gap-2 font-medium">
-                    <IconCheckCircle className="h-4 w-4" />
-                    Document requirement met ({documentItems.length} {documentItems.length === 1 ? "document" : "documents"} uploaded)
-                  </span>
-                  <span className="text-[11px] text-muted">
-                    Total: {formatMb(documentBytesUsed)} / {formatMb(documentLimitBytes)}
-                  </span>
-                </div>
-              )}
+              <RequirementNotice
+                required={required.documents}
+                count={documentItems.length}
+                noun="document"
+                plural="documents"
+                example="e.g. event proposal, agenda, circular, or approval letter"
+                failed={uploadErrors.documents}
+                detail={`Total: ${formatMb(documentBytesUsed)} / ${formatMb(documentLimitBytes)}`}
+              />
 
               <UploadPanel
                 kind="document"
@@ -1758,7 +1829,7 @@ function CreateEvent() {
                 emptyLabel="Drag documents here"
                 hint="Agenda, budget, invitation letter, or approval paperwork."
                 disabled={busy}
-                required={true}
+                required={required.documents}
                 onPick={(files) => handlePick(files, "document")}
                 onRemove={handleRemoveDocument}
                 onRetry={runUpload}
@@ -1769,7 +1840,11 @@ function CreateEvent() {
               <div className="mt-4 flex items-start gap-3 rounded-xl border border-accent/15 bg-accent/6 p-3.5">
                 <IconInfo className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
                 <p className="text-sm text-ink">
-                  {resubmitting
+                  {direct
+                    ? resubmitting
+                      ? "Saving updates the recorded event and its report."
+                      : "Once saved, the event is recorded straight away. No approval is needed, and its report can be downloaded at once."
+                    : resubmitting
                     ? "Resubmitting sets the event status back to Pending and notifies the Dean for re-evaluation."
                     : "Once submitted, your event enters the approval workflow and is reviewed by the Dean."}
                 </p>
@@ -1889,8 +1964,8 @@ function CreateEvent() {
                       : uploading
                       ? "Waiting for uploads…"
                       : resubmitting
-                      ? "Update & Resubmit for Approval"
-                      : "Submit for Approval"}
+                      ? direct ? "Save Changes" : "Update & Resubmit for Approval"
+                      : direct ? "Save Event" : "Submit for Approval"}
                   </span>
                 </button>
               )}
@@ -1979,7 +2054,7 @@ function CreateEvent() {
         onClose={() => setDraftSaved(null)}
         eyebrow="Draft saved"
         title="Your event is saved as a draft"
-        subtitle="Nothing has been sent to the Dean yet."
+        subtitle={direct ? "It is not recorded as an event yet." : "Nothing has been sent to the Dean yet."}
         footer={
           <>
             <button
@@ -1989,7 +2064,7 @@ function CreateEvent() {
             >
               Keep editing
             </button>
-            <Link to="/teacher/my-events?filter=draft" className="btn btn-primary">
+            <Link to={`${panel.base}/my-events?filter=draft`} className="btn btn-primary">
               Go to My Events
               <IconArrowRight />
             </Link>
@@ -2012,7 +2087,9 @@ function CreateEvent() {
             </p>
 
             <p className="prose-muted mt-3 text-xs">
-              Submit it for Dean approval from the last step when it is ready.
+              {direct
+                ? "Save it as an event from the last step when it is ready."
+                : "Submit it for Dean approval from the last step when it is ready."}
             </p>
           </div>
         </div>
@@ -2026,11 +2103,19 @@ function CreateEvent() {
         onClose={cancelSubmit}
         eyebrow="Confirm"
         title={
-          resubmitting
+          direct
+            ? resubmitting
+              ? "Save the changes to this event?"
+              : "Are you sure you want to save this event?"
+            : resubmitting
             ? "Are you sure you want to resubmit this event?"
             : "Are you sure you want to submit this event?"
         }
-        subtitle="Check everything below, then confirm. It will be sent to the Dean for approval."
+        subtitle={
+          direct
+            ? "Check everything below, then confirm. It is recorded straight away."
+            : "Check everything below, then confirm. It will be sent to the Dean for approval."
+        }
         wide
         footer={
           <>
@@ -2050,7 +2135,11 @@ function CreateEvent() {
               autoFocus
             >
               {loading ? <span className="spin h-4 w-4" /> : <IconCheck />}
-              {loading
+              {direct
+                ? loading
+                  ? "Saving…"
+                  : "Confirm and save"
+                : loading
                 ? resubmitting
                   ? "Resubmitting…"
                   : "Submitting…"
@@ -2092,7 +2181,9 @@ function CreateEvent() {
         </div>
 
         <p className="prose-muted mt-3 text-xs">
-          You can still edit the event until the Dean approves it.
+          {direct
+            ? "You can still edit the event afterwards."
+            : "You can still edit the event until the Dean approves it."}
         </p>
 
         {confirmError && (
@@ -2104,7 +2195,7 @@ function CreateEvent() {
           >
             <IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-err" />
             <p className="text-sm text-ink">
-              {confirmError} Nothing was submitted — try again, or cancel to keep editing.
+              {confirmError} Nothing was {direct ? "saved" : "submitted"} — try again, or cancel to keep editing.
             </p>
           </div>
         )}
@@ -2116,18 +2207,26 @@ function CreateEvent() {
       <Modal
         open={Boolean(submitted)}
         onClose={finishSubmission}
-        eyebrow={resubmitting ? "Resubmitted" : "Submitted"}
+        eyebrow={direct ? "Saved" : resubmitting ? "Resubmitted" : "Submitted"}
         title={
-          resubmitting
+          direct
+            ? resubmitting
+              ? "Event updated successfully!"
+              : "Event saved successfully!"
+            : resubmitting
             ? "Event resubmitted successfully!"
             : "Event submitted successfully!"
         }
-        subtitle="It is now with the Dean for approval."
+        subtitle={
+          direct
+            ? "It is recorded. You can download its report now."
+            : "It is now with the Dean for approval."
+        }
         footer={
           <>
             {submitted?.id && (
               <Link
-                to={`/teacher/events/${submitted.id}`}
+                to={`${panel.base}/events/${submitted.id}`}
                 onClick={() => setSubmitted(null)}
                 className="btn btn-ghost btn-sm"
               >
@@ -2156,13 +2255,14 @@ function CreateEvent() {
 
             <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted">
               Status:
-              <StatusChip status={submitted?.status || "pending"} />
-              <span>— submitted for Dean approval</span>
+              <StatusChip status={submitted?.status || (direct ? "recorded" : "pending")} />
+              <span>{direct ? "— no approval needed" : "— submitted for Dean approval"}</span>
             </div>
 
             <p className="prose-muted mt-3 text-sm">
-              You will get a notification when the Dean approves it or asks for
-              changes, and every step appears in the event’s progress history.
+              {direct
+                ? "Open the event to choose the photos for its report and download it."
+                : "You will get a notification when the Dean approves it or asks for changes, and every step appears in the event’s progress history."}
             </p>
           </div>
         </div>

@@ -67,7 +67,7 @@ export async function createFacultyCoordinator({ name, phone }) {
  * Returns a { [fileName]: boolean } map; an empty map on failure, because a
  * duplicate check that cannot run must not block the upload.
  */
-export async function checkUploadNames(eventId, fileNames, kind = "media") {
+export async function checkUploadNames(eventId, fileNames, kind = "media", apiBase = "/teacher") {
   const names = (fileNames || []).filter(Boolean);
   if (!eventId || names.length === 0) return {};
 
@@ -77,7 +77,7 @@ export async function checkUploadNames(eventId, fileNames, kind = "media") {
 
   try {
     const data = await apiJson(
-      `/teacher/events/${eventId}/uploads/check-name?${query}&kind=${kind}`,
+      `${apiBase}/events/${eventId}/uploads/check-name?${query}&kind=${kind}`,
     );
     return data?.duplicates || {};
   } catch {

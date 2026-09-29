@@ -111,6 +111,13 @@ upload_config = db["upload_config"]
 audit_logs = db["audit_logs"]
 # Master registry for academic departments
 departments = db["departments"]
+# Event Manager role: events recorded directly (no Dean review), and their
+# photos/videos and documents -- the same record shapes as the teacher
+# collections, kept apart so nothing in the teacher, Dean or superadmin flows
+# ever sees them.
+managed_events = db["managed_events"]
+managed_event_media = db["managed_event_media"]
+managed_event_documents = db["managed_event_documents"]
 
 # Uploaded file bytes are stored in GridFS so that MongoDB remains the single
 # store for the application, including media and documents.
@@ -254,6 +261,17 @@ def ensure_indexes() -> None:
     departments.create_index([("name", ASCENDING)], unique=True, name="name_unique")
     departments.create_index([("code", ASCENDING)], unique=True, name="code_unique", sparse=True)
     departments.create_index([("is_active", ASCENDING)], name="is_active")
+
+    managed_events.create_index(
+        [("owner_id", ASCENDING), ("created_at", DESCENDING)],
+        name="owner_created",
+    )
+    for collection in (managed_event_media, managed_event_documents):
+        collection.create_index([("event_id", ASCENDING)], name="event")
+        collection.create_index(
+            [("event_id", ASCENDING), ("name_key", ASCENDING)],
+            name="event_name",
+        )
 
     # Imported here rather than at module scope: the service imports this
     # module for its collection handle, so a top-level import would cycle.
