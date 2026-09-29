@@ -21,5 +21,7 @@ env/
 # Emails saved instead of sent when EMAIL_DELIVERY_ENABLED=false
 email_outbox/
 
-# Rotating application log files (LOG_DIR)
+# Rotating application log files (LOG_DIR) -- keep the directory in git
+# so a fresh clone already has logs/ without the server having to create it.
 logs/
+!logs/.gitkeep
