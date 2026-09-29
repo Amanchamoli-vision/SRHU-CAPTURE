@@ -5,8 +5,9 @@ import AuthCard, { AuthAlert, buttonClass, inputClass } from "./AuthCard";
 import EyeIcon from "../../components/common/EyeIcon";
 
 /**
- * Where a teacher lands from a Dean's invitation email: choose a password and
- * the account is active. The same shape as ResetPassword, which this mirrors;
+ * Where an invited user lands from their invitation email -- a teacher invited
+ * by a Dean, or an Event Manager invited by a Super Admin: choose a password
+ * and the account is active (following the link also verifies the email). The same shape as ResetPassword, which this mirrors;
  * the server side is POST /auth/accept-invite.
  */
 function AcceptInvite() {
@@ -54,10 +55,10 @@ function AcceptInvite() {
     <AuthCard
       eyebrow="Welcome to Campus Capture"
       title="Set your password"
-      subtitle="Your Dean has invited you. Choose a password with at least 6 characters to activate your account."
+      subtitle="You have been invited. Choose a password with at least 6 characters to verify your email and activate your account."
       footer={
         <p>
-          Link expired? Ask your Dean to send a new invitation, or{" "}
+          Link expired? Ask whoever invited you to send a new invitation, or{" "}
           <Link to="/forgot-password" className="link font-semibold">
             reset your password
           </Link>

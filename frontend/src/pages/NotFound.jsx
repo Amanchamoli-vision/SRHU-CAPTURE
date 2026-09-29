@@ -7,6 +7,7 @@ const HOME_BY_ROLE = {
   teacher: "/teacher/dashboard",
   dean: "/dean/dashboard",
   superadmin: "/superadmin/dashboard",
+  event_manager: "/event_manager/dashboard",
 };
 
 /**

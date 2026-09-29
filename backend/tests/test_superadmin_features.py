@@ -114,44 +114,6 @@ class SuperAdminFeaturesTests(unittest.TestCase):
             self.assertIn("temporary_password", data)
             mock_update.assert_called_once()
 
-    def test_departments_crud(self) -> None:
-        dept_id = str(ObjectId())
-        dept_doc = {
-            "_id": ObjectId(dept_id),
-            "id": dept_id,
-            "name": "Computer Science",
-            "code": "CSE",
-            "school": "Engineering",
-            "is_active": True,
-        }
-
-        with patch("app.utils.auth.get_current_user", return_value=SUPERADMIN), \
-             patch("app.routers.superadmin.departments.find_one", return_value=None), \
-             patch("app.routers.superadmin.departments.insert_one", return_value=MagicMock(inserted_id=ObjectId(dept_id))), \
-             patch("app.services.audit_service.audit_logs.insert_one"):
-            # Create
-            response = self.client.post(
-                "/superadmin/departments",
-                json={"name": "Computer Science", "code": "CSE", "school": "Engineering"},
-                headers={"Authorization": "Bearer token"},
-            )
-            self.assertEqual(response.status_code, 201)
-            data = response.json()
-            self.assertTrue(data["success"])
-            self.assertEqual(data["department"]["code"], "CSE")
-
-        with patch("app.utils.auth.get_current_user", return_value=SUPERADMIN), \
-             patch("app.routers.superadmin.departments.find") as mock_find, \
-             patch("app.routers.superadmin._safe_count", return_value=1):
-            mock_find.return_value.sort.return_value = [dept_doc]
-            # List
-            response = self.client.get(
-                "/superadmin/departments",
-                headers={"Authorization": "Bearer token"},
-            )
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(len(response.json()["departments"]), 1)
-
     def test_audit_logs_listing(self) -> None:
         log_doc = {
             "_id": ObjectId(),

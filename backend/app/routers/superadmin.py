@@ -22,10 +22,9 @@ from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
-from app.database import audit_logs, departments, event_media, events, users
+from app.database import audit_logs, event_media, events, users
 from app.models.documents import (
     USER_PRIVATE_FIELDS,
-    new_department_document,
     new_user_document,
 )
 from app.routers.auth import find_user_by_email
@@ -33,10 +32,9 @@ from app.schemas.superadmin import (
     BulkOnboardTeacherItem,
     BulkOnboardTeachersRequest,
     CreateDeanRequest,
-    CreateDepartmentRequest,
+    CreateEventManagerRequest,
     ResetUserPasswordRequest,
     SendCredentialsRequest,
-    UpdateDepartmentRequest,
     UpdateUserProfileRequest,
     UploadLimitsUpdateRequest,
 )
@@ -53,7 +51,12 @@ from app.services.upload_config_service import (
     update_upload_limits,
 )
 from app.utils.auth import get_superadmin_user, public_user, superadmin_dep
-from app.utils.security import generate_temporary_password, hash_password
+from app.utils.security import (
+    generate_one_time_token,
+    generate_temporary_password,
+    hash_one_time_token,
+    hash_password,
+)
 from app.utils.serializers import serialize, serialize_many, to_object_id, utc_now
 
 
@@ -128,6 +131,7 @@ def get_dashboard_stats(
         "teachers": role_counts.get("teacher", 0),
         "deans": role_counts.get("dean", 0),
         "superadmins": role_counts.get("superadmin", 0),
+        "event_managers": role_counts.get("event_manager", 0),
         "pending_events": events.count_documents({"status": "pending"}),
     }
 
@@ -190,6 +194,7 @@ def get_all_users(
         "teacher": _safe_count(users, {**count_base, "role": "teacher"}),
         "dean": _safe_count(users, {**count_base, "role": "dean"}),
         "superadmin": _safe_count(users, {**count_base, "role": "superadmin"}),
+        "event_manager": _safe_count(users, {**count_base, "role": "event_manager"}),
     }
 
     cursor = users.find(
@@ -332,6 +337,184 @@ def _send_credentials(
         send(email, name, temporary_password)
     except email_service.EmailDeliveryError:
         logger.warning("credentials_email_failed role=%s", role)
+
+
+# ============================================================
+# EVENT MANAGERS (joined by emailed invitation)
+# ============================================================
+
+EVENT_MANAGER_ROLE = "event_manager"
+
+EMAIL_NOT_CONFIGURED = (
+    "Email is not configured on the server, so the invitation link cannot be sent."
+)
+
+
+def _unusable_password_hash() -> str:
+    """A real bcrypt hash of a discarded secret: no password until the invite
+    is accepted, while a sign-in attempt stays as slow as any other."""
+    return hash_password(generate_one_time_token())
+
+
+def _deliver_event_manager_invite(doc: dict, superadmin: dict) -> tuple[str, str | None]:
+    """Email a new invitation link. Returns ``(outcome, reason)``.
+
+    Same order as the Dean's teacher invitations: the email goes first and the
+    link is stored only once it was accepted, so a failed send never replaces
+    a link the Event Manager already has. The write only lands on an account
+    that is still an active, not-yet-registered Event Manager.
+    """
+    token = generate_one_time_token()
+    try:
+        email_service.send_event_manager_invitation_email(
+            doc["email"], doc.get("name") or "there", token
+        )
+    except email_service.EmailDeliveryError:
+        logger.warning("event_manager_invite_email_failed")
+        return "failed", "The email could not be delivered."
+
+    now = utc_now()
+    result = users.update_one(
+        {
+            "_id": doc["_id"],
+            "role": EVENT_MANAGER_ROLE,
+            "is_active": {"$ne": False},
+            "email_verified": {"$ne": True},
+        },
+        {"$set": {
+            "invite_token_hash": hash_one_time_token(token),
+            "invite_expires_at": now + timedelta(days=settings.teacher_invite_expire_days),
+            "invited_at": now,
+            "invited_by": superadmin.get("id"),
+            "updated_at": now,
+        }},
+    )
+    if getattr(result, "matched_count", 1) == 0:
+        return "failed", "The account changed while sending. The emailed link will not work."
+    return "sent", None
+
+
+def _invite_message(name: str, outcome: str, reason: str | None, *, created: bool) -> str:
+    prefix = f"Event Manager account created for {name}. " if created else ""
+    if outcome == "sent":
+        if email_service.delivery_enabled():
+            return prefix + "A verification link has been emailed to them."
+        return prefix + "The invitation was saved to the server outbox (email delivery is switched off)."
+    return prefix + f"The invitation could not be sent: {reason} Resend it from User Management."
+
+
+@router.post("/event-managers", status_code=status.HTTP_201_CREATED)
+def create_event_manager(
+    payload: CreateEventManagerRequest,
+    superadmin: dict = Depends(superadmin_dep),
+):
+    """Create an Event Manager and email them a one-time invitation link.
+
+    The account has no usable password and an unverified email. Following the
+    link (POST /auth/accept-invite) verifies the address and sets the password,
+    after which they sign in on the normal login page -- the same path a
+    Dean-invited teacher takes. No password is generated, shown or emailed.
+    """
+    if not email_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=EMAIL_NOT_CONFIGURED
+        )
+
+    email = str(payload.email).casefold()
+    existing = find_user_by_email(email)
+    if existing:
+        if existing.get("role") == EVENT_MANAGER_ROLE and not existing.get("email_verified"):
+            detail = (
+                "This Event Manager has already been invited. "
+                "Resend the invitation from User Management."
+            )
+        else:
+            detail = "An account with this email already exists."
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+    document = new_user_document(
+        name=payload.name,
+        email=email,
+        password_hash=_unusable_password_hash(),
+        role=EVENT_MANAGER_ROLE,
+        email_verified=False,
+    )
+    try:
+        result = users.insert_one(document)
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists."
+        )
+    document["_id"] = result.inserted_id
+
+    outcome, reason = _deliver_event_manager_invite(document, superadmin)
+
+    log_audit_event(
+        actor=superadmin,
+        action="event_manager_created",
+        target_type="user",
+        target_id=str(result.inserted_id),
+        details={"name": payload.name, "email": email, "invite": outcome},
+    )
+
+    created = users.find_one({"_id": result.inserted_id}) or document
+    return {
+        "success": True,
+        "message": _invite_message(payload.name, outcome, reason, created=True),
+        "invite": {"status": outcome, "reason": reason},
+        "user": public_user(created),
+    }
+
+
+@router.post("/event-managers/{user_id}/invite")
+def resend_event_manager_invite(user_id: str, superadmin: dict = Depends(superadmin_dep)):
+    """Send a fresh invitation link; the previous one stops working."""
+    user = find_user_or_404(user_id)
+
+    if user.get("role") != EVENT_MANAGER_ROLE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only an Event Manager can be sent an Event Manager invitation.",
+        )
+    if user.get("email_verified"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This Event Manager has already verified their email and registered. "
+                   "Use Reset password if they cannot sign in.",
+        )
+    if user.get("is_active") is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This account is deactivated. Activate it first.",
+        )
+    if not email_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=EMAIL_NOT_CONFIGURED
+        )
+
+    outcome, reason = _deliver_event_manager_invite(user, superadmin)
+
+    log_audit_event(
+        actor=superadmin,
+        action="event_manager_invite_resent",
+        target_type="user",
+        target_id=str(user["_id"]),
+        details={"email": user.get("email"), "invite": outcome},
+    )
+
+    if outcome != "sent":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"The invitation could not be sent: {reason}",
+        )
+
+    name = user.get("name") or user.get("email")
+    return {
+        "success": True,
+        "message": _invite_message(name, outcome, reason, created=False),
+        "user": public_user(users.find_one({"_id": user["_id"]}) or user),
+    }
 
 
 # ============================================================
@@ -777,197 +960,6 @@ def get_audit_logs(
 
 
 # ============================================================
-# DEPARTMENTS MASTER REGISTRY (CRUD)
-# ============================================================
-
-@router.get("/departments")
-def get_departments(
-    authorization: str | None = Header(default=None),
-    q: str | None = Query(default=None, max_length=100),
-    is_active: bool | None = Query(default=None),
-    skip: int | None = Query(default=None, ge=0),
-    limit: int | None = Query(default=None, ge=1, le=500),
-):
-    get_superadmin_user(authorization)
-
-    query: dict[str, Any] = {}
-    if is_active is not None:
-        query["is_active"] = is_active
-
-    search = (q or "").strip()
-    if search:
-        pattern = re.escape(search)
-        query["$or"] = [
-            {"name": {"$regex": pattern, "$options": "i"}},
-            {"code": {"$regex": pattern, "$options": "i"}},
-            {"school": {"$regex": pattern, "$options": "i"}},
-        ]
-
-    total = _safe_count(departments, query)
-    cursor = departments.find(query).sort("name", ASCENDING)
-
-    if skip or limit:
-        cursor = _page_cursor(cursor, skip, limit)
-
-    dept_list = serialize_many(cursor)
-
-    return {
-        "success": True,
-        "departments": dept_list,
-        "total": total,
-        "count": len(dept_list),
-        "has_more": (skip or 0) + len(dept_list) < total if limit is not None else False,
-        "skip": skip or 0,
-        "limit": limit,
-    }
-
-
-@router.post("/departments", status_code=status.HTTP_201_CREATED)
-def create_department(
-    payload: CreateDepartmentRequest,
-    authorization: str | None = Header(default=None),
-):
-    superadmin = get_superadmin_user(authorization)
-
-    existing = departments.find_one({
-        "$or": [
-            {"name": {"$regex": f"^{re.escape(payload.name)}$", "$options": "i"}},
-            {"code": payload.code.upper()},
-        ]
-    })
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A department with this name or code already exists.",
-        )
-
-    doc = new_department_document(
-        name=payload.name,
-        code=payload.code,
-        school=payload.school,
-    )
-    try:
-        res = departments.insert_one(doc)
-    except DuplicateKeyError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A department with this name or code already exists.",
-        )
-
-    doc["_id"] = res.inserted_id
-    dept = serialize(doc)
-
-    log_audit_event(
-        actor=superadmin,
-        action="department_created",
-        target_type="department",
-        target_id=str(res.inserted_id),
-        details={"name": payload.name, "code": payload.code, "school": payload.school},
-    )
-
-    return {
-        "success": True,
-        "message": f"Department '{payload.name}' created successfully.",
-        "department": dept,
-    }
-
-
-@router.put("/departments/{dept_id}")
-def update_department(
-    dept_id: str,
-    payload: UpdateDepartmentRequest,
-    authorization: str | None = Header(default=None),
-):
-    superadmin = get_superadmin_user(authorization)
-    obj_id = to_object_id(dept_id)
-    if not obj_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
-
-    dept = departments.find_one({"_id": obj_id})
-    if not dept:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
-
-    # If renaming or changing code, check collision
-    collision_or = []
-    if payload.name and payload.name.lower() != dept["name"].lower():
-        collision_or.append({"name": {"$regex": f"^{re.escape(payload.name)}$", "$options": "i"}})
-    if payload.code and payload.code.upper() != dept.get("code"):
-        collision_or.append({"code": payload.code.upper()})
-
-    if collision_or:
-        collision = departments.find_one({"_id": {"$ne": obj_id}, "$or": collision_or})
-        if collision:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Another department with this name or code already exists.",
-            )
-
-    update_fields: dict[str, Any] = {"updated_at": utc_now()}
-    if payload.name is not None:
-        update_fields["name"] = payload.name
-    if payload.code is not None:
-        update_fields["code"] = payload.code
-    if payload.school is not None:
-        update_fields["school"] = payload.school
-    if payload.is_active is not None:
-        update_fields["is_active"] = payload.is_active
-
-    updated = departments.find_one_and_update(
-        {"_id": obj_id},
-        {"$set": update_fields},
-        return_document=True,
-    )
-
-    log_audit_event(
-        actor=superadmin,
-        action="department_updated",
-        target_type="department",
-        target_id=dept_id,
-        details=update_fields,
-    )
-
-    return {
-        "success": True,
-        "message": "Department updated successfully.",
-        "department": serialize(updated),
-    }
-
-
-@router.delete("/departments/{dept_id}")
-def delete_department(
-    dept_id: str,
-    authorization: str | None = Header(default=None),
-):
-    superadmin = get_superadmin_user(authorization)
-    obj_id = to_object_id(dept_id)
-    if not obj_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
-
-    dept = departments.find_one({"_id": obj_id})
-    if not dept:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found")
-
-    # Soft delete by marking is_active=False
-    departments.find_one_and_update(
-        {"_id": obj_id},
-        {"$set": {"is_active": False, "updated_at": utc_now()}},
-    )
-
-    log_audit_event(
-        actor=superadmin,
-        action="department_deactivated",
-        target_type="department",
-        target_id=dept_id,
-        details={"name": dept.get("name"), "code": dept.get("code")},
-    )
-
-    return {
-        "success": True,
-        "message": f"Department '{dept.get('name')}' has been deactivated.",
-    }
-
-
-# ============================================================
 # DELETE AN EVENT
 # ============================================================
 
@@ -1186,21 +1178,6 @@ def get_dashboard_analytics(
         for row in events.aggregate(pipeline_cat)
     ]
 
-    # 4. Department Participation Leaderboard
-    teachers_cursor = users.find({"role": "teacher"}, {"_id": 1, "department": 1})
-    teacher_dept_map = {str(t["_id"]): t.get("department") or "Unassigned" for t in teachers_cursor}
-
-    dept_counts: dict[str, int] = {}
-    for ev in events.find({}, {"teacher_id": 1}):
-        tid = str(ev.get("teacher_id", ""))
-        dept = teacher_dept_map.get(tid, "Unassigned")
-        dept_counts[dept] = dept_counts.get(dept, 0) + 1
-
-    department_leaderboard = [
-        {"department": dept, "events": count}
-        for dept, count in sorted(dept_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-    ]
-
     return {
         "success": True,
         "kpis": {
@@ -1215,7 +1192,6 @@ def get_dashboard_analytics(
         },
         "monthly_trends": monthly_trends,
         "category_distribution": category_distribution,
-        "department_leaderboard": department_leaderboard,
     }
 
 

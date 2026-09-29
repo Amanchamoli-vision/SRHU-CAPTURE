@@ -26,6 +26,16 @@ describe("fromServer / toWire", () => {
   it("treats an emptied input as no cap", () => {
     expect(toWire({ max_photo_total_mb: "" }).max_photo_total_mb).toBeNull();
   });
+
+  it("keeps the mandatory-upload switches as booleans", () => {
+    const values = fromServer({ photos_required: false, videos_required: true });
+    expect(values).toEqual({ photos_required: false, videos_required: true });
+    expect(toWire(values)).toEqual({ photos_required: false, videos_required: true });
+  });
+
+  it("does not report the switches as validation errors", () => {
+    expect(validateLimits({ ...base(), videos_required: true }, bounds)).toEqual({});
+  });
 });
 
 describe("validateLimits", () => {

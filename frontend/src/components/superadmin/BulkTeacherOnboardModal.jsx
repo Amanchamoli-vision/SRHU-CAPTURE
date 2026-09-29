@@ -34,10 +34,10 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
 
   const handleDownloadSample = () => {
     const csvContent =
-      "Name,Email ID,Department\n" +
-      "Dr. Rajesh Sharma,rajesh.cse@srhu.edu.in,Computer Science & Engineering\n" +
-      "Dr. Meenakshi Sundaram,meenakshi.ece@srhu.edu.in,Electronics & Communication\n" +
-      "Prof. Amit Chauhan,amit.mgmt@srhu.edu.in,Management Studies\n";
+      "Name,Email ID\n" +
+      "Dr. Rajesh Sharma,rajesh.cse@srhu.edu.in\n" +
+      "Dr. Meenakshi Sundaram,meenakshi.ece@srhu.edu.in\n" +
+      "Prof. Amit Chauhan,amit.mgmt@srhu.edu.in\n";
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -79,15 +79,12 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
 
     let nameIdx = -1;
     let emailIdx = -1;
-    let deptIdx = -1;
 
     header.forEach((col, idx) => {
       if (["name", "teacher name", "teacher_name", "full name", "fullname", "faculty name"].includes(col)) {
         nameIdx = idx;
       } else if (["email", "email id", "email_id", "email address", "username", "mail"].includes(col)) {
         emailIdx = idx;
-      } else if (["department", "dept", "department name", "dept name"].includes(col)) {
-        deptIdx = idx;
       }
     });
 
@@ -96,7 +93,6 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
       startRow = 0;
       nameIdx = 0;
       emailIdx = 1;
-      deptIdx = rows[0].length > 2 ? 2 : -1;
     } else if (nameIdx === -1) {
       nameIdx = emailIdx !== 0 ? 0 : 1;
     } else if (emailIdx === -1) {
@@ -109,9 +105,10 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
       if (!row || !row.some((cell) => cell)) continue;
       const name = row[nameIdx] || "";
       const email = (row[emailIdx] || "").toLowerCase();
-      const department = deptIdx !== -1 ? row[deptIdx] || "" : "";
+      // Any other column (an old sheet's Department) is ignored: the
+      // platform serves SST only.
       if (name && email) {
-        teachers.push({ name, email, department });
+        teachers.push({ name, email });
       }
     }
 
@@ -202,9 +199,9 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
 
   const handleDownloadCredentialsCSV = () => {
     if (!result?.created_teachers?.length) return;
-    let csv = "Name,Email,Department,Temporary Password\n";
+    let csv = "Name,Email,Temporary Password\n";
     result.created_teachers.forEach((t) => {
-      csv += `"${t.name}","${t.email}","${t.department || ""}","${t.temporary_password}"\n`;
+      csv += `"${t.name}","${t.email}","${t.temporary_password}"\n`;
     });
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -331,7 +328,7 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
                   Click or drag & drop CSV file here
                 </p>
                 <p className="prose-muted mt-1 text-xs">
-                  Supports .csv format with Name, Email, and Department columns
+                  Supports .csv format with Name and Email columns
                 </p>
                 <input
                   ref={fileInputRef}
@@ -347,7 +344,7 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
                   rows={5}
                   value={csvText}
                   onChange={(e) => setCsvText(e.target.value)}
-                  placeholder="Name,Email ID,Department&#10;Dr. Rajesh Sharma,rajesh.cse@srhu.edu.in,Computer Science & Engineering&#10;Dr. Meenakshi Sundaram,meenakshi.ece@srhu.edu.in,Electronics & Communication"
+                  placeholder="Name,Email ID&#10;Dr. Rajesh Sharma,rajesh.cse@srhu.edu.in&#10;Dr. Meenakshi Sundaram,meenakshi.ece@srhu.edu.in"
                   className="w-full rounded-xl border hairline bg-surface px-3 py-2 font-mono text-xs text-ink placeholder:text-muted/60 focus:border-accent focus:outline-none"
                 />
                 <div className="flex justify-end">
@@ -395,7 +392,6 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
                         <th className="px-3 py-2">#</th>
                         <th className="px-3 py-2">Name</th>
                         <th className="px-3 py-2">Email</th>
-                        <th className="px-3 py-2">Department</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line/8">
@@ -404,7 +400,6 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
                           <td className="px-3 py-2 text-muted">{idx + 1}</td>
                           <td className="font-medium text-ink px-3 py-2">{row.name}</td>
                           <td className="text-muted px-3 py-2">{row.email}</td>
-                          <td className="text-muted px-3 py-2">{row.department || "—"}</td>
                         </tr>
                       ))}
                     </tbody>

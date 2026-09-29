@@ -21,6 +21,7 @@ export const STATUS_TRACK = {
   published: "#8B5CF6",    // violet
   rejected: "#EF4444",     // red
   revoked: "#E11D48",      // rose — a refusal like rejected, but its own
+  recorded: "#10B981",     // emerald — Event Manager: saved, no review
 };
 
 export const STATUS_LABEL = {
@@ -34,6 +35,7 @@ export const STATUS_LABEL = {
   published: "Published",
   rejected: "Rejected",
   revoked: "Revoked",
+  recorded: "Recorded",
 };
 
 const normalize = (status) => String(status ?? "").trim().toLowerCase();

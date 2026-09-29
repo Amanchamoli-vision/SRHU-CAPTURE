@@ -47,7 +47,8 @@ from app.schemas.events import (
     NotificationCreateRequest,
     future_schedule_error,
 )
-from app.services import email_service
+from app.schemas.event_manager import ReportPhotosRequest
+from app.services import email_service, report_files
 from app.services.audit_service import log_audit_event
 from app.services.event_types import resolve_event_type
 from app.services.event_fields import (
@@ -69,6 +70,7 @@ from app.services.storage_service import (
     stream_upload,
 )
 from app.services.upload_config_service import (
+    REQUIREMENT_FIELDS,
     get_public_upload_limits,
     get_upload_limits,
 )
@@ -140,8 +142,10 @@ def ensure_teacher_can_edit(event: dict) -> None:
 def ensure_submittable(event: dict) -> None:
     """Refuse to put an event in front of a Dean without its evidence.
 
-    PRD: at least one photo and at least one supporting document. Every route
-    that moves an event into `pending` must call this -- it used to live inline
+    Which kinds are mandatory is a Super Admin setting (`*_required` in the
+    upload config); the default is the PRD rule of at least one photo and at
+    least one supporting document. Every route that moves an event into
+    `pending` must call this -- it used to live inline
     in the PATCH handler only, so POST /teacher/events (save_as_draft=false)
     and PATCH .../resubmit both reached the Dean's queue with nothing attached.
 
@@ -151,18 +155,28 @@ def ensure_submittable(event: dict) -> None:
     rule must not be switchable from a header.
     """
     event_key = str(event["_id"])
+    limits = get_upload_limits()
 
-    if event_media.count_documents({"event_id": event_key, "media_type": "image"}) < 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one photo is required before submitting the event for approval.",
-        )
+    for label, flag in REQUIREMENT_FIELDS.items():
+        if not limits.get(flag):
+            continue
+        collection, query = _evidence_query(label)
+        if collection.count_documents({"event_id": event_key, **query}) < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"At least one {label} is required before submitting the event for approval.",
+            )
 
-    if event_documents.count_documents({"event_id": event_key}) < 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one document is required before submitting the event for approval.",
-        )
+
+def _evidence_query(label: str) -> tuple:
+    """The collection and extra filter that count one upload kind.
+
+    Resolved per call rather than held in a module-level dict, so the
+    collections patched onto this module in tests are the ones used.
+    """
+    if label == "document":
+        return event_documents, {}
+    return event_media, {"media_type": "image" if label == "photo" else "video"}
 
 
 # Statuses a Dean decision (approve / reject / request changes) may start
@@ -1534,6 +1548,15 @@ def update_event_stage(
             ),
         )
 
+    # Completed is final: it is what the report is generated from, so the
+    # event cannot be stepped back to Approved. (The write below is also
+    # conditional on the status just read, so a race cannot slip past this.)
+    if existing.get("status") == "completed" and normalized_stage != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A completed event cannot be moved back to Approved.",
+        )
+
     updated = update_event(
         event_id,
         {"status": normalized_stage},
@@ -1777,11 +1800,15 @@ def get_teacher_event(
 
     event = find_teacher_event_or_404(event_id, user["id"])
     event_key = str(event["_id"])
+    media = list_media(request, event_key)
+    item = report_files.with_report_photos(
+        with_legacy_metadata(serialize(event)), event, media=media
+    )
 
     return {
         "success": True,
-        "event": with_legacy_metadata(serialize(event)),
-        "media": list_media(request, event_key),
+        "event": item,
+        "media": media,
         "documents": list_documents(request, event_key),
     }
 
@@ -2138,12 +2165,19 @@ def _record_upload(
 
 def _required_kind(collection, record: dict) -> tuple[dict, str] | None:
     """``(query, label)`` when ``record`` counts towards ensure_submittable's
-    evidence -- a photo or a document -- else None (videos are optional)."""
+    evidence -- a kind the Super Admin has made mandatory -- else None."""
     if collection is event_documents:
-        return {}, "document"
-    if record.get("media_type") == "image":
-        return {"media_type": "image"}, "photo"
-    return None
+        label = "document"
+    elif record.get("media_type") == "image":
+        label = "photo"
+    elif record.get("media_type") == "video":
+        label = "video"
+    else:
+        return None
+
+    if not get_upload_limits().get(REQUIREMENT_FIELDS[label]):
+        return None
+    return _evidence_query(label)[1], label
 
 
 def _awaiting_dean(event: dict) -> bool:
@@ -2376,11 +2410,38 @@ def delete_teacher_event_media(
     ensure_teacher_can_edit(event)
 
     _delete_attachment(event_media, media_id, event, "Media not found")
+    if event.get("report_photo_ids"):
+        events.update_one({"_id": event["_id"]}, {"$pull": {"report_photo_ids": media_id}})
 
     return {
         "success": True,
         "message": "Media deleted successfully",
     }
+
+
+@router.put(
+    "/teacher/events/{event_id}/report-photos"
+)
+def set_teacher_report_photos(
+    event_id: str,
+    payload: ReportPhotosRequest,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Which photos (in order) the Dean's report shows -- chosen while
+    uploading, the same way as in the Event Manager panel. Empty means none."""
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    event = find_teacher_event_or_404(event_id, user["id"])
+    ensure_teacher_can_edit(event)
+
+    chosen = report_files.clean_report_choice(payload.photo_ids, str(event["_id"]), event_media)
+    events.update_one(
+        {"_id": event["_id"]}, {"$set": {"report_photo_ids": chosen, "updated_at": utc_now()}}
+    )
+    return {"success": True, "message": "Report photos saved.", "report_photo_ids": chosen}
 
 
 # ============================================================

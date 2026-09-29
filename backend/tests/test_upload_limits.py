@@ -10,6 +10,7 @@ from app.config import settings
 from app.main import app
 from app.services.upload_config_service import (
     DEFAULT_UPLOAD_LIMITS,
+    REQUIREMENT_FIELDS,
     invalidate_cache,
 )
 
@@ -157,7 +158,10 @@ class UploadLimitsApiTests(UploadLimitsTestCase):
 
         self.assertEqual(data["deployment_ceiling_mb"], settings.max_upload_size_mb)
         bounds = data["bounds"]
-        self.assertEqual(set(bounds), set(DEFAULT_UPLOAD_LIMITS))
+        # Every numeric limit; the *_required switches are booleans with no range.
+        self.assertEqual(
+            set(bounds), set(DEFAULT_UPLOAD_LIMITS) - set(REQUIREMENT_FIELDS.values())
+        )
         self.assertEqual(bounds["max_photos_per_event"], {"min": 1, "max": 100, "unit": "count"})
 
 
@@ -304,6 +308,24 @@ class UploadLimitsPersistenceTests(UploadLimitsTestCase):
         self.assertIsNone(self.fake_config.doc)
         self.assertEqual(response.json()["limits"]["max_photos_per_event"], 10)
         self.assertIsNone(response.json()["updated_at"])
+
+    def test_requirement_switches_default_to_photo_and_document(self) -> None:
+        public = self.client.get("/upload-limits").json()["limits"]
+        self.assertIs(public["photos_required"], True)
+        self.assertIs(public["videos_required"], False)
+        self.assertIs(public["documents_required"], True)
+
+    def test_requirement_switches_round_trip(self) -> None:
+        with self.as_superadmin():
+            response = self.put(payload(
+                photos_required=False, videos_required=True, documents_required=False,
+            ))
+        self.assertEqual(response.status_code, 200, response.text)
+
+        public = self.client.get("/upload-limits").json()["limits"]
+        self.assertIs(public["photos_required"], False)
+        self.assertIs(public["videos_required"], True)
+        self.assertIs(public["documents_required"], False)
 
     def test_explicit_nulls_survive_a_round_trip(self) -> None:
         """`None` means "no cap" for these two, so a stored null must win."""

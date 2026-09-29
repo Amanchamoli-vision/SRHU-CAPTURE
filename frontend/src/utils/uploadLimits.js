@@ -19,6 +19,18 @@ export const DEFAULT_UPLOAD_LIMITS = {
   max_video_total_mb: 200,
   max_documents_per_event: 50,
   max_documents_total_mb: 15,
+  // Whether each kind must have at least one upload before an event can be
+  // submitted. Mirrors DEFAULT_UPLOAD_LIMITS in upload_config_service.py.
+  photos_required: true,
+  videos_required: false,
+  documents_required: true,
+};
+
+/** Upload kind (as the wizard names it) -> its mandatory-upload switch. */
+export const REQUIREMENT_FIELDS = {
+  image: "photos_required",
+  video: "videos_required",
+  document: "documents_required",
 };
 
 /** Mirrors LIMIT_BOUNDS in backend/app/schemas/superadmin.py. */

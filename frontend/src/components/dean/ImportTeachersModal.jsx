@@ -1,11 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Modal from "../teacher/Modal";
 import { ROLE_TRACK } from "../common/roles";
-import {
-  importTeachers,
-  previewTeacherImport,
-  sendInvites,
-} from "../../services/deanTeachers";
+import { importTeachers, previewTeacherImport } from "../../services/deanTeachers";
 import { OutcomeChip, ProgressLine, Tally } from "./CredentialReport";
 import { TRACK_ERR, TRACK_MUTED, TRACK_OK, TRACK_WARN } from "./outcomes";
 import {
@@ -129,19 +125,29 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
     setProgress({ phase: "import", done: 0, total: rows.length });
 
     try {
+      // One request: the server creates the accounts and, when asked,
+      // invites the new ones in parallel before answering.
       const imported = await importTeachers(
         rows.map(({ name, email, phone, department, designation }) => ({
           name, email, phone, department, designation,
         })),
+        { sendInvites: willEmail },
       );
       const created = imported.results.filter((r) => r.status === "created");
 
       let email = null;
       if (willEmail && created.length > 0) {
-        setProgress({ phase: "email", done: 0, total: created.length });
         const byId = new Map(created.map((r) => [r.user_id, r]));
-        // One request for all of them; the server sends in parallel.
-        email = await sendInvites(created.map((r) => r.user_id), { lookup: (id) => byId.get(id) });
+        const results = imported.invites?.results
+          || created.map((r) => ({ user_id: r.user_id, status: "failed", reason: `Not attempted: ${imported.invite_error || "the invitations could not be sent."}` }));
+        email = {
+          results: results.map((r) => ({
+            ...r,
+            name: r.name ?? byId.get(r.user_id)?.name ?? null,
+            email: r.email ?? byId.get(r.user_id)?.email ?? null,
+          })),
+          error: imported.invite_error || "",
+        };
       }
 
       setOutcome({ imported, email, emailRequested: willEmail });
@@ -409,7 +415,9 @@ export default function ImportTeachersModal({ open, onClose, onDone, onUnauthori
       {step === "working" && (
         <div className="space-y-3 py-6">
           <p className="font-display text-sm font-semibold text-ink">
-            {progress.phase === "import" ? "Creating teacher accounts…" : "Sending invitations…"}
+            {willEmail
+              ? "Creating teacher accounts and sending invitations…"
+              : "Creating teacher accounts…"}
           </p>
           {progress.phase === "import" ? (
             <div className="progress-track"><span className="progress-bar is-indeterminate" /></div>

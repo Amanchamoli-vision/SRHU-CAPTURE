@@ -17,6 +17,7 @@ import {
   IconCopy,
   IconEdit,
   IconInbox,
+  IconMail,
   IconRefresh,
   IconRotateCcw,
   IconSearch,
@@ -33,6 +34,7 @@ const ROLE_TABS = [
   { key: "teacher", label: "Teachers" },
   { key: "dean", label: "Deans" },
   { key: "superadmin", label: "Super Admins" },
+  { key: "event_manager", label: "Event Managers" },
 ];
 
 const TABLE_COLUMNS = ["User", "Role", "Status", "Joined", "Actions"];
@@ -97,6 +99,18 @@ const ACTIONS = {
     success: (name) => `${name} has been activated.`,
     failure: "Failed to activate user.",
   },
+  invite: {
+    eyebrow: "Invitation",
+    title: "Resend the verification link?",
+    body: (name) => `${name} will be emailed a new link to verify their email and set a password. Any earlier link stops working.`,
+    confirm: "Resend link",
+    busy: "Sending…",
+    tone: "btn-brand",
+    method: "POST",
+    path: (id) => `/superadmin/event-managers/${id}/invite`,
+    success: (name) => `A new verification link was emailed to ${name}.`,
+    failure: "Failed to resend the invitation.",
+  },
   delete: {
     eyebrow: "Permanent",
     title: "Delete this account?",
@@ -118,7 +132,13 @@ function UserManagement() {
 
   const [users, setUsers] = useState([]);
   const [total, setTotal] = useState(0);
-  const [counts, setCounts] = useState({ all: 0, teacher: 0, dean: 0, superadmin: 0 });
+  const [counts, setCounts] = useState({
+    all: 0,
+    teacher: 0,
+    dean: 0,
+    superadmin: 0,
+    event_manager: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [processingUserId, setProcessingUserId] = useState(null);
   const [error, setError] = useState("");
@@ -152,7 +172,7 @@ function UserManagement() {
     return () => clearTimeout(timer);
   }, [searchDraft, urlQ, searchParams, setSearchParams]);
 
-  // { kind: "dean" | "teacher" | "delete", user }
+  // { kind: keyof ACTIONS, user }
   const [pending, setPending] = useState(null);
 
   const roleFilter = ROLE_TABS.some((t) => t.key === searchParams.get("role"))
@@ -272,10 +292,9 @@ function UserManagement() {
 
   // Edit Profile modal state
   const [editingUser, setEditingUser] = useState(null);
-  const [editFormData, setEditFormData] = useState({ name: "", phone: "", department: "" });
+  const [editFormData, setEditFormData] = useState({ name: "", phone: "" });
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState("");
-  const [departmentsList, setDepartmentsList] = useState([]);
 
   // Bulk Onboard modal state
   const [bulkOnboardOpen, setBulkOnboardOpen] = useState(false);
@@ -287,18 +306,11 @@ function UserManagement() {
   const [resetError, setResetError] = useState("");
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    apiJson("/superadmin/departments?is_active=true")
-      .then((res) => setDepartmentsList(res?.departments || []))
-      .catch(() => {});
-  }, []);
-
   const handleOpenEdit = (user) => {
     setEditingUser(user);
     setEditFormData({
       name: user.name || "",
       phone: user.phone || "",
-      department: user.department || "",
     });
     setEditError("");
   };
@@ -313,8 +325,9 @@ function UserManagement() {
         method: "PATCH",
         body: {
           name: editFormData.name.trim() || null,
+          // Department is not edited here any more (the platform serves
+          // SST only); leaving it out keeps whatever is stored.
           phone: editFormData.phone.trim() || null,
-          department: editFormData.department.trim() || null,
         },
       });
       setSuccess(`Profile for ${editFormData.name || editingUser.email} updated successfully.`);
@@ -393,7 +406,10 @@ function UserManagement() {
           accent="Management"
           subtitle="Every registered account across Swami Rama Himalayan University. Promote teachers to Deans, step Deans back to teachers, or remove accounts."
           actions={
-            <div className="flex items-center gap-2 sm:gap-3">
+            // Four actions in the hero's narrow column: they wrap onto a
+            // second line (right-aligned on wide screens) instead of running
+            // over the subtitle.
+            <div className="flex w-full flex-wrap items-center gap-2 sm:gap-3 lg:justify-end">
               <button
                 type="button"
                 onClick={loadUsers}
@@ -406,11 +422,15 @@ function UserManagement() {
               <button
                 type="button"
                 onClick={() => setBulkOnboardOpen(true)}
-                className="btn btn-secondary"
+                className="btn btn-ghost"
               >
                 <IconUpload />
                 Bulk Onboard
               </button>
+              <Link to="/superadmin/create-event-manager" className="btn btn-ghost">
+                <IconMail />
+                Invite Event Manager
+              </Link>
               <Link to="/superadmin/create-dean" className="btn btn-primary">
                 <IconUserPlus />
                 Create Dean
@@ -569,15 +589,10 @@ function UserManagement() {
                             <span className="badge badge-accent text-[10px]">You</span>
                           )}
                           <RoleChip role={user.role} />
-                          {user.is_active !== false ? (
-                            <span className="chip chip-sm bg-ok/10 text-ok border-ok/30">Active</span>
-                          ) : (
-                            <span className="chip chip-sm bg-err/10 text-err border-err/30">Deactivated</span>
-                          )}
+                          <AccountStatus user={user} />
                         </div>
                         <p className="prose-muted mt-0.5 truncate text-xs">{user.email}</p>
                         <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted">
-                          {user.department && <span>Dept: {user.department}</span>}
                           {user.phone && <span>Ph: {user.phone}</span>}
                           <span>Joined {formatJoined(user.created_at)}</span>
                         </div>
@@ -631,10 +646,8 @@ function UserManagement() {
                                 )}
                               </div>
                               <p className="prose-muted truncate text-xs">{user.email}</p>
-                              {(user.department || user.phone) && (
-                                <p className="prose-muted mt-0.5 truncate text-[11px]">
-                                  {[user.department, user.phone].filter(Boolean).join(" · ")}
-                                </p>
+                              {user.phone && (
+                                <p className="prose-muted mt-0.5 truncate text-[11px]">{user.phone}</p>
                               )}
                             </div>
                           </div>
@@ -643,11 +656,7 @@ function UserManagement() {
                           <RoleChip role={user.role} />
                         </td>
                         <td className="whitespace-nowrap px-5 py-3.5">
-                          {user.is_active !== false ? (
-                            <span className="chip chip-sm bg-ok/10 text-ok border-ok/30">Active</span>
-                          ) : (
-                            <span className="chip chip-sm bg-err/10 text-err border-err/30">Deactivated</span>
-                          )}
+                          <AccountStatus user={user} />
                         </td>
                         <td className="num whitespace-nowrap px-5 py-3.5 text-sm text-muted">
                           {formatJoined(user.created_at)}
@@ -722,6 +731,8 @@ function UserManagement() {
                     <IconAlertTriangle />
                   ) : pending?.kind === "activate" ? (
                     <IconCheck />
+                  ) : pending?.kind === "invite" ? (
+                    <IconMail />
                   ) : (
                     <IconUser />
                   )}
@@ -812,36 +823,6 @@ function UserManagement() {
                 onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
                 className="input mt-1 w-full"
               />
-            </div>
-
-            <div>
-              <label className="label block text-xs font-semibold text-ink" htmlFor="user-department">
-                Department
-              </label>
-              {departmentsList.length > 0 ? (
-                <select
-                  id="user-department"
-                  value={editFormData.department}
-                  onChange={(e) => setEditFormData({ ...editFormData, department: e.target.value })}
-                  className="input mt-1 w-full"
-                >
-                  <option value="">Select department</option>
-                  {departmentsList.map((d) => (
-                    <option key={d.id} value={d.name}>
-                      {d.name} ({d.code})
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  id="user-department"
-                  type="text"
-                  value={editFormData.department}
-                  onChange={(e) => setEditFormData({ ...editFormData, department: e.target.value })}
-                  placeholder="e.g. Computer Science & Engineering"
-                  className="input mt-1 w-full"
-                />
-              )}
             </div>
 
             <div>
@@ -987,6 +968,27 @@ function Avatar({ user }) {
  * flow for demoting or removing one from here, and the signed-in super admin can
  * never act on themselves.
  */
+/** An Event Manager who has not yet followed their invitation link. */
+const awaitingInvite = (user) =>
+  normalizeRole(user.role) === "event_manager" && user.email_verified === false;
+
+function AccountStatus({ user }) {
+  if (user.is_active === false) {
+    return <span className="chip chip-sm bg-err/10 text-err border-err/30">Deactivated</span>;
+  }
+  if (awaitingInvite(user)) {
+    return (
+      <span
+        className="chip chip-sm bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300"
+        title="Invited, but has not verified their email and set a password yet"
+      >
+        Invitation pending
+      </span>
+    );
+  }
+  return <span className="chip chip-sm bg-ok/10 text-ok border-ok/30">Active</span>;
+}
+
 function RowActions({ user, self, busy, onAct, onEdit, onReset }) {
   const role = normalizeRole(user.role);
 
@@ -1014,16 +1016,31 @@ function RowActions({ user, self, busy, onAct, onEdit, onReset }) {
         <IconEdit className="h-4 w-4" />
       </button>
 
-      <button
-        type="button"
-        onClick={() => onReset(user)}
-        disabled={busy}
-        className="btn btn-ghost btn-xs btn-icon"
-        title="Reset password"
-        aria-label="Reset password"
-      >
-        <IconRotateCcw className="h-4 w-4" />
-      </button>
+      {/* An invited Event Manager has no password yet: the invitation link is
+          how they get one, so it replaces Reset password until then. */}
+      {awaitingInvite(user) ? (
+        <button
+          type="button"
+          onClick={() => onAct("invite")}
+          disabled={busy || !isActive}
+          className="btn btn-brand btn-xs btn-icon"
+          title="Resend verification link"
+          aria-label="Resend verification link"
+        >
+          <IconMail className="h-4 w-4" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onReset(user)}
+          disabled={busy}
+          className="btn btn-ghost btn-xs btn-icon"
+          title="Reset password"
+          aria-label="Reset password"
+        >
+          <IconRotateCcw className="h-4 w-4" />
+        </button>
+      )}
 
       {role === "teacher" && (
         <button

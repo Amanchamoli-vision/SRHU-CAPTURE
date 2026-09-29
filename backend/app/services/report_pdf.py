@@ -1,10 +1,10 @@
-"""The official event report PDF, as downloaded by the Dean.
+"""The building blocks of the event report PDF: the SRHU letterhead (the same
+crest the Landing page shows), styles, key-value tables, the verbatim
+description box, the Dean's signature block and the page-count footer.
 
-Layout, top to bottom: an SRHU letterhead (the same crest the Landing page
-shows), the report title and reference, the event details, the teacher's
-description reproduced verbatim, the supporting material, the approval record,
-and a signature block for the Dean. Every page carries a footer with the page
-count.
+The report itself -- for the Dean and for the Event Manager alike -- is laid
+out by app/services/managed_report_pdf.py from these pieces, so both share
+one design.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ from reportlab.platypus import (
     Image,
     KeepTogether,
     Paragraph,
-    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
@@ -139,15 +138,6 @@ CONTENT_WIDTH = PAGE_WIDTH - 2 * MARGIN
 # (see frontend/src/utils/draftStorage.js). It is not part of what the teacher
 # wrote, so it is split off before the description is printed.
 METADATA_PATTERN = re.compile(r"\s*<!--CC_METADATA:([\s\S]*?)-->")
-
-# Fields still carried only in the description blob. Organiser and contact
-# were promoted to real columns, so they are read from the event itself (with
-# the blob as a fallback for older events) rather than from here.
-METADATA_LABELS = (
-    ("department", "Department"),
-    ("expectedParticipants", "Expected Participants"),
-)
-
 
 def metadata_value(meta: dict, key: str) -> str:
     """A blob field for the report, with the host department defaulting to SST.
@@ -494,116 +484,3 @@ class _NumberedCanvas(pdf_canvas.Canvas):
             f"Campus Capture  ·  {REPORT_SCHOOL}  ·  Official event record",
         )
         self.drawRightString(PAGE_WIDTH - MARGIN, y, f"Page {self._pageNumber} of {total}")
-
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
-
-def build_event_report_pdf(event: dict, teacher: dict, media: list, documents: list) -> BytesIO:
-    styles = _styles()
-    description, meta = split_description(event.get("description"))
-    approved_by, approved_on = approval_record(event)
-
-    story = _letterhead(styles)
-    story += [
-        Spacer(1, 5 * mm),
-        Paragraph("EVENT REPORT", styles["title"]),
-        Spacer(1, 1.5 * mm),
-        Paragraph(
-            f"Ref. {escape(report_reference(event))} &nbsp;&nbsp;|&nbsp;&nbsp; "
-            f"Issued {escape(format_date(datetime.now().isoformat()))}",
-            styles["reference"],
-        ),
-    ]
-
-    # 1. Event details
-    details = [
-        ("Event Name", rich(event.get("event_name"))),
-        ("Event Type", rich(event.get("event_type"))),
-        (
-            "Event Date",
-            escape(format_date_range(event.get("event_date"), event.get("end_date"))),
-        ),
-    ]
-    # Prefer the promoted columns; the blob is only a fallback for events
-    # created before those fields existed (see services/event_fields.py).
-    time_range = format_time_range(
-        event.get("start_time") or meta.get("startTime", ""),
-        event.get("end_time") or meta.get("endTime", ""),
-    )
-    if time_range:
-        details.append(("Time", escape(time_range)))
-    details.append(("Venue", rich(event.get("location"))))
-    for key, label in METADATA_LABELS:
-        value = metadata_value(meta, key)
-        if value:
-            details.append((label, rich(value)))
-
-    # Promoted columns first, blob second, so both old and new events render.
-    for column, blob_key, label in (
-        ("organizer", "organizer", "Organiser"),
-        ("coordinator_contact", "contactInfo", "Contact"),
-    ):
-        value = str(event.get(column) or meta.get(blob_key) or "").strip()
-        if value:
-            details.append((label, rich(value)))
-    details.append((
-        "Submitted by",
-        rich(teacher.get("name") or "Not available")
-        + (f"<br/><font color='#5B6475'>{escape(teacher['email'])}</font>" if teacher.get("email") else ""),
-    ))
-    story += [Paragraph("1. Event Details", styles["section"]), _key_value_table(details, styles)]
-
-    # 2. Description, exactly as the teacher entered it
-    story += [
-        Paragraph("2. Event Description", styles["section"]),
-        *_boxed_text(description, styles["body"]),
-    ]
-
-    # 3. Supporting material
-    social_url = str(event.get("social_network_url") or "").strip()
-    if not social_url:
-        link = "Not provided"
-    elif social_url.lower().startswith(("http://", "https://")):
-        link = (
-            f"<link href='{escape(social_url, {chr(39): '&#39;'})}' color='#1D3F7A'>"
-            f"{escape(social_url)}</link>"
-        )
-    else:
-        # Never make a javascript:, data: or other scheme clickable.
-        link = escape(social_url)
-    story += [
-        Paragraph("3. Supporting Material", styles["section"]),
-        _key_value_table([
-            ("Photos / Videos", f"{len(media)} file{'s' if len(media) != 1 else ''}"),
-            ("Documents", f"{len(documents)} file{'s' if len(documents) != 1 else ''}"),
-            ("Social Media Post", link),
-        ], styles),
-    ]
-
-    # 4. Approval
-    story += [
-        Paragraph("4. Approval", styles["section"]),
-        _key_value_table([
-            ("Status", "<b>Approved</b>"),
-            ("Approved by", rich(f"{approved_by} (Dean)" if approved_by != "Dean" else "Dean")),
-            ("Approved on", escape(approved_on or "Not recorded")),
-        ], styles),
-        _signature_block(styles),
-    ]
-
-    buffer = BytesIO()
-    SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=MARGIN,
-        rightMargin=MARGIN,
-        topMargin=16 * mm,
-        bottomMargin=22 * mm,
-        title=f"Event Report - {event.get('event_name') or ''}",
-        author="Campus Capture, Swami Rama Himalayan University",
-        subject="Official event report",
-    ).build(story, canvasmaker=_NumberedCanvas)
-    buffer.seek(0)
-    return buffer

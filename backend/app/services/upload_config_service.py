@@ -1,5 +1,9 @@
 """Dynamic photo, video and document upload limits configured by the Super Admin.
 
+Alongside the limits it holds whether each upload kind is mandatory before an
+event can be submitted for approval (``*_required``), since those are part of
+the same "what must a teacher attach" policy and are edited on the same page.
+
 The whole settings surface lives in one MongoDB document, ``{"key": "upload_limits"}``
 in the ``upload_config`` collection. Absence of that document means "use the
 defaults from config.py", which is why :func:`reset_upload_limits` deletes it
@@ -41,6 +45,18 @@ DEFAULT_UPLOAD_LIMITS: dict[str, Any] = {
     "max_video_total_mb": settings.max_video_total_mb,
     "max_documents_per_event": settings.max_documents_per_event,
     "max_documents_total_mb": settings.max_documents_total_mb,
+    # Whether a kind must have at least one upload before submission. The
+    # defaults are the original PRD rule: a photo and a document, video optional.
+    "photos_required": True,
+    "videos_required": False,
+    "documents_required": True,
+}
+
+# upload kind -> the flag that makes it mandatory.
+REQUIREMENT_FIELDS: dict[str, str] = {
+    "photo": "photos_required",
+    "video": "videos_required",
+    "document": "documents_required",
 }
 
 # The two fields a stored `None` must be able to override a default for. Every

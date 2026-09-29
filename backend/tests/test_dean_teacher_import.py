@@ -280,6 +280,38 @@ class ImportEndpointTests(DeanTeacherTestCase):
         self.assertEqual(login.status_code, 200, login.text)
         self.assertFalse(login.json()["user"]["must_change_password"])
 
+    def test_import_with_send_invites_invites_in_the_same_request(self) -> None:
+        response = self.client.post(
+            "/dean/teachers/import",
+            json={
+                "teachers": [
+                    {"name": "Asha Rao", "email": "asha.rao@srhu.edu.in"},
+                    {"name": "Vikram Das", "email": "vikram.das@srhu.edu.in"},
+                ],
+                "send_invites": True,
+            },
+            headers=self.auth(self.dean),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["created_count"], 2)
+        self.assertEqual(body["invites"]["sent_count"], 2)
+        self.assertEqual(
+            sorted(r["email"] for r in body["invites"]["results"]),
+            ["asha.rao@srhu.edu.in", "vikram.das@srhu.edu.in"],
+        )
+        self.assertEqual(sorted(to for to, _ in self.sent_invites[-2:]), ["asha.rao@srhu.edu.in", "vikram.das@srhu.edu.in"])
+
+    def test_import_without_send_invites_sends_nothing(self) -> None:
+        before = len(self.sent_invites)
+        body = self.client.post(
+            "/dean/teachers/import",
+            json={"teachers": [{"name": "Neha", "email": "neha.k@srhu.edu.in"}]},
+            headers=self.auth(self.dean),
+        ).json()
+        self.assertNotIn("invites", body)
+        self.assertEqual(len(self.sent_invites), before)
+
     def test_preview_flags_a_removed_teacher(self) -> None:
         self.client.post(f"/dean/teachers/{self.teacher['_id']}/remove", headers=self.auth(self.dean))
         data = self.upload(xlsx([["Email"], [self.teacher["email"]]])).json()

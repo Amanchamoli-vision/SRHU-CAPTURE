@@ -19,6 +19,10 @@ class CreateDeanRequest(BaseModel):
         return normalized
 
 
+class CreateEventManagerRequest(CreateDeanRequest):
+    """Name and sign-in email; the Event Manager chooses their own password."""
+
+
 # The single definition of every configurable upload bound. The Pydantic fields
 # below derive their ge/le from this, and GET /superadmin/upload-limits serves it
 # to the browser, so the ranges cannot drift between the form and the API.
@@ -85,6 +89,15 @@ class UploadLimitsUpdateRequest(BaseModel):
     max_documents_total_mb: int = _bounded(
         "max_documents_total_mb",
         "Max total combined size for documents in MB; also the largest single document",
+    )
+    photos_required: bool = Field(
+        default=True, description="At least one photo is needed to submit an event"
+    )
+    videos_required: bool = Field(
+        default=False, description="At least one video is needed to submit an event"
+    )
+    documents_required: bool = Field(
+        default=True, description="At least one document is needed to submit an event"
     )
 
     @model_validator(mode="after")
@@ -156,55 +169,6 @@ class ResetUserPasswordRequest(BaseModel):
         if error:
             raise ValueError(error)
         return value
-
-
-class CreateDepartmentRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    code: str = Field(min_length=1, max_length=20)
-    school: str | None = Field(default=None, max_length=120)
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        normalized = " ".join(value.split())
-        if not normalized:
-            raise ValueError("Department name must not be empty")
-        return normalized
-
-    @field_validator("code")
-    @classmethod
-    def validate_code(cls, value: str) -> str:
-        normalized = value.strip().upper()
-        if not normalized:
-            raise ValueError("Department code must not be empty")
-        return normalized
-
-
-class UpdateDepartmentRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    code: str | None = Field(default=None, min_length=1, max_length=20)
-    school: str | None = Field(default=None, max_length=120)
-    is_active: bool | None = Field(default=None)
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = " ".join(value.split())
-        if not normalized:
-            raise ValueError("Department name must not be empty")
-        return normalized
-
-    @field_validator("code")
-    @classmethod
-    def validate_code(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip().upper()
-        if not normalized:
-            raise ValueError("Department code must not be empty")
-        return normalized
 
 
 class BulkOnboardTeacherItem(BaseModel):

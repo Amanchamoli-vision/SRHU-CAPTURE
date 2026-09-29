@@ -44,6 +44,10 @@ export default function UploadPanel({
   onDismiss,
   // Called when a saved file's (signed, expiring) link fails to load.
   onLoadError,
+  // Photos only, for a panel that generates its own reports: a tick on each
+  // saved photo choosing whether it appears in the report.
+  // { ids: chosen photo ids in report order, max, busy, onToggle(id) }
+  reportSelection = null,
 }) {
   const inputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
@@ -260,8 +264,14 @@ export default function UploadPanel({
           </ul>
         ) : (
           <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {items.map((item) => (
-              <li key={item.id} className="media-tile group">
+            {items.map((item) => {
+              const reportPosition = reportSelection ? reportSelection.ids.indexOf(item.id) + 1 : 0;
+              const inReport = reportPosition > 0;
+              return (
+              <li
+                key={item.id}
+                className={`media-tile group ${inReport ? "ring-2 ring-accent" : ""}`}
+              >
                 {kind === "video" ? (
                   <video
                     src={item.media_url}
@@ -302,8 +312,30 @@ export default function UploadPanel({
                     {item.removing ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
                   </button>
                 </div>
+
+                {reportSelection && (
+                  <label className="flex cursor-pointer items-center gap-2 border-t hairline px-3 py-2 text-xs text-ink">
+                    <input
+                      type="checkbox"
+                      checked={inReport}
+                      disabled={
+                        disabled ||
+                        item.removing ||
+                        reportSelection.busy ||
+                        (!inReport && reportSelection.ids.length >= reportSelection.max)
+                      }
+                      onChange={() => reportSelection.onToggle(item.id)}
+                      aria-label={`Include ${item.file_name} in the report`}
+                      className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
+                    />
+                    <span className={inReport ? "font-semibold text-accent" : "text-muted"}>
+                      {inReport ? `In report (${reportPosition})` : "Include in report"}
+                    </span>
+                  </label>
+                )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         ))}
 

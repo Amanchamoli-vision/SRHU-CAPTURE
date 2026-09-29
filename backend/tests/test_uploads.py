@@ -674,3 +674,54 @@ class StreamingTests(UploadTests):
                 "You have exceeded the limit. Maximum allowed video size is 50 MB.",
             )
 
+
+class ReportPhotoChoiceTests(UploadTests):
+    """The teacher picks the Dean report's photos while uploading, exactly as
+    the Event Manager does (PUT .../report-photos, at most four)."""
+
+    def photos(self, count: int) -> list[str]:
+        ids = []
+        for n in range(count):
+            response = self.upload(f"p{n}.png", PNG, "image/png")
+            self.assertEqual(response.status_code, 201, response.text)
+            ids.append(response.json()["media"]["id"])
+        return ids
+
+    def detail(self) -> dict:
+        return self.client.get(f"/teacher/events/{self.event_id}", headers=self.auth).json()["event"]
+
+    def choose(self, ids):
+        return self.client.put(
+            f"/teacher/events/{self.event_id}/report-photos", json={"photo_ids": ids}, headers=self.auth
+        )
+
+    def test_default_is_the_first_four(self) -> None:
+        ids = self.photos(5)
+        event = self.detail()
+        self.assertEqual(event["report_photo_ids"], ids[:4])
+        self.assertFalse(event["report_photos_chosen"])
+
+    def test_choosing_saves_the_order(self) -> None:
+        ids = self.photos(5)
+        response = self.choose([ids[4], ids[0], ids[2]])
+        self.assertEqual(response.status_code, 200, response.text)
+        event = self.detail()
+        self.assertEqual(event["report_photo_ids"], [ids[4], ids[0], ids[2]])
+        self.assertTrue(event["report_photos_chosen"])
+
+    def test_more_than_four_or_foreign_ids_are_refused(self) -> None:
+        ids = self.photos(5)
+        self.assertEqual(self.choose(ids).status_code, 422)
+        document = self.upload("a.pdf", PDF, "application/pdf", kind="documents").json()["document"]["id"]
+        self.assertEqual(self.choose([document]).status_code, 400)
+
+    def test_deleting_a_chosen_photo_drops_it(self) -> None:
+        ids = self.photos(3)
+        self.choose(ids)
+        self.client.delete(f"/teacher/events/{self.event_id}/media/{ids[0]}", headers=self.auth)
+        self.assertEqual(self.detail()["report_photo_ids"], ids[1:])
+
+    def test_not_after_approval(self) -> None:
+        ids = self.photos(1)
+        self.events.set_status(self.event_id, "approved")
+        self.assertIn(self.choose(ids).status_code, (400, 403, 409))

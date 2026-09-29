@@ -146,7 +146,7 @@ export default function Settings() {
         tone: "ok",
         title: "Upload limits saved",
         message:
-          "New uploads are checked against these limits immediately. Event forms already open will pick them up when they are next focused.",
+          "New uploads and submissions are checked against these settings immediately. Event forms already open will pick them up when they are next focused.",
       });
     } catch (err) {
       setBanner({
@@ -214,9 +214,9 @@ export default function Settings() {
           eyebrow="Super Admin"
           title="System"
           accent="Settings"
-          subtitle="How much teachers may attach to an event: photo, video and document limits for the whole platform."
+          subtitle="What teachers may attach to an event: photo, video and document limits, and which uploads are mandatory, for the whole platform."
           actions={
-            <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:gap-3 lg:justify-end">
               <button
                 type="button"
                 onClick={() => setConfirm({ kind: "reset" })}
@@ -426,7 +426,15 @@ export default function Settings() {
             ? Object.entries(meta.defaults).map(([field, value]) => (
                 <div key={field} className="flex items-baseline justify-between gap-4">
                   <dt className="text-muted">{field.replace(/^max_/, "").replace(/_/g, " ")}</dt>
-                  <dd className="font-mono text-ink">{value === null ? "no limit" : value}</dd>
+                  <dd className="font-mono text-ink">
+                    {value === null
+                      ? "no limit"
+                      : typeof value === "boolean"
+                        ? value
+                          ? "mandatory"
+                          : "optional"
+                        : value}
+                  </dd>
                 </div>
               ))
             : null}

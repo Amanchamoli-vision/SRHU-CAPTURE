@@ -133,7 +133,6 @@ export default function SuperAdminEventDetails() {
         { label: "Type", value: event.event_type || "Not set", Icon: IconTag },
         { label: "Venue", value: event.location || "Not set", Icon: IconMapPin },
         { label: "Teacher", value: teacherName || "Unknown", Icon: IconUser },
-        meta.department && { label: "Department", value: meta.department, Icon: IconTag },
         meta.organizer && { label: "Organizer", value: meta.organizer, Icon: IconUser },
       ].filter(Boolean)
     : [];
@@ -172,7 +171,8 @@ export default function SuperAdminEventDetails() {
               actions={
                 <div className="flex flex-wrap items-center gap-2.5">
                   <StatusChip status={event.status} size="md" />
-                  {reportReady && (
+                  {/* Reports exist only for Completed events (server-enforced). */}
+                  {reportReady && event.status === "completed" && (
                     <button
                       type="button"
                       onClick={handleDownloadReport}

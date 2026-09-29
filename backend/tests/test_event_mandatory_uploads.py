@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import unittest
 from datetime import timedelta
+from unittest.mock import patch
 
 os.environ.setdefault("JWT_SECRET_KEY", "unit-test-secret-key-0123456789")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
@@ -12,7 +13,17 @@ from bson import ObjectId
 
 from app.main import app
 from app.database import events, event_media, event_documents
+from app.routers.events import _required_kind
 from app.schemas.events import campus_now
+from app.services.upload_config_service import DEFAULT_UPLOAD_LIMITS
+
+
+def requirements(**flags):
+    """Patch the Super Admin's mandatory-upload switches for one test."""
+    return patch(
+        "app.routers.events.get_upload_limits",
+        return_value={**DEFAULT_UPLOAD_LIMITS, **flags},
+    )
 
 
 class EventMandatoryUploadsTests(unittest.TestCase):
@@ -197,3 +208,91 @@ class EventMandatoryUploadsTests(unittest.TestCase):
 
         event_media.delete_many({"event_id": event_id})
         event_documents.delete_many({"event_id": event_id})
+
+    # ---------------------------------------- Super Admin requirement switches
+
+    def _draft_with(self, *, photo=False, video=False, document=False):
+        res = self.client.post(
+            "/teacher/events",
+            json={
+                "event_name": "Configurable Requirements",
+                "event_date": self._past_date(2),
+                "event_type": "Workshop",
+                "location": "Main Hall",
+                "save_as_draft": True,
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(res.status_code, 201, res.text)
+        event_id = res.json()["event"]["id"]
+        self.addCleanup(event_media.delete_many, {"event_id": event_id})
+        self.addCleanup(event_documents.delete_many, {"event_id": event_id})
+
+        if photo:
+            event_media.insert_one({"event_id": event_id, "media_type": "image",
+                                    "filename": "p.png", "file_size": 10})
+        if video:
+            event_media.insert_one({"event_id": event_id, "media_type": "video",
+                                    "filename": "v.mp4", "file_size": 10})
+        if document:
+            event_documents.insert_one({"event_id": event_id, "filename": "d.pdf",
+                                        "file_size": 10})
+        return event_id
+
+    def _submit(self, event_id):
+        return self.client.patch(
+            f"/teacher/events/{event_id}",
+            json={
+                "event_name": "Configurable Requirements",
+                "event_date": self._past_date(2),
+                "event_type": "Workshop",
+                "location": "Main Hall",
+                "save_as_draft": False,
+            },
+            headers=self.auth_headers,
+        )
+
+    def test_optional_photos_let_an_event_submit_without_one(self):
+        event_id = self._draft_with(document=True)
+        with requirements(photos_required=False):
+            res = self._submit(event_id)
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["event"]["status"], "pending")
+
+    def test_optional_documents_let_an_event_submit_without_one(self):
+        event_id = self._draft_with(photo=True)
+        with requirements(documents_required=False):
+            res = self._submit(event_id)
+        self.assertEqual(res.status_code, 200, res.text)
+
+    def test_required_videos_block_submission_without_one(self):
+        event_id = self._draft_with(photo=True, document=True)
+        with requirements(videos_required=True):
+            res = self._submit(event_id)
+        self.assertEqual(res.status_code, 400, res.text)
+        self.assertIn("video", res.text.lower())
+
+    def test_required_videos_are_satisfied_by_a_video(self):
+        event_id = self._draft_with(photo=True, video=True, document=True)
+        with requirements(videos_required=True):
+            res = self._submit(event_id)
+        self.assertEqual(res.status_code, 200, res.text)
+
+    def test_nothing_required_submits_an_empty_event(self):
+        event_id = self._draft_with()
+        with requirements(photos_required=False, documents_required=False):
+            res = self._submit(event_id)
+        self.assertEqual(res.status_code, 200, res.text)
+
+    def test_last_upload_guard_follows_the_switches(self):
+        """A pending event keeps its last upload only of a mandatory kind."""
+        video = {"media_type": "video"}
+        photo = {"media_type": "image"}
+        with requirements():
+            self.assertIsNone(_required_kind(event_media, video))
+            self.assertEqual(_required_kind(event_media, photo), ({"media_type": "image"}, "photo"))
+            self.assertEqual(_required_kind(event_documents, {}), ({}, "document"))
+        with requirements(photos_required=False, videos_required=True, documents_required=False):
+            self.assertIsNone(_required_kind(event_media, photo))
+            self.assertIsNone(_required_kind(event_documents, {}))
+            self.assertEqual(_required_kind(event_media, video), ({"media_type": "video"}, "video"))

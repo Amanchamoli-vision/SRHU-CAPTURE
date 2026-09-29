@@ -575,7 +575,10 @@ def reset_password(payload: ResetPasswordRequest, request: Request):
 
 @router.post("/accept-invite")
 def accept_invite(payload: ResetPasswordRequest, request: Request):
-    """Set a password from a Dean's invitation link and activate the account.
+    """Set a password from an invitation link and activate the account.
+
+    Invitations come from a Dean (teachers) or a Super Admin (Event Managers);
+    both are accepted here, and the errors name whoever can send a new one.
 
     The same guarantees as /reset-password: the token is consumed atomically,
     following the link proves the mailbox, and every older session ends. An
@@ -613,19 +616,22 @@ def accept_invite(payload: ResetPasswordRequest, request: Request):
     )
 
     if not user:
-        pending = users.find_one({"invite_token_hash": token_hash}, {"invite_expires_at": 1})
+        pending = users.find_one(
+            {"invite_token_hash": token_hash}, {"invite_expires_at": 1, "role": 1}
+        )
         if pending:
+            inviter = "Super Admin" if pending.get("role") == "event_manager" else "Dean"
             expires = pending.get("invite_expires_at")
             if expires is not None and expires.tzinfo is None:
                 expires = expires.replace(tzinfo=now.tzinfo)
             if expires is not None and expires <= now:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="This invitation has expired. Ask your Dean to send a new one.",
+                    detail=f"This invitation has expired. Ask your {inviter} to send a new one.",
                 )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="This account is not active. Please contact your Dean.",
+                detail=f"This account is not active. Please contact your {inviter}.",
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -638,7 +644,9 @@ def accept_invite(payload: ResetPasswordRequest, request: Request):
             {"$set": {"email_verified_at": now}},
         )
 
-    logger.info("teacher_invite_accepted recipient_domain=%s", _domain(user["email"]))
+    logger.info(
+        "invite_accepted role=%s recipient_domain=%s", user.get("role"), _domain(user["email"])
+    )
     return {
         "message": "Your password is set and your account is active. You can now sign in.",
         "email": user["email"],

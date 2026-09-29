@@ -12,6 +12,14 @@ import {
   decodeEventMetadata,
 } from "../../utils/draftStorage";
 import TeacherShell from "../../components/teacher/TeacherShell";
+import { usePanel } from "../../components/teacher/panel";
+import {
+  MAX_EVENTS_PER_REPORT,
+  bulkDeleteEvents,
+  downloadEventReport,
+  downloadEventsReport,
+  reportNotice,
+} from "../../services/eventManager";
 import Modal from "../../components/teacher/Modal";
 import StatusChip from "../../components/teacher/StatusChip";
 import {
@@ -25,6 +33,7 @@ import {
   IconArrowRight,
   IconCheck,
   IconCopy,
+  IconDownload,
   IconEdit,
   IconInbox,
   IconPlus,
@@ -41,6 +50,14 @@ const STATUS_TABS = [
   { key: "pending", label: "Pending" },
   { key: "approved", label: "Approved" },
   { key: "rejected", label: "Rejected" },
+];
+
+// A panel without the Dean's review (Event Manager): events are either
+// still drafts or recorded.
+const DIRECT_STATUS_TABS = [
+  { key: "all", label: "All" },
+  { key: "draft", label: "Draft" },
+  { key: "recorded", label: "Recorded" },
 ];
 
 const DATE_FILTERS = [
@@ -70,12 +87,13 @@ const COLUMNS = [
  * Everything a teacher can do to one of their events. Shared by the desktop
  * table and the mobile card list so the two can never drift apart.
  */
-function EventActions({ item, canDelete, onDuplicate, onDelete, originState }) {
+function EventActions({ item, canDelete, onDuplicate, onDelete, originState, onReport, reporting }) {
+  const panel = usePanel();
   return (
     <>
       {item.isDraft && (
         <Link
-          to={`/teacher/create-event?draftId=${item.id}`}
+          to={`${panel.base}/create-event?draftId=${item.id}`}
           state={originState}
           title="Continue editing draft"
           className="btn btn-brand btn-xs"
@@ -87,7 +105,7 @@ function EventActions({ item, canDelete, onDuplicate, onDelete, originState }) {
 
       {!item.isDraft && isRefusedStatus(item.status) && (
         <Link
-          to={`/teacher/create-event?editEventId=${item.id}`}
+          to={`${panel.base}/create-event?editEventId=${item.id}`}
           state={originState}
           title="Edit and resubmit event"
           className="btn btn-danger btn-xs"
@@ -103,7 +121,7 @@ function EventActions({ item, canDelete, onDuplicate, onDelete, originState }) {
         !isRefusedStatus(item.status) &&
         canTeacherEditEvent(item) && (
           <Link
-            to={`/teacher/create-event?editEventId=${item.id}`}
+            to={`${panel.base}/create-event?editEventId=${item.id}`}
             state={originState}
             title="Edit event"
             className="btn btn-ghost btn-xs"
@@ -115,13 +133,26 @@ function EventActions({ item, canDelete, onDuplicate, onDelete, originState }) {
 
       {!item.isDraft && (
         <Link
-          to={`/teacher/events/${item.id}`}
+          to={`${panel.base}/events/${item.id}`}
           title="View event details"
           className="btn btn-ghost btn-xs"
         >
           View
           <IconArrowRight />
         </Link>
+      )}
+
+      {panel.reports && !item.isDraft && item.status === "recorded" && (
+        <button
+          type="button"
+          onClick={() => onReport(item)}
+          disabled={reporting}
+          title="Download report"
+          className="btn btn-ghost btn-xs"
+        >
+          {reporting ? <span className="spin h-3 w-3" /> : <IconDownload />}
+          Report
+        </button>
       )}
 
       <button
@@ -153,6 +184,14 @@ function MyEvents() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const originState = useOriginState();
+  const panel = usePanel();
+  const statusTabs = panel.approval ? STATUS_TABS : DIRECT_STATUS_TABS;
+
+  // Event Manager: events ticked for one combined report or a bulk delete.
+  const [selected, setSelected] = useState(() => new Set());
+  const [reportingId, setReportingId] = useState("");
+  const [bulkDelete, setBulkDelete] = useState(null); // { confirmText } while the dialog is open
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const activeFilter = searchParams.get("filter") || "all";
 
@@ -186,7 +225,7 @@ function MyEvents() {
         return;
       }
 
-      if (userProfile.role !== "teacher") {
+      if (userProfile.role !== panel.role) {
         navigate("/", { replace: true });
         return;
       }
@@ -194,7 +233,7 @@ function MyEvents() {
       setProfile(userProfile);
 
       // Fetch teacher's events from the API (MongoDB)
-      const { events: teacherEvents } = await apiJson("/teacher/events");
+      const { events: teacherEvents } = await apiJson(`${panel.api}/events`);
 
       // Fetch local teacher drafts
       const teacherDrafts = getTeacherDrafts(userProfile.id);
@@ -259,7 +298,7 @@ function MyEvents() {
       const newDraft = duplicateEventAsDraft(profile.id, targetEvent);
       setSuccessMessage(`Event "${targetEvent.event_name || targetEvent.eventName}" duplicated as draft.`);
       setTimeout(() => {
-        navigate(`/teacher/create-event?draftId=${newDraft.id}`, { state: originState });
+        navigate(`${panel.base}/create-event?draftId=${newDraft.id}`, { state: originState });
       }, 600);
     } catch (err) {
       console.error("Duplicate error:", err);
@@ -276,7 +315,7 @@ function MyEvents() {
         deleteTeacherDraft(profile.id, deletingEvent.id);
         setDrafts((prev) => prev.filter((d) => d.id !== deletingEvent.id));
       } else {
-        await apiJson(`/teacher/events/${deletingEvent.id}`, { method: "DELETE" });
+        await apiJson(`${panel.api}/events/${deletingEvent.id}`, { method: "DELETE" });
         setEvents((prev) => prev.filter((e) => e.id !== deletingEvent.id));
       }
 
@@ -296,6 +335,13 @@ function MyEvents() {
     ...events.map((e) => ({ ...e, isDraft: false })),
   ];
 
+  // Event Manager: newest first across browser drafts and saved events, so an
+  // event just created is at the top. The teacher list keeps its own order.
+  if (!panel.approval) {
+    const createdAt = (item) => new Date(item.created_at || item.updated_at || 0).getTime() || 0;
+    allCombinedItems.sort((a, b) => createdAt(b) - createdAt(a));
+  }
+
   // Calculate tab counts. Drafts are counted from the combined list, not from
   // `drafts` alone: once a draft has a file attached it lives on the server and
   // arrives in `events` with a "draft" status, which is what the filter below
@@ -311,6 +357,7 @@ function MyEvents() {
     // together (STATUS_BUCKETS in the events router), and a revoked event
     // otherwise appeared under "All" and nowhere else.
     rejected: events.filter((e) => isRefusedStatus(e.status)).length,
+    recorded: events.filter((e) => e.status === "recorded").length,
   };
 
   // --- Filtering Conditions ---
@@ -332,6 +379,7 @@ function MyEvents() {
     }
     if (activeFilter === "approved") return isApprovedStatus(item.status);
     if (activeFilter === "rejected") return isRefusedStatus(item.status);
+    if (activeFilter === "recorded") return item.status === "recorded";
     return true;
   };
 
@@ -374,6 +422,110 @@ function MyEvents() {
 
   const canDeleteItem = (item) => item.isDraft || canTeacherEditEvent(item);
 
+  // ---- Event Manager: select, report, delete ----------------------------
+  // Every row can be selected. A report covers the recorded events among the
+  // selection; Delete covers all of it (saved events and browser drafts).
+  const selectable = () => panel.reports;
+  const reportable = (item) => panel.reports && !item.isDraft && item.status === "recorded";
+  const visibleSelectable = panel.reports ? filteredItems.map((item) => item.id) : [];
+  const allVisibleSelected =
+    visibleSelectable.length > 0 && visibleSelectable.every((id) => selected.has(id));
+  const selectedItems = allCombinedItems.filter((item) => selected.has(item.id));
+  const selectedIds = selectedItems.filter(reportable).map((item) => item.id);
+
+  const toggleSelected = (id) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const toggleAllVisible = () =>
+    setSelected((current) => {
+      const next = new Set(current);
+      visibleSelectable.forEach((id) => (allVisibleSelected ? next.delete(id) : next.add(id)));
+      return next;
+    });
+
+  const handleReportOne = async (item) => {
+    try {
+      setReportingId(item.id);
+      const outcome = await downloadEventReport(item.id);
+      const notice = reportNotice(outcome, `Report for "${item.event_name}"`);
+      if (notice) setSuccessMessage(notice);
+    } catch (err) {
+      setError(err?.message || "Could not generate the report.");
+    } finally {
+      setReportingId("");
+    }
+  };
+
+  const handleReportSelected = async () => {
+    if (selectedIds.length > MAX_EVENTS_PER_REPORT) {
+      setError(`A report can cover at most ${MAX_EVENTS_PER_REPORT} events; ${selectedIds.length} are selected.`);
+      return;
+    }
+    // Keep the order the list shows them in.
+    const ordered = filteredItems.map((item) => item.id).filter((id) => selectedIds.includes(id));
+    const rest = selectedIds.filter((id) => !ordered.includes(id));
+    try {
+      setReportingId("selected");
+      const outcome = await downloadEventsReport([...ordered, ...rest]);
+      const notice = reportNotice(
+        outcome,
+        selectedIds.length === 1 ? "Report" : `Report for ${selectedIds.length} events`,
+      );
+      if (notice) setSuccessMessage(notice);
+    } catch (err) {
+      setError(err?.message || "Could not generate the report.");
+    } finally {
+      setReportingId("");
+    }
+  };
+
+  // Delete the selection: one request for the saved events, and the
+  // browser-only drafts removed here. The list updates in place -- no refetch.
+  const handleBulkDelete = async () => {
+    const serverIds = selectedItems.filter((item) => !item.isDraft).map((item) => item.id);
+    const localIds = selectedItems.filter((item) => item.isDraft).map((item) => item.id);
+    try {
+      setBulkDeleting(true);
+      let deleted = localIds.length;
+      if (serverIds.length) {
+        const result = await bulkDeleteEvents(serverIds);
+        const gone = new Set(
+          (result?.results || []).filter((r) => r.status === "deleted").map((r) => r.event_id),
+        );
+        deleted += gone.size;
+        setEvents((prev) => prev.filter((e) => !gone.has(e.id)));
+      }
+      if (localIds.length && profile) {
+        localIds.forEach((id) => deleteTeacherDraft(profile.id, id));
+        setDrafts((prev) => prev.filter((d) => !localIds.includes(d.id)));
+      }
+      setSelected(new Set());
+      setBulkDelete(null);
+      setSuccessMessage(`${deleted} event${deleted === 1 ? "" : "s"} deleted permanently.`);
+    } catch (err) {
+      setError(err?.message || "Could not delete the selected events.");
+      setBulkDelete(null);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const selectBox = (item) =>
+    selectable(item) ? (
+      <input
+        type="checkbox"
+        checked={selected.has(item.id)}
+        onChange={() => toggleSelected(item.id)}
+        aria-label={`Select ${item.event_name || item.eventName || "untitled draft"}`}
+        className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-line text-accent focus:ring-accent"
+      />
+    ) : null;
+
   // ============================================================
   // MAIN UI
   //
@@ -387,7 +539,11 @@ function MyEvents() {
       profile={profile}
       onLogout={handleLogout}
       railBadge={tabCounts.all}
-      railNote="Filter by status, search by name, venue or department, then act on any row."
+      railNote={
+        panel.reports
+          ? "Search and filter, tick events, and download one report for all of them."
+          : "Filter by status, search by name, venue or department, then act on any row."
+      }
       locked
     >
       {/* Toasts sit bottom-right so feedback never shifts the layout or covers
@@ -435,7 +591,7 @@ function MyEvents() {
           <div className="flex flex-wrap items-center gap-2.5 px-4 py-3.5 sm:px-5">
 
             <div className="mr-auto min-w-0">
-              <p className="eyebrow">Teacher Panel</p>
+              <p className="eyebrow">{panel.label}</p>
               <h1 className="h3 mt-0.5 truncate text-ink">My Events</h1>
             </div>
 
@@ -502,7 +658,7 @@ function MyEvents() {
             )}
 
             <Link
-              to="/teacher/create-event"
+              to={`${panel.base}/create-event`}
               state={originState}
               className="btn btn-primary btn-sm shrink-0"
             >
@@ -513,7 +669,7 @@ function MyEvents() {
 
           {/* Status tabs + result count */}
           <div className="flex flex-wrap items-center gap-1.5 border-t hairline bg-raised/35 px-4 py-2.5 sm:px-5">
-            {STATUS_TABS.map((tab) => {
+            {statusTabs.map((tab) => {
               const isSelected = activeFilter === tab.key;
 
               return (
@@ -531,7 +687,43 @@ function MyEvents() {
               );
             })}
 
-            <div className="ml-auto flex items-center gap-3">
+            <div className="ml-auto flex flex-wrap items-center gap-3">
+              {panel.reports && visibleSelectable.length > 0 && (
+                <>
+                  <label className="inline-flex items-center gap-2 text-xs font-medium text-ink">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleAllVisible}
+                      aria-label="Select all shown events"
+                      className="h-4 w-4 cursor-pointer rounded border-line text-accent focus:ring-accent"
+                    />
+                    Select all
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleReportSelected}
+                    disabled={selectedIds.length === 0 || Boolean(reportingId)}
+                    className="btn btn-brand btn-xs"
+                  >
+                    {reportingId === "selected" ? <span className="spin h-3 w-3" /> : <IconDownload />}
+                    {selectedIds.length > 1
+                      ? `Report for ${selectedIds.length} events`
+                      : selectedIds.length === 1
+                        ? "Report for 1 event"
+                        : "Report for selected"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBulkDelete({ confirmText: "" })}
+                    disabled={selectedItems.length === 0 || bulkDeleting || Boolean(reportingId)}
+                    className="btn btn-danger btn-xs"
+                  >
+                    <IconTrash />
+                    {selectedItems.length > 0 ? `Delete selected (${selectedItems.length})` : "Delete selected"}
+                  </button>
+                </>
+              )}
               <p className="num text-xs font-medium text-muted">
                 Showing {filteredItems.length} of {allCombinedItems.length}
               </p>
@@ -583,7 +775,7 @@ function MyEvents() {
                 </button>
               ) : (
                 <Link
-                  to="/teacher/create-event"
+                  to={`${panel.base}/create-event`}
                   state={originState}
                   className="btn btn-primary btn-sm mt-5"
                 >
@@ -612,9 +804,12 @@ function MyEvents() {
                       style={isRejected ? { "--track": trackOf(item.status) } : undefined}
                       className={`px-4 py-3.5 ${isRejected ? "bg-[color-mix(in_srgb,var(--track)_6%,transparent)]" : ""}`}
                     >
-                      <p className="truncate font-display text-sm font-semibold text-ink">
-                        {item.event_name || item.eventName || "Untitled Draft"}
-                      </p>
+                      <div className="flex items-start gap-2.5">
+                        {selectBox(item)}
+                        <p className="min-w-0 truncate font-display text-sm font-semibold text-ink">
+                          {item.event_name || item.eventName || "Untitled Draft"}
+                        </p>
+                      </div>
 
                       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted">
                         <StatusChip status={item.status} />
@@ -648,6 +843,8 @@ function MyEvents() {
                           onDuplicate={handleDuplicate}
                           onDelete={setDeletingEvent}
                           originState={originState}
+                          onReport={handleReportOne}
+                          reporting={reportingId === item.id}
                         />
                       </div>
                     </li>
@@ -686,6 +883,9 @@ function MyEvents() {
                       >
                         {/* Event name, with its context on one muted line */}
                         <td className="max-w-56 px-4 py-3 xl:max-w-80">
+                          <div className="flex min-w-0 items-start gap-2.5">
+                          {selectBox(item)}
+                          <div className="min-w-0">
                           <p
                             className="truncate font-display text-sm font-semibold text-ink"
                             title={item.event_name || item.eventName || "Untitled Draft"}
@@ -707,6 +907,8 @@ function MyEvents() {
                               <span className="font-semibold">Reason:</span> {refusalReason}
                             </p>
                           )}
+                          </div>
+                          </div>
                         </td>
 
                         <td className="whitespace-nowrap px-4 py-3">
@@ -736,6 +938,8 @@ function MyEvents() {
                               onDuplicate={handleDuplicate}
                               onDelete={setDeletingEvent}
                               originState={originState}
+                              onReport={handleReportOne}
+                              reporting={reportingId === item.id}
                             />
                           </div>
                         </td>
@@ -755,7 +959,11 @@ function MyEvents() {
         onClose={() => !deletingLoading && setDeletingEvent(null)}
         eyebrow="Confirm"
         title="Delete Event"
-        subtitle={deletingEvent?.isDraft ? "Draft event deletion" : "Submitted event deletion"}
+        subtitle={
+          deletingEvent?.isDraft
+            ? "Draft event deletion"
+            : panel.approval ? "Submitted event deletion" : "Recorded event deletion"
+        }
         footer={
           <>
             <button
@@ -797,6 +1005,63 @@ function MyEvents() {
           Are you sure you want to delete this event? This will permanently remove it from
           your records.
         </p>
+      </Modal>
+
+      {/* Bulk delete: the same safeguard as the Dean's -- type DELETE. */}
+      <Modal
+        open={Boolean(bulkDelete)}
+        onClose={() => !bulkDeleting && setBulkDelete(null)}
+        eyebrow="Delete"
+        title={`Delete ${selectedItems.length} event${selectedItems.length === 1 ? "" : "s"} permanently?`}
+        subtitle={`${selectedItems.length} selected`}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setBulkDelete(null)}
+              disabled={bulkDeleting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={handleBulkDelete}
+              disabled={bulkDeleting || bulkDelete?.confirmText !== "DELETE"}
+            >
+              {bulkDeleting ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
+              Delete {selectedItems.length} permanently
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink">
+          This removes the selected events with their photos, videos and documents.
+          It cannot be undone, and download links in reports already generated stop
+          working.
+        </p>
+        <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto rounded-xl border hairline bg-raised/40 px-3 py-2 text-xs text-ink">
+          {selectedItems.map((item) => (
+            <li key={item.id} className="truncate">
+              {item.event_name || item.eventName || "Untitled draft"}
+            </li>
+          ))}
+        </ul>
+        <div className="field mt-4">
+          <label htmlFor="emBulkDeleteConfirm">
+            Type <span className="font-semibold">DELETE</span> to confirm
+          </label>
+          <input
+            id="emBulkDeleteConfirm"
+            type="text"
+            value={bulkDelete?.confirmText || ""}
+            onChange={(event) => setBulkDelete({ confirmText: event.target.value })}
+            autoComplete="off"
+            placeholder="DELETE"
+            className="input"
+          />
+        </div>
       </Modal>
     </TeacherShell>
   );

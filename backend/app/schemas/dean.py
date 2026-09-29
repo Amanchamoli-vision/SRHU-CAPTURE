@@ -137,3 +137,5 @@ class DeanImportTeacherItem(BaseModel):
 
 class DeanImportTeachersRequest(BaseModel):
     teachers: list[DeanImportTeacherItem] = Field(min_length=1, max_length=MAX_IMPORT_TEACHERS)
+    # Invite the accounts this import creates, in the same request.
+    send_invites: bool = False

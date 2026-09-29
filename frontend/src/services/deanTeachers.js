@@ -66,8 +66,13 @@ export function previewTeacherImport(file, { onProgress, signal } = {}) {
 }
 
 /** Create Teacher accounts for the confirmed rows. */
-export function importTeachers(teachers) {
-  return apiJson("/dean/teachers/import", { method: "POST", body: { teachers } });
+export function importTeachers(teachers, { sendInvites = false } = {}) {
+  // With sendInvites the server invites the new accounts in this same
+  // request -- one call instead of import-then-invite.
+  return apiJson("/dean/teachers/import", {
+    method: "POST",
+    body: { teachers, send_invites: sendInvites },
+  });
 }
 
 /** Add one teacher; with `send_invite` the invitation goes out straight away. */

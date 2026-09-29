@@ -7,6 +7,8 @@ import useThemeToggle from "../theme/useThemeToggle";
 import LogoutConfirmModal from "../common/LogoutConfirmModal";
 import FirstLoginPasswordModal from "../common/FirstLoginPasswordModal";
 import { useAuth } from "../../context/AuthContext";
+import { usePanel } from "./panel";
+import ReportReadyPrompt from "./ReportReadyPrompt";
 import {
   IconArrowUp,
   IconGrid,
@@ -19,11 +21,13 @@ import {
   RidgeDivider,
 } from "./icons";
 
+// Paths are relative to the panel's base: "/teacher", or "/event_manager"
+// for the Event Manager, which shares these screens.
 const NAV = [
-  { key: "dashboard", to: "/teacher/dashboard", label: "Dashboard", Icon: IconGrid },
-  { key: "create", to: "/teacher/create-event", label: "Create Event", Icon: IconPlus },
-  { key: "events", to: "/teacher/my-events", label: "My Events", Icon: IconList },
-  { key: "profile", to: "/teacher/profile", label: "My Profile", Icon: IconUser },
+  { key: "dashboard", to: "/dashboard", label: "Dashboard", Icon: IconGrid },
+  { key: "create", to: "/create-event", label: "Create Event", Icon: IconPlus },
+  { key: "events", to: "/my-events", label: "My Events", Icon: IconList },
+  { key: "profile", to: "/profile", label: "My Profile", Icon: IconUser },
 ];
 
 /**
@@ -50,6 +54,7 @@ export default function TeacherShell({
 }) {
   const [dark, toggleTheme] = useThemeToggle();
   const { user } = useAuth();
+  const panel = usePanel();
   const [menuOpen, setMenuOpen] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -93,7 +98,7 @@ export default function TeacherShell({
    * that has one but no designation still says something useful.
    */
   const accountSubtitle =
-    profile?.designation?.trim() || profile?.department?.trim() || "Teacher";
+    profile?.designation?.trim() || profile?.department?.trim() || panel.roleLabel;
 
   return (
     <div className={`hv-root ${locked ? "flex h-screen flex-col overflow-hidden" : "min-h-screen"}`}>
@@ -107,7 +112,7 @@ export default function TeacherShell({
       <header className={`hv-header shrink-0 ${scrolled ? "is-scrolled" : ""}`}>
         <div className="flex h-full items-center justify-between gap-3 px-4 sm:px-6">
 
-          <Link to="/teacher/dashboard" className="flex min-w-0 items-center gap-3">
+          <Link to={`${panel.base}/dashboard`} className="flex min-w-0 items-center gap-3">
             <img
               src={srhuLogo}
               alt="Swami Rama Himalayan University"
@@ -116,7 +121,7 @@ export default function TeacherShell({
             <div className="min-w-0 leading-tight">
               <p className="wordmark truncate">Campus Capture</p>
               <p className="truncate text-[11px] font-medium text-muted">
-                Teacher Panel
+                {panel.label}
                 <span className="hidden sm:inline"> · Swami Rama Himalayan University</span>
               </p>
             </div>
@@ -124,11 +129,11 @@ export default function TeacherShell({
 
           {/* Desktop nav — the rail carries the same links, but the header row
               keeps them reachable when the rail is off-screen. */}
-          <nav className="hidden items-center gap-6 lg:flex" aria-label="Teacher sections">
+          <nav className="hidden items-center gap-6 lg:flex" aria-label={`${panel.roleLabel} sections`}>
             {NAV.map((item) => (
               <Link
                 key={item.key}
-                to={item.to}
+                to={`${panel.base}${item.to}`}
                 aria-current={active === item.key ? "page" : undefined}
                 className="nav-link"
               >
@@ -149,19 +154,23 @@ export default function TeacherShell({
               {dark ? <IconSun /> : <IconMoon />}
             </button>
 
-            <div className="relative">
-              <NotificationBell currentUser={profile} />
-            </div>
+            {/* The bell carries the Dean's decisions; a panel without the
+                approval workflow has nothing to put in it. */}
+            {panel.approval && (
+              <div className="relative">
+                <NotificationBell currentUser={profile} />
+              </div>
+            )}
 
             {/* Only while the rail is off-screen; from lg up the rail's own
                 account block is the one place the signed-in user appears. */}
-            <Link to="/teacher/profile" className="hidden items-center gap-2.5 sm:flex lg:hidden transition hover:opacity-80">
+            <Link to={`${panel.base}/profile`} className="hidden items-center gap-2.5 sm:flex lg:hidden transition hover:opacity-80">
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
                 {initial}
               </span>
               <span className="hidden leading-tight md:block">
                 <span className="block text-sm font-semibold text-ink">
-                  {profile?.name || "Teacher"}
+                  {profile?.name || panel.roleLabel}
                 </span>
                 <span className="block text-[11px] text-muted truncate max-w-[120px]">
                   {accountSubtitle}
@@ -199,7 +208,7 @@ export default function TeacherShell({
           {NAV.map((item) => (
             <Link
               key={item.key}
-              to={item.to}
+              to={`${panel.base}${item.to}`}
               onClick={() => setMenuOpen(false)}
               aria-current={active === item.key ? "page" : undefined}
               className="menu-link"
@@ -211,7 +220,7 @@ export default function TeacherShell({
 
           {/* Same account block as the Dean and Super Admin menus. */}
           <Link
-            to="/teacher/profile"
+            to={`${panel.base}/profile`}
             onClick={() => setMenuOpen(false)}
             className="rail-account mt-6 px-0 transition hover:opacity-80"
           >
@@ -220,7 +229,7 @@ export default function TeacherShell({
             </span>
             <span className="min-w-0 leading-tight">
               <span className="block truncate text-sm font-semibold text-ink">
-                {profile?.name || "Teacher"}
+                {profile?.name || panel.roleLabel}
               </span>
               <span className="block text-[11px] text-muted truncate">
                 {accountSubtitle}
@@ -252,11 +261,11 @@ export default function TeacherShell({
         >
           <p className="rail-label px-3 pb-2.5">Navigation</p>
 
-          <nav className="space-y-1" aria-label="Teacher navigation">
+          <nav className="space-y-1" aria-label={`${panel.roleLabel} navigation`}>
             {NAV.map((item) => (
               <Link
                 key={item.key}
-                to={item.to}
+                to={`${panel.base}${item.to}`}
                 aria-current={active === item.key ? "page" : undefined}
                 className="rail-link"
               >
@@ -278,13 +287,13 @@ export default function TeacherShell({
 
             <RidgeDivider className="divider my-3 h-7 shrink-0" />
 
-            <Link to="/teacher/profile" className="rail-account transition hover:bg-accent/5">
+            <Link to={`${panel.base}/profile`} className="rail-account transition hover:bg-accent/5">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/12 font-display text-xs font-semibold text-accent ring-1 ring-accent/20">
                 {initial}
               </span>
               <span className="min-w-0 leading-tight">
                 <span className="block truncate text-sm font-semibold text-ink">
-                  {profile?.name || "Teacher"}
+                  {profile?.name || panel.roleLabel}
                 </span>
                 <span className="block text-[11px] text-muted truncate">
                   {accountSubtitle}
@@ -315,6 +324,9 @@ export default function TeacherShell({
         </button>
       )}
 
+      {/* Panels that generate reports (the Event Manager). */}
+      {panel.reports && <ReportReadyPrompt />}
+
       <LogoutConfirmModal
         open={logoutConfirmOpen}
         onClose={() => setLogoutConfirmOpen(false)}
@@ -324,7 +336,7 @@ export default function TeacherShell({
         }}
       />
 
-      {user?.role === "teacher" && user?.must_change_password === true && (
+      {user?.role === panel.role && user?.must_change_password === true && (
         <FirstLoginPasswordModal isOpen={true} />
       )}
     </div>

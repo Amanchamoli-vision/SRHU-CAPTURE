@@ -116,6 +116,13 @@ const STATUS_META = {
     badgeClass: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20",
     dotClass: "bg-rose-600",
   },
+  // Event Manager only: saved straight away, no Dean review.
+  recorded: {
+    label: "Recorded",
+    badgeClass:
+      "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20",
+    dotClass: "bg-emerald-500",
+  },
 };
 
 const UNKNOWN_STATUS_META = {
@@ -350,14 +357,13 @@ export function getNextStage(status) {
   return null;
 }
 
-/** Which post-approval stage the Dean can step back to, if any. */
+/**
+ * Which post-approval stage the Dean can step back to, if any. None: Completed
+ * is final -- the report is generated from it -- and the server refuses the
+ * move (update_event_stage), so the option is not offered.
+ */
+// eslint-disable-next-line no-unused-vars
 export function getPreviousStage(status) {
-  const value = normalizeStatus(status);
-
-  if (value === "completed") {
-    return { key: "approved", label: "Back to Approved" };
-  }
-
   return null;
 }
 
@@ -380,6 +386,9 @@ export const TEACHER_EDITABLE_STATUSES = [
   // the Edit button on an event the API would happily have accepted, which
   // stranded the teacher with no way out of a revocation.
   "revoked",
+  // An Event Manager's saved event: nobody reviews it, so it stays editable.
+  // A teacher's event never has this status.
+  "recorded",
 ];
 
 export function canTeacherEditEvent(event) {

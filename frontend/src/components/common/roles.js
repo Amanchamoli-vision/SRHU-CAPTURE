@@ -12,12 +12,14 @@ export const ROLE_TRACK = {
   teacher: "#0EA5E9", // sky
   dean: "#8B5CF6",    // violet
   superadmin: "#F59E0B", // amber
+  event_manager: "#10B981", // emerald
 };
 
 export const ROLE_LABEL = {
   teacher: "Teacher",
   dean: "Dean",
   superadmin: "Super Admin",
+  event_manager: "Event Manager",
 };
 
 const NEUTRAL_TRACK = "#64748B"; // slate, for an unrecognised role
@@ -42,6 +44,7 @@ export const ROLE_HOME = {
   teacher: "/teacher/dashboard",
   dean: "/dean/dashboard",
   superadmin: "/superadmin/dashboard",
+  event_manager: "/event_manager/dashboard",
 };
 
 /** The screen where a Dean with a temporary password must set a new one. */

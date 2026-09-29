@@ -536,24 +536,27 @@ def send_password_reset_email(to_email: str, name: str, token: str) -> None:
     send_email(to_email, subject, text, html)
 
 
-def send_teacher_invitation_email(to_email: str, name: str, token: str) -> None:
-    """A Dean's invitation: a one-time link to set a password. No password is sent."""
+def _send_invitation(to_email: str, name: str, token: str, *, added_by: str, purpose: str) -> None:
+    """A one-time link to set a password and activate the account. No password is sent.
+
+    Accepting it (POST /auth/accept-invite) also verifies the address, so this
+    is the account's email verification as well as its registration.
+    """
     url = settings.teacher_invite_url(token)
     days = settings.teacher_invite_expire_days
     subject = "You're invited to Campus Capture SRHU"
+    intro = f"{added_by} has added you to Campus Capture SRHU, {purpose}."
     text = (
         f"Hello {name},\n\n"
-        "Your Dean has added you to Campus Capture SRHU, where teachers submit and "
-        "manage their events.\n\n"
-        f"Open this link to choose your password and activate your account:\n\n{url}\n\n"
+        f"{intro}\n\n"
+        f"Open this link to verify your email, choose your password and activate your account:\n\n{url}\n\n"
         f"Your sign-in email is {to_email}. The link works once and is valid for {days} days. "
         "If you were not expecting this, you can ignore this email.\n"
     )
     html = _layout(
         "You're invited to Campus Capture",
         _greeting(name)
-        + _p("Your Dean has added you to Campus Capture SRHU, where teachers submit and "
-             "manage their events. Choose a password to activate your account.")
+        + _p(f"{intro} Choose a password to verify your email and activate your account.")
         + _credentials([("Sign-in email", to_email, False)])
         + _button(url, "Set my password")
         + _link_fallback(
@@ -564,6 +567,24 @@ def send_teacher_invitation_email(to_email: str, name: str, token: str) -> None:
         preheader=f"Choose your password to activate your account. Valid for {days} days.",
     )
     send_email(to_email, subject, text, html)
+
+
+def send_teacher_invitation_email(to_email: str, name: str, token: str) -> None:
+    """A Dean's invitation to a Teacher."""
+    _send_invitation(
+        to_email, name, token,
+        added_by="Your Dean",
+        purpose="where teachers submit and manage their events",
+    )
+
+
+def send_event_manager_invitation_email(to_email: str, name: str, token: str) -> None:
+    """A Super Admin's invitation to an Event Manager."""
+    _send_invitation(
+        to_email, name, token,
+        added_by="A Super Admin",
+        purpose="as an Event Manager: you will record events and generate their reports",
+    )
 
 
 def send_registration_attempt_email(to_email: str, name: str) -> None:

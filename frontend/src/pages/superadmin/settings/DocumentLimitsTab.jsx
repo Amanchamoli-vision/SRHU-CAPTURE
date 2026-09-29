@@ -1,4 +1,5 @@
 import NumberLimitField from "../../../components/superadmin/settings/NumberLimitField";
+import RequirementToggle from "../../../components/superadmin/settings/RequirementToggle";
 import SettingsCard from "../../../components/superadmin/settings/SettingsCard";
 import { IconFileText } from "../../../components/teacher/icons";
 
@@ -26,6 +27,14 @@ export default function DocumentLimitsTab({ values, bounds, errors, disabled, on
         chip="PDF, DOC, XLS, PPT, TXT, CSV"
         description="Supporting documents attached to an event: brochures, attendance sheets, permission letters and the like."
       >
+        <RequirementToggle
+          id="documents-required"
+          noun="document"
+          value={values.documents_required}
+          disabled={disabled}
+          onChange={(on) => onChange("documents_required", on)}
+        />
+
         {field("max_documents_per_event", {
           label: "Max documents per event",
           hint: "Stops an unbounded number of small files being attached.",
@@ -39,7 +48,7 @@ export default function DocumentLimitsTab({ values, bounds, errors, disabled, on
       </SettingsCard>
 
       <div className="glass reveal flex flex-col justify-center p-5 sm:p-7" style={{ "--i": 2 }}>
-        <p className="eyebrow">Why only two settings</p>
+        <p className="eyebrow">Why no per-document limit</p>
         <p className="prose-muted mt-3 text-sm">
           Documents are budgeted by combined size on purpose. Ten 1 MB files and one
           10 MB file cost the same storage, so the teacher is left free to choose —
