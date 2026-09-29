@@ -118,6 +118,9 @@ departments = db["departments"]
 managed_events = db["managed_events"]
 managed_event_media = db["managed_event_media"]
 managed_event_documents = db["managed_event_documents"]
+# In-flight direct browser-to-R2 uploads (app.services.direct_upload): what the
+# API authorised, so the object can be verified, recorded, or cleaned up.
+upload_sessions = db["upload_sessions"]
 
 # Uploaded file bytes are stored in GridFS so that MongoDB remains the single
 # store for the application, including media and documents.
@@ -272,6 +275,21 @@ def ensure_indexes() -> None:
             [("event_id", ASCENDING), ("name_key", ASCENDING)],
             name="event_name",
         )
+
+    # The sweep looks for unfinished uploads past their deadline.
+    upload_sessions.create_index(
+        [("status", ASCENDING), ("expires_at", ASCENDING)],
+        name="status_expires",
+    )
+    # A finished session is kept a while for diagnosis, then dropped. The
+    # field is only stamped once a session is finished (see direct_upload), so
+    # the TTL can never remove a session whose bytes still need cleaning up.
+    _ensure_ttl_index(
+        upload_sessions,
+        field="purge_at",
+        name="purge_ttl",
+        expire_after_seconds=0,
+    )
 
     # Imported here rather than at module scope: the service imports this
     # module for its collection handle, so a top-level import would cycle.

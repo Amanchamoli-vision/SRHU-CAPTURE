@@ -22,7 +22,18 @@ import logging
 from datetime import datetime, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from pymongo import ASCENDING, DESCENDING
 
@@ -36,7 +47,9 @@ from app.models.documents import (
 )
 from app.routers.events import (
     _cap_error,
+    _direct_upload_response,
     _ensure_bytes_under_cap,
+    _ensure_direct_upload_fits,
     _ensure_under_cap,
     _size_cap_error,
     paginate,
@@ -47,7 +60,8 @@ from app.schemas.event_manager import (
     ReportPhotosRequest,
 )
 from app.schemas.events import EventCreateRequest, EventUpdateRequest
-from app.services import report_files
+from app.schemas.uploads import DirectUploadSignRequest, DirectUploadStartRequest
+from app.services import direct_upload, report_files
 from app.services.event_fields import many_with_legacy_metadata, with_legacy_metadata
 from app.services.event_types import resolve_event_type
 from app.services.managed_report_pdf import (
@@ -521,6 +535,106 @@ def delete_document(event_id: str, document_id: str, user: dict = Depends(manage
     event = _own_event_or_404(event_id, user)
     _delete_file(managed_event_documents, document_id, event, "Document not found")
     return {"success": True, "message": "Document deleted successfully"}
+
+
+# ============================================================
+# DIRECT UPLOADS (mirrors /teacher/events/{id}/uploads)
+# ============================================================
+
+UPLOAD_SCOPE = "event_manager"
+
+
+@router.post("/events/{event_id}/uploads")
+def start_direct_upload(
+    event_id: str,
+    payload: DirectUploadStartRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(manager_dep),
+):
+    event = _own_event_or_404(event_id, user)
+    if not direct_upload.available():
+        return {"success": True, "direct": False}
+
+    event_key = str(event["_id"])
+    info = direct_upload.inspect_declared(payload.kind, payload.file_name, payload.content_type)
+    collection = managed_event_documents if info["media_type"] == "document" else managed_event_media
+    _ensure_direct_upload_fits(collection, event_key, info, payload.size, get_upload_limits())
+
+    started = direct_upload.start_session(
+        scope=UPLOAD_SCOPE,
+        owner_id=user["id"],
+        event_key=event_key,
+        kind=payload.kind,
+        info=info,
+        file_name=safe_file_name(payload.file_name),
+        original_name=payload.file_name,
+        size=payload.size,
+    )
+    background_tasks.add_task(direct_upload.sweep_if_due)
+    return {"success": True, "direct": True, **started}
+
+
+@router.post("/events/{event_id}/uploads/{session_id}/sign")
+def sign_direct_upload(
+    event_id: str,
+    session_id: str,
+    payload: DirectUploadSignRequest | None = None,
+    user: dict = Depends(manager_dep),
+):
+    _own_event_or_404(event_id, user)
+    session = direct_upload.active_session(
+        session_id, scope=UPLOAD_SCOPE, owner_id=user["id"], event_id=event_id
+    )
+    return {
+        "success": True,
+        **direct_upload.sign_urls(session, payload.part_numbers if payload else None),
+    }
+
+
+@router.post("/events/{event_id}/uploads/{session_id}/complete", status_code=status.HTTP_201_CREATED)
+def complete_direct_upload(
+    event_id: str,
+    session_id: str,
+    request: Request,
+    user: dict = Depends(manager_dep),
+):
+    session = direct_upload.claim_session(
+        session_id, scope=UPLOAD_SCOPE, owner_id=user["id"], event_id=event_id
+    )
+    try:
+        event = _own_event_or_404(event_id, user)
+    except HTTPException:
+        direct_upload.discard(session)
+        raise
+
+    media_type = session["media_type"]
+    caps = direct_upload.caps_for(media_type, get_upload_limits())
+    direct_upload.finalize_object(session, per_file_bytes=caps["per_file_bytes"], what=caps["what"])
+
+    collection = managed_event_documents if media_type == "document" else managed_event_media
+    document, stored = direct_upload.new_record(session)
+    try:
+        # Deletes the object itself whenever it refuses the record.
+        _record(
+            collection, document, stored,
+            direct_upload.cap_query(str(event["_id"]), media_type),
+            caps["cap"], media_type, caps["cap_bytes"],
+        )
+    except Exception:
+        direct_upload.finish(session, direct_upload.FAILED)
+        raise
+    direct_upload.finish(session, direct_upload.COMPLETED, record_id=document["_id"])
+
+    return _direct_upload_response(request, document)
+
+
+@router.delete("/events/{event_id}/uploads/{session_id}")
+def abort_direct_upload(event_id: str, session_id: str, user: dict = Depends(manager_dep)):
+    """Cancel an unfinished upload; works even after the event was deleted."""
+    aborted = direct_upload.abort_session(
+        session_id, scope=UPLOAD_SCOPE, owner_id=user["id"], event_id=event_id
+    )
+    return {"success": True, "aborted": aborted}
 
 
 # ============================================================

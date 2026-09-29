@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { apiJson, apiUpload, isAbortError } from "../../services/api";
+import { apiJson, isAbortError } from "../../services/api";
+import { uploadEventFile } from "../../services/directUpload";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { canTeacherEditEvent, getRefusalReason } from "../../utils/constants";
 import {
@@ -757,12 +758,10 @@ function CreateEvent() {
 
       const eventId = await ensureEventId();
       if (signal?.aborted) return;
-      const path =
-        entry.kind === "document"
-          ? `${panel.api}/events/${eventId}/documents`
-          : `${panel.api}/events/${eventId}/media`;
 
-      const result = await apiUpload(path, {
+      // Straight to storage, so large videos never pass the API's proxy.
+      const result = await uploadEventFile(`${panel.api}/events/${eventId}`, {
+        kind: entry.kind,
         file: entry.file,
         signal,
         onProgress: (fraction) => setUploadState(entry.key, { progress: fraction }),

@@ -346,8 +346,6 @@ def _letterhead(styles) -> list:
         Paragraph(REPORT_UNIVERSITY, styles["university"]),
         Spacer(1, 1),
         Paragraph(REPORT_SCHOOL, styles["school"]),
-        Spacer(1, 2),
-        Paragraph("Campus Capture &nbsp;·&nbsp; Event Documentation", styles["product"]),
     ]
     logo = _logo(20 * mm)
     table = Table(

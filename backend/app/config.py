@@ -152,6 +152,30 @@ class Settings(BaseSettings):
     # means the bucket is private and pre-signed URLs are issued instead.
     r2_public_url: str | None = None
     r2_signed_url_expiry: int = 6 * 60 * 60
+    # Overrides the endpoint derived from R2_ACCOUNT_ID. Only for pointing the
+    # API at a local S3-compatible server in development and tests.
+    r2_endpoint: str | None = None
+
+    # Direct browser-to-R2 uploads. The browser asks the API for pre-signed
+    # PUT URLs and sends the bytes straight to R2, so a video never passes
+    # through the Cloudflare proxy (and its request-size limit) or this
+    # server. Set R2_DIRECT_UPLOAD_ENABLED=false to fall back to posting files
+    # through the API. Needs the bucket CORS rule from scripts/configure_r2.py.
+    r2_direct_upload_enabled: bool = True
+    # How long one pre-signed PUT URL works. The browser asks for a fresh one
+    # when a URL expires mid-upload, so this only bounds a leaked URL.
+    r2_upload_url_expiry: int = Field(default=60 * 60, ge=60, le=7 * 24 * 60 * 60)
+    # How long an upload may take from start to finish. Sessions older than
+    # this are aborted and their bytes deleted by the sweep.
+    r2_upload_session_ttl_minutes: int = Field(default=6 * 60, ge=5, le=7 * 24 * 60)
+    # Every direct upload is an R2 multipart upload, because its part URLs die
+    # when the upload completes -- a plain pre-signed PUT URL would still let
+    # its holder overwrite the verified object until it expired. Files up to
+    # the threshold go up as one part; larger ones in parts of
+    # R2_MULTIPART_PART_SIZE_MB, sent in parallel and each retried alone. R2
+    # requires every part but the last to be at least 5 MB and equal-sized.
+    r2_multipart_threshold_mb: int = Field(default=16, ge=5, le=5 * 1024)
+    r2_multipart_part_size_mb: int = Field(default=8, ge=5, le=5 * 1024)
 
     # ------------------------------------------------------------------
     # Frontend / CORS
@@ -273,7 +297,13 @@ class Settings(BaseSettings):
 
     @property
     def r2_endpoint_url(self) -> str:
+        if self.r2_endpoint:
+            return self.r2_endpoint.rstrip("/")
         return f"https://{self.r2_account_id}.r2.cloudflarestorage.com"
+
+    @property
+    def r2_direct_upload_available(self) -> bool:
+        return self.r2_configured and self.r2_direct_upload_enabled
 
     @property
     def max_upload_size_bytes(self) -> int:

@@ -48,6 +48,7 @@ from app.schemas.events import (
     future_schedule_error,
 )
 from app.schemas.event_manager import ReportPhotosRequest
+from app.schemas.uploads import DirectUploadSignRequest, DirectUploadStartRequest
 from app.services import email_service, report_files
 from app.services.audit_service import log_audit_event
 from app.services.event_types import resolve_event_type
@@ -55,8 +56,10 @@ from app.services.event_fields import (
     many_with_legacy_metadata,
     with_legacy_metadata,
 )
+from app.services import direct_upload
 from app.services.storage_service import (
     absolutize,
+    check_declared_size,
     check_file_signature,
     delete_event_cascade,
     delete_events_cascade,
@@ -2094,6 +2097,21 @@ def _ensure_bytes_under_cap(
         raise _size_cap_error(cap_bytes, kind)
 
 
+def _ensure_direct_upload_fits(
+    collection, event_key: str, info: dict, size: int, limits: dict
+) -> dict:
+    """The checks a proxied upload gets before its bytes are stored, applied
+    to a direct upload's declared size before any URL is issued. Returns the
+    caps, which completion enforces again once the real size is known."""
+    media_type = info["media_type"]
+    caps = direct_upload.caps_for(media_type, limits)
+    query = direct_upload.cap_query(event_key, media_type)
+    _ensure_under_cap(collection, query, caps["cap"], media_type)
+    check_declared_size(size, caps["per_file_bytes"], what=caps["what"])
+    _ensure_bytes_under_cap(collection, query, size, caps["cap_bytes"], media_type)
+    return caps
+
+
 def _event_still_editable(event: dict) -> bool:
     return bool(events.find_one(
         {"_id": event["_id"], "status": {"$in": list(TEACHER_EDITABLE_STATUSES)}},
@@ -2568,6 +2586,173 @@ def delete_teacher_event_document(
         "success": True,
         "message": "Document deleted successfully",
     }
+
+
+# ============================================================
+# TEACHER DIRECT UPLOADS (browser -> R2, see services/direct_upload.py)
+#
+# The same photos, videos and documents as the two POST routes above, but the
+# bytes skip this API: it authorises the upload, hands out pre-signed URLs,
+# and on completion verifies what reached R2 before recording it with the
+# same post-insert checks. Without R2 (or with R2_DIRECT_UPLOAD_ENABLED off)
+# start answers {"direct": false} and the browser posts the file instead.
+# ============================================================
+
+TEACHER_UPLOAD_SCOPE = "teacher"
+
+
+def _direct_upload_response(request: Request, document: dict) -> dict:
+    """The body the proxied upload routes return for the same record."""
+    if "file_url" in document:
+        return {
+            "success": True,
+            "message": "Document uploaded successfully",
+            "document": absolutize(request, serialize(document), "file_url"),
+        }
+    return {
+        "success": True,
+        "message": "Media uploaded successfully",
+        "media": absolutize(request, serialize(document), "media_url"),
+    }
+
+
+@router.post(
+    "/teacher/events/{event_id}/uploads"
+)
+def start_teacher_direct_upload(
+    event_id: str,
+    payload: DirectUploadStartRequest,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    event = find_teacher_event_or_404(event_id, user["id"])
+    ensure_teacher_can_edit(event)
+    if not direct_upload.available():
+        return {"success": True, "direct": False}
+
+    event_key = str(event["_id"])
+    info = direct_upload.inspect_declared(payload.kind, payload.file_name, payload.content_type)
+    collection = event_documents if info["media_type"] == "document" else event_media
+    _ensure_direct_upload_fits(collection, event_key, info, payload.size, get_upload_limits())
+
+    # The names the proxied routes store: documents keep theirs, media are
+    # sanitised.
+    if payload.kind == "documents":
+        file_name = payload.file_name.strip()[:255] or "document"
+    else:
+        file_name = safe_file_name(payload.file_name)
+
+    started = direct_upload.start_session(
+        scope=TEACHER_UPLOAD_SCOPE,
+        owner_id=user["id"],
+        event_key=event_key,
+        kind=payload.kind,
+        info=info,
+        file_name=file_name,
+        original_name=payload.file_name,
+        size=payload.size,
+    )
+    background_tasks.add_task(direct_upload.sweep_if_due)
+    return {"success": True, "direct": True, **started}
+
+
+@router.post(
+    "/teacher/events/{event_id}/uploads/{session_id}/sign"
+)
+def sign_teacher_direct_upload(
+    event_id: str,
+    session_id: str,
+    payload: DirectUploadSignRequest | None = None,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Fresh part URLs, for an upload that outlived the ones it was given."""
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    event = find_teacher_event_or_404(event_id, user["id"])
+    ensure_teacher_can_edit(event)
+    session = direct_upload.active_session(
+        session_id, scope=TEACHER_UPLOAD_SCOPE, owner_id=user["id"], event_id=event_id
+    )
+    return {
+        "success": True,
+        **direct_upload.sign_urls(session, payload.part_numbers if payload else None),
+    }
+
+
+@router.post(
+    "/teacher/events/{event_id}/uploads/{session_id}/complete",
+    status_code=status.HTTP_201_CREATED,
+)
+def complete_teacher_direct_upload(
+    event_id: str,
+    session_id: str,
+    request: Request,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    session = direct_upload.claim_session(
+        session_id, scope=TEACHER_UPLOAD_SCOPE, owner_id=user["id"], event_id=event_id
+    )
+    try:
+        event = find_teacher_event_or_404(event_id, user["id"])
+        ensure_teacher_can_edit(event)
+    except HTTPException:
+        direct_upload.discard(session)
+        raise
+
+    media_type = session["media_type"]
+    caps = direct_upload.caps_for(media_type, get_upload_limits())
+    direct_upload.finalize_object(session, per_file_bytes=caps["per_file_bytes"], what=caps["what"])
+
+    collection = event_documents if media_type == "document" else event_media
+    document, stored = direct_upload.new_record(session)
+    try:
+        # Deletes the object itself whenever it refuses the record.
+        _record_upload(
+            collection, document, stored, event,
+            direct_upload.cap_query(str(event["_id"]), media_type),
+            caps["cap"], media_type, caps["cap_bytes"],
+        )
+    except Exception:
+        direct_upload.finish(session, direct_upload.FAILED)
+        raise
+    direct_upload.finish(session, direct_upload.COMPLETED, record_id=document["_id"])
+
+    return _direct_upload_response(request, document)
+
+
+@router.delete(
+    "/teacher/events/{event_id}/uploads/{session_id}"
+)
+def abort_teacher_direct_upload(
+    event_id: str,
+    session_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    """Cancel an unfinished upload and free what reached R2. Scoped by the
+    session's owner rather than the event, so it still cleans up after the
+    event was deleted or approved mid-upload."""
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    aborted = direct_upload.abort_session(
+        session_id, scope=TEACHER_UPLOAD_SCOPE, owner_id=user["id"], event_id=event_id
+    )
+    return {"success": True, "aborted": aborted}
 
 
 # ============================================================

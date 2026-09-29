@@ -91,6 +91,129 @@ def upload_stream(
     )
 
 
+# ======================================================================
+# Direct browser uploads (see app.services.direct_upload)
+#
+# Every direct upload is a multipart upload whose parts the browser PUTs to
+# pre-signed URLs. Content-Length is passed when presigning, which makes it a
+# signed header: R2 refuses a part whose size differs from what the API
+# authorised, and the browser sets the header itself from the body.
+# ======================================================================
+
+def create_multipart_upload(
+    object_key: str,
+    *,
+    content_type: str,
+    content_disposition: str | None = None,
+    metadata: dict[str, str] | None = None,
+) -> str:
+    """Start a multipart upload; returns its UploadId. The object's type,
+    disposition and metadata are fixed here, server side."""
+    params: dict[str, object] = {
+        "Bucket": settings.r2_bucket_name,
+        "Key": object_key,
+        "ContentType": content_type,
+        "Metadata": {k: str(v) for k, v in (metadata or {}).items()},
+    }
+    if content_disposition:
+        params["ContentDisposition"] = content_disposition
+    return _client().create_multipart_upload(**params)["UploadId"]
+
+
+def presign_upload_part(
+    object_key: str,
+    *,
+    upload_id: str,
+    part_number: int,
+    content_length: int,
+    expires_in: int,
+) -> str:
+    return _client().generate_presigned_url(
+        "upload_part",
+        Params={
+            "Bucket": settings.r2_bucket_name,
+            "Key": object_key,
+            "UploadId": upload_id,
+            "PartNumber": part_number,
+            "ContentLength": content_length,
+        },
+        ExpiresIn=expires_in,
+    )
+
+
+def list_parts(object_key: str, *, upload_id: str) -> list[dict]:
+    """Every part R2 holds for the upload: ``PartNumber``, ``ETag``, ``Size``."""
+    parts: list[dict] = []
+    marker = 0
+    while True:
+        response = _client().list_parts(
+            Bucket=settings.r2_bucket_name,
+            Key=object_key,
+            UploadId=upload_id,
+            PartNumberMarker=marker,
+        )
+        parts.extend(response.get("Parts", []))
+        if not response.get("IsTruncated"):
+            return parts
+        marker = response.get("NextPartNumberMarker") or parts[-1]["PartNumber"]
+
+
+def complete_multipart_upload(object_key: str, *, upload_id: str, parts: list[dict]) -> None:
+    _client().complete_multipart_upload(
+        Bucket=settings.r2_bucket_name,
+        Key=object_key,
+        UploadId=upload_id,
+        MultipartUpload={
+            "Parts": [
+                {"PartNumber": part["PartNumber"], "ETag": part["ETag"]}
+                for part in sorted(parts, key=lambda p: p["PartNumber"])
+            ]
+        },
+    )
+
+
+def abort_multipart_upload(object_key: str, *, upload_id: str) -> bool:
+    """Abort and free the parts; True when R2 no longer holds the upload."""
+    try:
+        _client().abort_multipart_upload(
+            Bucket=settings.r2_bucket_name, Key=object_key, UploadId=upload_id
+        )
+        return True
+    except ClientError as error:
+        if _error_code(error) in ("NoSuchUpload", "404"):
+            return True
+        logger.exception("Could not abort R2 multipart upload %s", object_key)
+        return False
+    except BotoCoreError:
+        logger.exception("Could not abort R2 multipart upload %s", object_key)
+        return False
+
+
+def head_object(object_key: str) -> dict | None:
+    """The object's metadata, or None when it does not exist."""
+    try:
+        return _client().head_object(Bucket=settings.r2_bucket_name, Key=object_key)
+    except ClientError as error:
+        if _error_code(error) in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+
+
+def read_range(object_key: str, *, length: int) -> bytes:
+    """The first ``length`` bytes of an object, for the magic-byte check."""
+    response = _client().get_object(
+        Bucket=settings.r2_bucket_name,
+        Key=object_key,
+        Range=f"bytes=0-{max(0, length - 1)}",
+    )
+    with response["Body"] as body:
+        return body.read(length)
+
+
+def _error_code(error: ClientError) -> str:
+    return str(error.response.get("Error", {}).get("Code", ""))
+
+
 def delete_object(object_key: str) -> bool:
     """Delete an object; returns False (and logs) when R2 refused."""
     try:

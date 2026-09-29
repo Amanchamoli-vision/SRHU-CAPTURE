@@ -54,23 +54,59 @@ MEDIA_TYPES: dict[str, tuple[str, str, frozenset[str]]] = {
     ".mov": ("video", "video/quicktime", frozenset({"video/quicktime"})),
 }
 
+# The legacy Office formats (.doc, .xls, .ppt) are OLE compound files, and
+# what a browser declares for one depends on the machine: the registered
+# handler's name for it, not a standard. Windows with WPS Office -- common on
+# campus -- says application/wps-office.doc or application/kswps, Linux file
+# managers often say application/x-ole-storage or application/CDFV2. Only the
+# canonical type was accepted, so a genuine Word 97-2003 document was refused
+# as "Unsupported document type" on those machines. The declared type is a
+# consistency check, not the security boundary -- the stored type comes from
+# the extension and the magic bytes are still checked -- so every name the
+# format is known by is accepted.
+_OLE_DECLARED = frozenset({
+    "application/x-ole-storage", "application/cdfv2", "application/cdfv2-unknown",
+    "application/vnd.ms-office",
+})
+
 # extension -> (canonical content type, accepted declared types)
 DOCUMENT_TYPES: dict[str, tuple[str, frozenset[str]]] = {
     ".pdf": ("application/pdf", frozenset({"application/pdf", "application/x-pdf"})),
-    ".doc": ("application/msword", frozenset({"application/msword"})),
+    ".doc": ("application/msword", _OLE_DECLARED | frozenset({
+        "application/msword", "application/vnd.ms-word", "application/vnd.msword",
+        "application/x-msword", "application/doc", "application/ms-doc", "application/word",
+        "application/x-word", "application/wps-office.doc", "application/kswps",
+        "application/rtf", "text/rtf",  # an RTF document saved as .doc; see _MAGIC_CHECKS
+    })),
     ".docx": (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
+        frozenset({
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/wps-office.docx",
+        }),
     ),
-    ".xls": ("application/vnd.ms-excel", frozenset({"application/vnd.ms-excel"})),
+    ".xls": ("application/vnd.ms-excel", _OLE_DECLARED | frozenset({
+        "application/vnd.ms-excel", "application/excel", "application/x-excel",
+        "application/msexcel", "application/x-msexcel", "application/wps-office.xls",
+        "application/et",
+    })),
     ".xlsx": (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),
+        frozenset({
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/wps-office.xlsx",
+        }),
     ),
-    ".ppt": ("application/vnd.ms-powerpoint", frozenset({"application/vnd.ms-powerpoint"})),
+    ".ppt": ("application/vnd.ms-powerpoint", _OLE_DECLARED | frozenset({
+        "application/vnd.ms-powerpoint", "application/mspowerpoint", "application/powerpoint",
+        "application/x-mspowerpoint", "application/wps-office.ppt", "application/dps",
+    })),
     ".pptx": (
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        frozenset({"application/vnd.openxmlformats-officedocument.presentationml.presentation"}),
+        frozenset({
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/wps-office.pptx",
+        }),
     ),
     ".txt": ("text/plain", frozenset({"text/plain"})),
     ".csv": (
@@ -112,6 +148,7 @@ INLINE_CONTENT_TYPES = (
 
 _OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _ZIP = (b"PK\x03\x04",)
+_RTF = b"{\\rtf"
 
 
 def _is_iso_bmff(head: bytes) -> bool:
@@ -129,7 +166,12 @@ _MAGIC_CHECKS = {
     ".mov": _is_iso_bmff,
     ".webm": lambda h: h.startswith(b"\x1a\x45\xdf\xa3"),
     ".pdf": lambda h: b"%PDF-" in h[:1024],
-    ".doc": lambda h: h.startswith(_OLE),
+    # A Word 97-2003 file is OLE. Two other things commonly carry a .doc name
+    # and open in Word without complaint, so people know them as .doc files:
+    # an RTF document ("Rich Text" saved as .doc) and a .docx renamed to .doc.
+    # Word's "web page" .doc is HTML inside and stays refused -- HTML is never
+    # accepted, whatever it is called.
+    ".doc": lambda h: h.startswith(_OLE) or h.startswith(_RTF) or h.startswith(_ZIP),
     ".xls": lambda h: h.startswith(_OLE),
     ".ppt": lambda h: h.startswith(_OLE),
     ".docx": lambda h: h.startswith(_ZIP),
@@ -271,6 +313,32 @@ def _too_large(limit_bytes: int | None = None, *, what: str = "Files") -> HTTPEx
     )
 
 
+def _effective_limit(max_bytes: int | None) -> int:
+    # A caller's cap narrows the global backstop, it never widens it. The
+    # per-file limits the Super Admin configures arrive here as max_bytes, and
+    # without the min() they would replace settings.max_upload_size_bytes
+    # outright -- letting Settings authorise a file larger than this deployment
+    # can actually accept.
+    return (
+        settings.max_upload_size_bytes
+        if max_bytes is None
+        else min(max_bytes, settings.max_upload_size_bytes)
+    )
+
+
+def check_declared_size(size: int, max_bytes: int | None = None, *, what: str = "Files") -> None:
+    """:func:`stream_upload`'s size rules, for a file the API never receives
+    (a direct upload): refuse an empty file or one past the per-file limit."""
+    if size <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded file is empty",
+        )
+    limit = _effective_limit(max_bytes)
+    if size > limit:
+        raise _too_large(limit, what=what)
+
+
 def stream_upload(
     upload: UploadFile,
     max_bytes: int | None = None,
@@ -288,16 +356,7 @@ def stream_upload(
     The caller is responsible for closing the returned buffer, which also
     removes the temporary file.
     """
-    # A caller's cap narrows the global backstop, it never widens it. The
-    # per-file limits the Super Admin configures arrive here as max_bytes, and
-    # without the min() they would replace settings.max_upload_size_bytes
-    # outright -- letting Settings authorise a file larger than this deployment
-    # can actually accept.
-    limit = (
-        settings.max_upload_size_bytes
-        if max_bytes is None
-        else min(max_bytes, settings.max_upload_size_bytes)
-    )
+    limit = _effective_limit(max_bytes)
 
     declared_size = getattr(upload, "size", None)
     if isinstance(declared_size, int) and declared_size > limit:
