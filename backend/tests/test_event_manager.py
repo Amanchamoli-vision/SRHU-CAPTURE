@@ -498,6 +498,9 @@ class ReportTests(EventManagerTestCase):
         for word in ("Approv", "Pending", "Rejected", "Status"):
             self.assertNotIn(word, text)
         self.assertIn("Swami Rama Himalayan University", text.split("Signed by:")[-1])
+        self.assertIn("S. No.", text)                      # attachments table header
+        self.assertNotIn("Ref.", text)                     # no reference number
+        self.assertNotIn("Event Documentation", text)      # no "Campus Capture" line up top
         links = [u for u in pdf_links(response.content) if "/event-manager/files/" in u]
         self.assertEqual(len(links), 3)
 
@@ -731,6 +734,7 @@ class PhotoLayoutTests(unittest.TestCase):
         self.assertIn("CONSOLIDATED EVENT REPORT", pages[0])
         self.assertIn("4 events", pages[0])
         self.assertIn("Asha Verma", pages[0])           # whoever generated it
+        self.assertNotIn("Ref", "".join(pages))            # no reference anywhere
         self.assertIn("1 - 4 September 2026", pages[0])  # the period covered
         self.assertIn("Contents", pages[1])
         for number in range(1, 5):

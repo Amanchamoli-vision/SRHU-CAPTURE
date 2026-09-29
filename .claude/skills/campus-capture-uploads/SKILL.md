@@ -59,6 +59,32 @@ never collide in storage**. The duplicate-name check
 (`GET /teacher/events/{id}/uploads/check-name`) exists only so the wizard can
 ask "are you sure?" before spending the bytes — it must never reject.
 
+## Direct uploads (browser → R2)
+
+With R2 configured, the wizard never posts file bytes to the API
+(`frontend/src/services/directUpload.js`, `backend/app/services/direct_upload.py`):
+`POST …/uploads` validates and pre-checks caps, then hands out a pre-signed
+PUT URL per part; `POST …/uploads/{id}/complete` assembles the parts, checks
+size, stored type and magic bytes, and records the file through the same
+`_record_upload` / `_record` as a posted file. The legacy `POST …/media` and
+`…/documents` routes remain the fallback: start answers `direct: false` without
+R2 or with `R2_DIRECT_UPLOAD_ENABLED=false`.
+
+- **Always multipart**, even a one-part photo. A plain pre-signed `PutObject`
+  URL would let its holder overwrite the verified object until it expired;
+  part URLs die when the upload completes or aborts.
+- `Content-Length` is signed into every part URL, so R2 refuses a part of any
+  other size; completion re-checks every part size anyway.
+- `claim_session` (pending → completing) is atomic: a retried or doubled
+  `/complete` records once. Recoverable failures (parts missing, R2 down)
+  hand the session back; validation failures free the bytes.
+- Unfinished sessions are swept past their deadline, and the sweep never
+  deletes an object a record already points to. The bucket lifecycle rule from
+  `scripts/configure_r2.py` is the backstop. `purge_at` (the TTL field) is only
+  stamped on finished sessions.
+- Both panels have the routes: `/teacher/events/{id}/uploads…` and
+  `/event-manager/events/{id}/uploads…`, sessions scoped by role and owner.
+
 ## Caps are enforced twice
 
 Once before the upload and once after the insert (`_record_upload`), because

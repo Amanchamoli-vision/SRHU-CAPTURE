@@ -340,7 +340,10 @@ class DeanReportDesignTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("Submitted by", text)
         self.assertNotIn("Recorded by", text)
-        self.assertIn("Ref. CC/ER/", text)
+        # No reference number, and no product line under the letterhead.
+        self.assertNotIn("Ref.", text)
+        self.assertNotIn("Event Documentation", text)
+        self.assertIn("S. No.", text)
         self.assertNotIn("Supporting Material", text)
 
     def test_default_photos_are_the_first_four(self) -> None:

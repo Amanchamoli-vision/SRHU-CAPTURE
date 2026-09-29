@@ -58,6 +58,8 @@ JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
 MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
 PDF = b"%PDF-1.7\n" + b"\x00" * 64
 DOCX = b"PK\x03\x04" + b"\x00" * 64
+DOC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 64   # OLE: Word 97-2003
+RTF = b"{\\rtf1\\ansi Agenda \\par}"
 SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
 
 
@@ -725,3 +727,42 @@ class ReportPhotoChoiceTests(UploadTests):
         ids = self.photos(1)
         self.events.set_status(self.event_id, "approved")
         self.assertIn(self.choose(ids).status_code, (400, 403, 409))
+
+
+class LegacyOfficeUploadTests(UploadTests):
+    """A genuine .doc was refused unless the browser declared exactly
+    application/msword -- WPS Office and several OSes use other names."""
+
+    def test_doc_is_accepted_under_every_name_it_is_declared_with(self) -> None:
+        for declared in (
+            "application/msword", "application/vnd.ms-word", "application/x-msword",
+            "application/wps-office.doc", "application/kswps", "application/x-ole-storage",
+            "application/CDFV2", "application/octet-stream",
+        ):
+            response = self.upload("agenda.doc", DOC, declared, kind="documents")
+            self.assertEqual(response.status_code, 201, f"{declared}: {response.text}")
+            self.assertEqual(self.saved[-1]["content_type"], "application/msword")
+
+    def test_rtf_or_renamed_docx_named_doc_is_accepted(self) -> None:
+        # Both open in Word as ".doc"; stored as the canonical Word type.
+        for data in (RTF, DOCX):
+            response = self.upload("agenda.doc", data, "application/msword", kind="documents")
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(self.saved[-1]["content_type"], "application/msword")
+
+    def test_html_is_still_refused_whatever_it_is_called(self) -> None:
+        html = b"<html><script>alert(1)</script></html>"
+        self.assertEqual(self.upload("agenda.doc", html, "application/msword", kind="documents").status_code, 400)
+        self.assertEqual(self.upload("agenda.doc", DOC, "text/html", kind="documents").status_code, 400)
+
+    def test_xls_and_ppt_accept_their_common_names(self) -> None:
+        for name, declared in (
+            ("sheet.xls", "application/wps-office.xls"), ("sheet.xls", "application/x-msexcel"),
+            ("slides.ppt", "application/wps-office.ppt"), ("slides.ppt", "application/mspowerpoint"),
+        ):
+            response = self.upload(name, DOC, declared, kind="documents")
+            self.assertEqual(response.status_code, 201, f"{name} {declared}: {response.text}")
+
+    def test_xls_and_ppt_still_need_ole_contents(self) -> None:
+        for name in ("sheet.xls", "slides.ppt"):
+            self.assertEqual(self.upload(name, RTF, "application/octet-stream", kind="documents").status_code, 400)

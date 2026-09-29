@@ -113,6 +113,7 @@ read from it.
 | `event_media`, `event_documents` | Metadata for uploads; bytes live in the`uploads` GridFS bucket and are served from `/files/{id}`                                     |
 | `notifications`                    | In-app notifications per`user_id`                                                                                                      |
 | `event_reports`                    | One generated report per`event_id`                                                                                                     |
+| `upload_sessions`                  | Direct browser-to-R2 uploads in flight: what was authorised, so the object can be verified, recorded or freed                           |
 
 ## Deploying: backend on Railway, frontend on Vercel
 
@@ -150,6 +151,20 @@ Railway's MongoDB template.
 | `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`                        | From address                                                                                                 |
 | `REQUIRE_EMAIL_VERIFICATION`                                 | `true`                                                                                                     |
 | `R2_*`                                                       | optional, see`.env.example`; without them uploads go to GridFS                                             |
+| `R2_DIRECT_UPLOAD_ENABLED`                                   | `true` (default): the browser uploads straight to R2; `false` posts files through the API instead          |
+
+**Direct uploads.** With R2 configured, photos, videos and documents go from
+the browser straight to R2 through pre-signed URLs, so a large video never
+meets the Cloudflare proxy's request-size limit. The bucket needs a CORS rule
+for the frontend origins; run this once, and again whenever `FRONTEND_URL` or
+`CORS_ORIGINS` change (it prints the change and asks for `--apply`):
+
+    python scripts/configure_r2.py            # dry run
+    python scripts/configure_r2.py --apply    # add --origin for preview URLs
+
+It also adds a lifecycle rule that aborts abandoned multipart uploads.
+Unfinished uploads are swept by the API itself; `scripts/sweep_upload_sessions.py`
+does the same from a scheduler.
 
 Do not set `PORT`: Railway provides it, and `run.py` uses it, turns auto-reload
 off and trusts Railway's proxy headers so file links come out as `https://`.
