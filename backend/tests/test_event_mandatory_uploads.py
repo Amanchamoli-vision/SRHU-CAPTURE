@@ -47,14 +47,14 @@ class EventMandatoryUploadsTests(unittest.TestCase):
     def tearDown(self):
         events.delete_many({"teacher_id": self.user_id})
 
-    def _future_date(self, days=5):
-        return (campus_now() + timedelta(days=days)).strftime("%Y-%m-%d")
+    def _past_date(self, days=5):
+        return (campus_now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     def test_save_draft_without_uploads_succeeds(self):
         """Saving as draft should NEVER block when photos/documents are missing."""
         payload = {
             "event_name": "Draft Event No Uploads",
-            "event_date": self._future_date(2),
+            "event_date": self._past_date(2),
             "event_type": "Workshop",
             "location": "Seminar Hall A",
             "save_as_draft": True,
@@ -65,7 +65,7 @@ class EventMandatoryUploadsTests(unittest.TestCase):
 
         update_payload = {
             "event_name": "Updated Draft Event No Uploads",
-            "event_date": self._future_date(2),
+            "event_date": self._past_date(2),
             "event_type": "Workshop",
             "location": "Seminar Hall B",
             "save_as_draft": True,
@@ -82,7 +82,7 @@ class EventMandatoryUploadsTests(unittest.TestCase):
         """Submitting an event for approval without at least one photo must fail with 400."""
         payload = {
             "event_name": "Event Without Photo",
-            "event_date": self._future_date(3),
+            "event_date": self._past_date(3),
             "event_type": "Workshop",
             "location": "Auditorium",
             "save_as_draft": True,
@@ -100,7 +100,7 @@ class EventMandatoryUploadsTests(unittest.TestCase):
 
         submit_payload = {
             "event_name": "Event Without Photo",
-            "event_date": self._future_date(3),
+            "event_date": self._past_date(3),
             "event_type": "Workshop",
             "location": "Auditorium",
             "save_as_draft": False,
@@ -119,7 +119,7 @@ class EventMandatoryUploadsTests(unittest.TestCase):
         """Submitting an event for approval without at least one document must fail with 400."""
         payload = {
             "event_name": "Event Without Document",
-            "event_date": self._future_date(3),
+            "event_date": self._past_date(3),
             "event_type": "Workshop",
             "location": "Auditorium",
             "save_as_draft": True,
@@ -138,7 +138,7 @@ class EventMandatoryUploadsTests(unittest.TestCase):
 
         submit_payload = {
             "event_name": "Event Without Document",
-            "event_date": self._future_date(3),
+            "event_date": self._past_date(3),
             "event_type": "Workshop",
             "location": "Auditorium",
             "save_as_draft": False,
@@ -157,7 +157,7 @@ class EventMandatoryUploadsTests(unittest.TestCase):
         """Submitting with at least 1 photo and 1 document, and 0 videos must succeed (video is optional)."""
         payload = {
             "event_name": "Valid Event No Video",
-            "event_date": self._future_date(4),
+            "event_date": self._past_date(4),
             "event_type": "Workshop",
             "location": "Main Hall",
             "save_as_draft": True,
@@ -182,7 +182,7 @@ class EventMandatoryUploadsTests(unittest.TestCase):
 
         submit_payload = {
             "event_name": "Valid Event No Video",
-            "event_date": self._future_date(4),
+            "event_date": self._past_date(4),
             "event_type": "Workshop",
             "location": "Main Hall",
             "save_as_draft": False,

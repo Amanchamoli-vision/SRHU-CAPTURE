@@ -348,11 +348,12 @@ def _logo(height: float) -> Image:
 # letterhead. Overridable per deployment so another school can use the same
 # build without a code change.
 REPORT_SCHOOL = settings.report_school
+REPORT_UNIVERSITY = "Swami Rama Himalayan University"
 
 
 def _letterhead(styles) -> list:
     text = [
-        Paragraph("Swami Rama Himalayan University", styles["university"]),
+        Paragraph(REPORT_UNIVERSITY, styles["university"]),
         Spacer(1, 1),
         Paragraph(REPORT_SCHOOL, styles["school"]),
         Spacer(1, 2),
@@ -428,10 +429,14 @@ def _boxed_text(text: str, style: ParagraphStyle) -> list:
 
 def _signature_block(styles) -> KeepTogether:
     line = "_" * 34
+    # The signatory's full designation, one line each.
+    signatory = "<br/>".join(
+        escape(part) for part in ("Dean", REPORT_SCHOOL, REPORT_UNIVERSITY)
+    )
     rows = [
         ("Signature:", line),
         ("Date:", line),
-        ("Signed by:", "Dean"),
+        ("Signed by:", signatory),
     ]
     data = [
         [Paragraph(label, styles["sign_label"]), Paragraph(value, styles["sign_value"])]
@@ -444,6 +449,8 @@ def _signature_block(styles) -> KeepTogether:
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        # "Signed by:" lines up with the first line of the designation.
+        ("VALIGN", (0, -1), (-1, -1), "TOP"),
     ]))
     # No heading of its own: a right-aligned block at the foot of the record
     # already reads as the sign-off, and the space keeps typical reports on

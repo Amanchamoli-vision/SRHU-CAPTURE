@@ -88,12 +88,12 @@ Application logs are written to files and stdout, never to MongoDB. They go to
 `LOG_DIR` (default `logs/` next to where the server starts), and the directory
 is git-ignored:
 
-| File         | Contents                                                              |
-| ------------ | --------------------------------------------------------------------- |
-| `app.log`    | Everything at `LOG_LEVEL` and up: application, uvicorn, tracebacks    |
-| `error.log`  | Warnings and errors only                                              |
-| `access.log` | One line per HTTP request                                             |
-| `audit.log`  | One JSON line per audited action: user, event and bulk changes        |
+| File           | Contents                                                            |
+| -------------- | ------------------------------------------------------------------- |
+| `app.log`    | Everything at`LOG_LEVEL` and up: application, uvicorn, tracebacks |
+| `error.log`  | Warnings and errors only                                            |
+| `access.log` | One line per HTTP request                                           |
+| `audit.log`  | One JSON line per audited action: user, event and bulk changes      |
 
 Each file rotates at `LOG_FILE_MAX_MB` (default 10) and keeps
 `LOG_FILE_BACKUP_COUNT` old copies (default 5), so the directory stays under

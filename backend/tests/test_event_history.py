@@ -190,18 +190,17 @@ def fake_current_user(authorization):
     return TOKENS[authorization]
 
 
-def future_date(days: int = 30) -> str:
-    """A date safely in the future, in the campus timezone the schema uses.
+def past_date(days: int = 30) -> str:
+    """A date safely in the past, in the campus timezone the schema uses.
 
-    Hardcoding one would turn every create-event test into a time bomb the day
-    it passed, now that the schema rejects past dates (PRD 3).
+    Events are backdated: the schema rejects any future date or time.
     """
-    return (campus_now() + timedelta(days=days)).strftime("%Y-%m-%d")
+    return (campus_now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
 
 EVENT_PAYLOAD = {
     "event_name": "Himalayan Innovation Summit",
-    "event_date": future_date(),
+    "event_date": past_date(),
     "event_type": "Seminar",
     "location": "Main Auditorium",
     "description": "Two days of talks.",

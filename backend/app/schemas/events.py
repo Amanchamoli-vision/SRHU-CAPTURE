@@ -20,6 +20,39 @@ def campus_now() -> datetime:
     return datetime.now(CAMPUS_TZ)
 
 
+def future_schedule_error(
+    event_date: str | None,
+    start_time: str | None,
+    end_date: str | None,
+    end_time: str | None,
+    now: datetime | None = None,
+) -> str | None:
+    """Why this schedule lies in the future, or None when it has already begun
+    and ended.
+
+    Events are recorded after they take place (backdated), so no part of the
+    schedule may be later than now: not the start date or time, and not the
+    end date or time. Every value is a canonical zero-padded string
+    ("YYYY-MM-DD", "HH:MM"), so plain string comparison is correct and no
+    Date/timezone maths is needed.
+    """
+    now = now or campus_now()
+    today = now.strftime("%Y-%m-%d")
+    current = now.strftime("%H:%M")
+
+    if event_date and event_date > today:
+        return "Event date cannot be in the future"
+    if event_date == today and start_time and start_time > current:
+        return "Start time cannot be in the future"
+
+    last_day = end_date or event_date
+    if last_day and last_day > today:
+        return "End date cannot be in the future"
+    if last_day == today and end_time and end_time > current:
+        return "End time cannot be in the future"
+    return None
+
+
 def _validate_event_date(value: str) -> str:
     try:
         date.fromisoformat(value)
@@ -162,13 +195,10 @@ class EventCreateRequest(BaseModel):
     def check_coordinator_contact(cls, value: str | None) -> str | None:
         return normalize_phone(value)
 
-    # Whether the past-date rule applies. Creation always enforces it; an edit
-    # turns it off unless the date actually moved (see EventUpdateRequest).
-    _enforce_not_past = True
-
     @model_validator(mode="after")
     def check_schedule(self):
-        """PRD 3: no past date or time, and the end must follow the start.
+        """No future date or time (events are backdated), and the end must
+        follow the start.
 
         Every value is a canonical zero-padded string ("YYYY-MM-DD", "HH:MM"),
         so plain comparison is correct and no Date/timezone maths is needed.
@@ -194,19 +224,13 @@ class EventCreateRequest(BaseModel):
                 "End time must be after start time for an event on a single day"
             )
 
-        # A draft is a scratchpad, not a commitment -- it may hold any date.
-        if self.save_as_draft or not self._enforce_not_past:
-            return self
-
-        now = campus_now()
-        today = now.strftime("%Y-%m-%d")
-
-        if self.event_date < today:
-            raise ValueError("Event date cannot be in the past")
-
-        if self.event_date == today and self.start_time:
-            if self.start_time <= now.strftime("%H:%M"):
-                raise ValueError("Start time cannot be in the past")
+        # Applies to drafts and edits too: an event is only ever created for
+        # something that has already happened.
+        error = future_schedule_error(
+            self.event_date, self.start_time, self.end_date, self.end_time
+        )
+        if error:
+            raise ValueError(error)
 
         return self
 
@@ -214,13 +238,9 @@ class EventCreateRequest(BaseModel):
 class EventUpdateRequest(EventCreateRequest):
     """Same fields as creation; a teacher edit always resubmits the event.
 
-    The past-date rule is switched off here and re-applied by the router only
-    when the date actually changed. Otherwise a teacher could never resubmit a
-    rejected event whose date has since lapsed -- the one edit they most need
-    to make would be the one edit the schema forbids.
+    The no-future rule applies exactly as on creation. A past date never
+    needs an exemption: an event whose date has lapsed is the normal case.
     """
-
-    _enforce_not_past = False
 
 
 # The only notifications a client may create for itself: the event-day
