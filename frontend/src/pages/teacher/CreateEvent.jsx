@@ -117,34 +117,45 @@ function detailsErrorsOf(data) {
     if (!String(data[field] ?? "").trim()) errors[field] = message;
   }
 
-  // Schedule rules (PRD 3). "Now" is read on every call rather than captured
-  // at module load, so a wizard left open overnight does not start rejecting a
-  // date that is still valid. All comparisons are on zero-padded local strings
-  // -- "YYYY-MM-DD" and "HH:MM" both sort lexicographically -- which keeps the
-  // UTC drift documented in utils/dates.js out of the validation entirely.
+  // Schedule rules. Events are backdated: no part of the schedule -- start or
+  // end, date or time -- may be later than now. "Now" is read on every call
+  // rather than captured at module load, so a wizard left open does not keep
+  // refusing a time that has since passed. All comparisons are on zero-padded
+  // local strings -- "YYYY-MM-DD" and "HH:MM" both sort lexicographically --
+  // which keeps the UTC drift documented in utils/dates.js out of it entirely.
   const today = localDateKey();
+  const now = nowHHmm();
   const eventDate = String(data.eventDate ?? "").trim();
   const endDate = String(data.endDate ?? "").trim();
   const startTime = String(data.startTime ?? "").trim();
   const endTime = String(data.endTime ?? "").trim();
 
-  if (eventDate && eventDate < today) {
-    errors.eventDate = "The event date cannot be in the past.";
+  if (eventDate && eventDate > today) {
+    errors.eventDate = "The event date cannot be in the future.";
   }
 
-  if (!errors.eventDate && eventDate === today && startTime && startTime <= nowHHmm()) {
-    errors.startTime = "The start time has already passed today.";
+  if (!errors.eventDate && eventDate === today && startTime && startTime > now) {
+    errors.startTime = "The start time cannot be later than now.";
+  }
+
+  const lastDay = endDate || eventDate;
+  if (endDate && endDate > today) {
+    errors.endDate = "The end date cannot be in the future.";
+  }
+
+  if (!errors.eventDate && !errors.endDate && lastDay === today && endTime && endTime > now) {
+    errors.endTime = "The end time cannot be later than now.";
   }
 
   // End date must be on or after start date.
-  if (endDate && eventDate && endDate < eventDate) {
+  if (!errors.endDate && endDate && eventDate && endDate < eventDate) {
     errors.endDate = "The end date must be on or after the start date.";
   }
 
   // The time order only constrains a single-day event: an event running from
   // 18:00 to 02:00 the next morning is ordinary, not a mistake.
   const singleDay = !endDate || endDate === eventDate;
-  if (singleDay && startTime && endTime && compareHHmm(endTime, startTime) <= 0) {
+  if (!errors.endTime && singleDay && startTime && endTime && compareHHmm(endTime, startTime) <= 0) {
     errors.endTime = "The end time must be after the start time on a single day.";
   }
 
@@ -1391,7 +1402,7 @@ function CreateEvent() {
                   value={formData.eventDate}
                   onChange={handleStartDateChange}
                   disabled={busy}
-                  min={localDateKey()}
+                  max={localDateKey()}
                   aria-invalid={fieldErrors.eventDate ? "true" : undefined}
                   className="input min-h-10 py-2"
                 />
@@ -1424,7 +1435,8 @@ function CreateEvent() {
                   value={formData.endDate}
                   onChange={handleChange}
                   disabled={busy}
-                  min={formData.eventDate || localDateKey()}
+                  min={formData.eventDate || undefined}
+                  max={localDateKey()}
                   aria-invalid={fieldErrors.endDate ? "true" : undefined}
                   className="input min-h-10 py-2"
                 />

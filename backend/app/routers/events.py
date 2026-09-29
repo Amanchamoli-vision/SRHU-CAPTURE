@@ -45,7 +45,7 @@ from app.schemas.events import (
     EventCreateRequest,
     EventUpdateRequest,
     NotificationCreateRequest,
-    campus_now,
+    future_schedule_error,
 )
 from app.services import email_service
 from app.services.audit_service import log_audit_event
@@ -1817,20 +1817,6 @@ def update_teacher_event(
             detail="This event has already been submitted and can no longer be saved as a draft.",
         )
 
-    # EventUpdateRequest exempts itself from the past-date rule so a rejected
-    # event whose date has lapsed can still be resubmitted untouched. The rule
-    # is re-applied here, but only to a date the teacher actually moved -- and
-    # never to a draft, which is still a scratchpad.
-    if (
-        not payload.save_as_draft
-        and payload.event_date != event.get("event_date")
-        and payload.event_date < campus_now().strftime("%Y-%m-%d")
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Event date cannot be in the past",
-        )
-
     if not payload.save_as_draft:
         ensure_submittable(event)
 
@@ -1978,6 +1964,17 @@ def teacher_resubmit_event(
     # Dean's queue too, and without the check a draft with nothing attached
     # could be pushed straight into review.
     ensure_submittable(event)
+
+    # The no-future rule the create and edit schemas apply, checked against
+    # what is stored: this route submits without a payload.
+    schedule_error = future_schedule_error(
+        event.get("event_date"),
+        event.get("start_time"),
+        event.get("end_date"),
+        event.get("end_time"),
+    )
+    if schedule_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=schedule_error)
 
     # A draft reaching the Dean for the first time is "submitted"; an event
     # coming back after a refusal -- rejected or revoked -- is "resubmitted".

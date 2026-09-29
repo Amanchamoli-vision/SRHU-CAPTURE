@@ -112,6 +112,20 @@ class PdfTests(unittest.TestCase):
         self.assertTrue(pdf.startswith(b"%PDF"))
         self.assertNotIn(b"/URI", pdf)
 
+    def test_signed_by_shows_the_deans_full_designation(self) -> None:
+        from reportlab.platypus import Table
+
+        from app.services.report_pdf import _signature_block, _styles
+
+        block = _signature_block(_styles())
+        table = next(item for item in block._content if isinstance(item, Table))
+        label, value = table._cellvalues[-1]
+        self.assertEqual(label.text, "Signed by:")
+        self.assertEqual(
+            value.text.split("<br/>"),
+            ["Dean", "School of Science and Technology", "Swami Rama Himalayan University"],
+        )
+
 
 def download(event: dict):
     client = TestClient(app)

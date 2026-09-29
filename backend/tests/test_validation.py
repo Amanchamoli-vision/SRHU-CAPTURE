@@ -138,33 +138,81 @@ def make(cls=EventCreateRequest, **overrides):
     return cls(**{**BASE, **overrides})
 
 
-class SchedulePastTests(unittest.TestCase):
-    def test_future_date_is_accepted(self) -> None:
-        request = make(event_date=offset_date(7), start_time="09:00", end_time="17:00")
-        self.assertEqual(request.start_time, "09:00")
+class ScheduleNotFutureTests(unittest.TestCase):
+    """Events are backdated: nothing in the schedule may be later than now."""
 
-    def test_past_date_is_rejected_on_create(self) -> None:
+    def test_past_date_is_accepted(self) -> None:
+        request = make(event_date=offset_date(-7), start_time="09:00", end_time="17:00")
+        self.assertEqual(request.event_date, offset_date(-7))
+
+    def test_long_past_date_is_accepted(self) -> None:
+        self.assertEqual(make(event_date=offset_date(-400)).event_date, offset_date(-400))
+
+    def test_future_date_is_rejected(self) -> None:
         with self.assertRaises(ValidationError) as caught:
-            make(event_date=offset_date(-1))
-        self.assertIn("past", str(caught.exception))
+            make(event_date=offset_date(1))
+        self.assertIn("Event date cannot be in the future", str(caught.exception))
 
     def test_today_is_accepted(self) -> None:
-        # The boundary: today is not "in the past".
         request = make(event_date=offset_date(0))
         self.assertEqual(request.event_date, offset_date(0))
 
-    def test_past_time_today_is_rejected(self) -> None:
+    def test_earlier_time_today_is_accepted(self) -> None:
         now = campus_now()
-        if now.hour == 0 and now.minute == 0:
-            self.skipTest("no earlier time exists today at midnight")
-        earlier = (now - timedelta(hours=1)).strftime("%H:%M")
-        with self.assertRaises(ValidationError):
-            make(event_date=offset_date(0), start_time=earlier, end_time="23:59")
+        if now.hour == 0:
+            self.skipTest("no earlier hour exists today")
+        start = (now - timedelta(hours=1)).strftime("%H:%M")
+        request = make(event_date=offset_date(0), start_time=start, end_time=now.strftime("%H:%M"))
+        self.assertEqual(request.start_time, start)
 
-    def test_draft_may_hold_a_past_date(self) -> None:
-        # A draft is a scratchpad, not a commitment.
-        request = make(event_date=offset_date(-30), save_as_draft=True)
-        self.assertEqual(request.event_date, offset_date(-30))
+    def test_later_start_time_today_is_rejected(self) -> None:
+        now = campus_now()
+        if now.hour == 23:
+            self.skipTest("no later hour exists today")
+        later = (now + timedelta(hours=1)).strftime("%H:%M")
+        with self.assertRaises(ValidationError) as caught:
+            make(event_date=offset_date(0), start_time=later)
+        self.assertIn("Start time cannot be in the future", str(caught.exception))
+
+    def test_later_end_time_today_is_rejected(self) -> None:
+        # An event still running has not finished: its end is in the future.
+        now = campus_now()
+        if now.hour in (0, 23):
+            self.skipTest("needs an hour on each side of now")
+        earlier = (now - timedelta(hours=1)).strftime("%H:%M")
+        later = (now + timedelta(hours=1)).strftime("%H:%M")
+        with self.assertRaises(ValidationError) as caught:
+            make(event_date=offset_date(0), start_time=earlier, end_time=later)
+        self.assertIn("End time cannot be in the future", str(caught.exception))
+
+    def test_future_end_date_is_rejected(self) -> None:
+        with self.assertRaises(ValidationError) as caught:
+            make(event_date=offset_date(-1), end_date=offset_date(1))
+        self.assertIn("End date cannot be in the future", str(caught.exception))
+
+    def test_draft_may_not_hold_a_future_date(self) -> None:
+        with self.assertRaises(ValidationError):
+            make(event_date=offset_date(30), save_as_draft=True)
+
+    def test_rule_uses_the_given_clock(self) -> None:
+        from datetime import datetime
+
+        from app.schemas.events import CAMPUS_TZ, future_schedule_error
+
+        now = datetime(2026, 9, 29, 14, 30, tzinfo=CAMPUS_TZ)
+        cases = [
+            (("2026-09-29", "14:30", None, None), None),                  # exactly now
+            (("2026-09-29", "14:31", None, None), "Start time cannot be in the future"),
+            (("2026-09-29", "10:00", None, "14:30"), None),
+            (("2026-09-29", "10:00", None, "14:31"), "End time cannot be in the future"),
+            (("2026-09-28", "18:00", "2026-09-29", "02:00"), None),       # overnight, finished
+            (("2026-09-28", "18:00", "2026-09-29", "23:00"), "End time cannot be in the future"),
+            (("2026-09-30", None, None, None), "Event date cannot be in the future"),
+            (("2026-09-29", None, None, None), None),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                self.assertEqual(future_schedule_error(*args, now=now), expected)
 
 
 class ScheduleOrderTests(unittest.TestCase):
@@ -172,21 +220,25 @@ class ScheduleOrderTests(unittest.TestCase):
         for start, end in (("17:00", "09:00"), ("10:00", "10:00")):
             with self.subTest(start=start, end=end):
                 with self.assertRaises(ValidationError) as caught:
-                    make(event_date=offset_date(3), start_time=start, end_time=end)
+                    make(event_date=offset_date(-3), start_time=start, end_time=end)
                 self.assertIn("End time must be after start time", str(caught.exception))
 
     def test_order_is_checked_even_for_a_draft(self) -> None:
         # A reversed range is wrong whatever the event's state.
         with self.assertRaises(ValidationError):
-            make(event_date=offset_date(3), start_time="17:00", end_time="09:00",
+            make(event_date=offset_date(-3), start_time="17:00", end_time="09:00",
                  save_as_draft=True)
 
     def test_one_sided_range_is_allowed(self) -> None:
-        self.assertIsNone(make(event_date=offset_date(3), start_time="09:00").end_time)
+        self.assertIsNone(make(event_date=offset_date(-3), start_time="09:00").end_time)
 
 
-class UpdateExemptionTests(unittest.TestCase):
-    """A rejected event whose date has lapsed must stay resubmittable."""
+class UpdateScheduleTests(unittest.TestCase):
+    """An edit follows the same no-future rule as creation."""
+
+    def test_update_rejects_a_future_date(self) -> None:
+        with self.assertRaises(ValidationError):
+            make(EventUpdateRequest, event_date=offset_date(10))
 
     def test_update_accepts_a_past_date(self) -> None:
         request = make(EventUpdateRequest, event_date=offset_date(-10))
@@ -200,15 +252,15 @@ class UpdateExemptionTests(unittest.TestCase):
 
 class PromotedFieldTests(unittest.TestCase):
     def test_contact_is_optional_and_normalised(self) -> None:
-        self.assertIsNone(make(event_date=offset_date(3)).coordinator_contact)
+        self.assertIsNone(make(event_date=offset_date(-3)).coordinator_contact)
         self.assertEqual(
-            make(event_date=offset_date(3), coordinator_contact="+91 98765 43210")
+            make(event_date=offset_date(-3), coordinator_contact="+91 98765 43210")
             .coordinator_contact,
             "9876543210",
         )
 
     def test_times_are_padded(self) -> None:
-        request = make(event_date=offset_date(3), start_time="9:5", end_time="17:0")
+        request = make(event_date=offset_date(-3), start_time="9:5", end_time="17:0")
         self.assertEqual((request.start_time, request.end_time), ("09:05", "17:00"))
 
 
@@ -245,11 +297,8 @@ class LegacyMetadataTests(unittest.TestCase):
 
 
 class ResubmitLapsedEventTests(unittest.TestCase):
-    """The router re-applies the past-date rule only to a date that moved.
-
-    Without this, the schema exemption above would be pointless: a teacher
-    whose rejected event has since lapsed could never resubmit it.
-    """
+    """Editing and resubmitting a rejected event: past dates are always fine,
+    a future one never is."""
 
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
@@ -309,14 +358,41 @@ class ResubmitLapsedEventTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["event"]["status"], "pending")
 
-    def test_moving_the_date_further_into_the_past_is_rejected(self) -> None:
-        response = self.patch(event_date=offset_date(-3))
-        self.assertEqual(response.status_code, 400, response.text)
-        self.assertIn("past", response.json()["detail"].lower())
-
-    def test_moving_the_date_into_the_future_succeeds(self) -> None:
-        response = self.patch(event_date=offset_date(14))
+    def test_moving_the_date_further_into_the_past_succeeds(self) -> None:
+        response = self.patch(event_date=offset_date(-30))
         self.assertEqual(response.status_code, 200, response.text)
+
+    def test_moving_the_date_into_the_future_is_rejected(self) -> None:
+        response = self.patch(event_date=offset_date(14))
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("future", response.text)
+        self.assertEqual(next(iter(self.store.docs.values()))["status"], "rejected")
+
+    def resubmit(self):
+        from unittest.mock import patch as mock_patch
+
+        with mock_patch(
+            "app.routers.events.get_current_user",
+            return_value={"id": "teacher1", "role": "teacher", "name": "T"},
+        ), mock_patch("app.routers.events.events", self.store), \
+                mock_patch("app.routers.events.event_media", self.media), \
+                mock_patch("app.routers.events.event_documents", self.documents), \
+                mock_patch("app.routers.events.announce_to_deans"):
+            return self.client.patch(
+                f"/teacher/events/{self.event_id}/resubmit",
+                headers={"Authorization": "Bearer t"},
+            )
+
+    def test_resubmit_route_accepts_a_past_event(self) -> None:
+        response = self.resubmit()
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_resubmit_route_refuses_a_stored_future_date(self) -> None:
+        # An event saved before the rule changed may still carry one.
+        next(iter(self.store.docs.values()))["event_date"] = offset_date(5)
+        response = self.resubmit()
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"], "Event date cannot be in the future")
 
 
 class MultiDayEventTests(unittest.TestCase):
@@ -328,32 +404,32 @@ class MultiDayEventTests(unittest.TestCase):
 
     def test_same_day_still_requires_ordered_times(self) -> None:
         with self.assertRaises(ValidationError) as caught:
-            make(event_date=offset_date(5), start_time="17:00", end_time="09:00")
+            make(event_date=offset_date(-5), start_time="17:00", end_time="09:00")
         self.assertIn("single day", str(caught.exception))
 
     def test_overnight_event_is_allowed_across_two_days(self) -> None:
         request = make(
-            event_date=offset_date(5),
-            end_date=offset_date(6),
+            event_date=offset_date(-6),
+            end_date=offset_date(-5),
             start_time="18:00",
             end_time="02:00",
         )
-        self.assertEqual(request.end_date, offset_date(6))
+        self.assertEqual(request.end_date, offset_date(-5))
 
     def test_multi_day_event_over_several_days(self) -> None:
         request = make(
-            event_date=offset_date(5),
-            end_date=offset_date(8),
+            event_date=offset_date(-8),
+            end_date=offset_date(-5),
             start_time="09:00",
             end_time="17:00",
         )
-        self.assertEqual(request.end_date, offset_date(8))
+        self.assertEqual(request.end_date, offset_date(-5))
 
     def test_end_date_equal_to_start_normalises_to_none(self) -> None:
         # One representation for "same day", so nothing has to compare the two.
         request = make(
-            event_date=offset_date(5),
-            end_date=offset_date(5),
+            event_date=offset_date(-5),
+            end_date=offset_date(-5),
             start_time="09:00",
             end_time="17:00",
         )
@@ -361,19 +437,19 @@ class MultiDayEventTests(unittest.TestCase):
 
     def test_end_date_before_start_is_rejected(self) -> None:
         with self.assertRaises(ValidationError) as caught:
-            make(event_date=offset_date(5), end_date=offset_date(4))
+            make(event_date=offset_date(-4), end_date=offset_date(-5))
         self.assertIn("End date cannot be before", str(caught.exception))
 
     def test_absent_end_date_is_none(self) -> None:
-        self.assertIsNone(make(event_date=offset_date(5)).end_date)
+        self.assertIsNone(make(event_date=offset_date(-5)).end_date)
 
     def test_blank_end_date_is_none(self) -> None:
         # The form sends "" when the teacher picks "Same day".
-        self.assertIsNone(make(event_date=offset_date(5), end_date="").end_date)
+        self.assertIsNone(make(event_date=offset_date(-5), end_date="").end_date)
 
     def test_malformed_end_date_is_rejected(self) -> None:
         with self.assertRaises(ValidationError):
-            make(event_date=offset_date(5), end_date="15-10-2026")
+            make(event_date=offset_date(-5), end_date="15-10-2026")
 
     def test_a_draft_may_hold_any_range(self) -> None:
         request = make(
@@ -385,7 +461,7 @@ class MultiDayEventTests(unittest.TestCase):
 
     def test_reversed_range_is_rejected_even_for_a_draft(self) -> None:
         with self.assertRaises(ValidationError):
-            make(event_date=offset_date(5), end_date=offset_date(4), save_as_draft=True)
+            make(event_date=offset_date(-4), end_date=offset_date(-5), save_as_draft=True)
 
 
 class DateRangeFormatTests(unittest.TestCase):
