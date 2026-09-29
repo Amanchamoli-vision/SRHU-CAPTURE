@@ -401,13 +401,29 @@ export function apiUpload(path, { file, fieldName = "file", onProgress, signal }
         try {
           body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
         } catch {
-          /* non-JSON body */
+          /* non-JSON body — e.g. proxy HTML error page */
         }
         resolve({ status: xhr.status, body });
       };
 
       xhr.onerror = () => {
         cleanup();
+        // A proxy (e.g. Cloudflare) returning 413 has no CORS headers, so the
+        // browser fires onerror with status=0 instead of onload with status=413.
+        // We cannot read the response body, but we CAN read xhr.status in some
+        // browsers (Chrome sets it; Firefox leaves it 0). When the body parse
+        // above would have given us a 413 anyway, surface a specific message.
+        const proxyStatus = xhr.status;
+        if (proxyStatus === 413) {
+          reject(
+            new ApiError(
+              "File too large. The server rejected this upload. Please reduce the file size and try again.",
+              413,
+              "entity_too_large"
+            )
+          );
+          return;
+        }
         reject(new ApiError("Network error. Check your connection and try again.", 0, null));
       };
 
@@ -431,7 +447,11 @@ export function apiUpload(path, { file, fieldName = "file", onProgress, signal }
     if (status < 200 || status >= 300) {
       const detail = detailFromBody(
         body,
-        status === 401 ? SESSION_EXPIRED_MESSAGE : `Upload failed (${status})`
+        status === 401
+          ? SESSION_EXPIRED_MESSAGE
+          : status === 413
+            ? "File too large. The server rejected this upload. Please reduce the file size and try again."
+            : `Upload failed (${status})`
       );
       throw new ApiError(detail, status, detail);
     }
@@ -439,3 +459,4 @@ export function apiUpload(path, { file, fieldName = "file", onProgress, signal }
     return body;
   })();
 }
+

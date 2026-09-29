@@ -2,8 +2,9 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 
 from app.config import settings
@@ -104,6 +105,31 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+
+# ============================================================
+# GLOBAL ERROR HANDLERS
+# ============================================================
+
+@app.exception_handler(413)
+async def request_entity_too_large(_request: Request, _exc: Exception):
+    """Return a JSON 413 instead of an HTML page.
+
+    uvicorn / h11 can reject an oversized body before it even reaches the
+    route handler and produce a plain-text or HTML 413. Cloudflare's proxy
+    also returns a 413 for payloads above its plan limit. Either way the
+    browser sees a response without CORS headers, which turns the XHR error
+    handler's status into 0 and shows a generic 'Network error'.
+
+    This handler catches app-level 413 exceptions and normalises them to
+    JSON. The Cloudflare case still cannot be caught here (the response
+    never reaches the app), but it is handled in the frontend by inspecting
+    xhr.status before falling back to the generic error message.
+    """
+    return JSONResponse(
+        status_code=413,
+        content={"detail": "The uploaded file is too large for this server. Please check the file size limits."},
+    )
 
 
 # ============================================================
