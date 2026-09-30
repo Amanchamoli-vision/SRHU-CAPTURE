@@ -31,6 +31,7 @@ import { DEFAULT_REPORT_PHOTOS, saveReportPhotos } from "../../services/eventMan
 import Combobox from "../../components/common/Combobox";
 import EventSummary from "../../components/common/EventSummary";
 import EventTypeSelect from "../../components/common/EventTypeSelect";
+import DateInputDMY from "../../components/common/DateInputDMY";
 import TimePicker12h from "../../components/common/TimePicker12h";
 import { normalizePhoneInput } from "../../utils/phone";
 import useEventTypes from "../../hooks/useEventTypes";
@@ -1491,16 +1492,14 @@ function CreateEvent() {
                 <label htmlFor="eventDate">
                   Event Start Date<span className="req">*</span>
                 </label>
-                <input
+                <DateInputDMY
                   id="eventDate"
                   name="eventDate"
-                  type="date"
                   value={formData.eventDate}
                   onChange={handleStartDateChange}
                   disabled={busy}
                   max={localDateKey()}
-                  aria-invalid={fieldErrors.eventDate ? "true" : undefined}
-                  className="input min-h-10 py-2"
+                  ariaInvalid={fieldErrors.eventDate ? "true" : undefined}
                 />
                 {fieldErrors.eventDate && <p className="field-error">{fieldErrors.eventDate}</p>}
               </div>
@@ -1524,17 +1523,15 @@ function CreateEvent() {
                 <label htmlFor="endDate">
                   Event End Date<span className="req">*</span>
                 </label>
-                <input
+                <DateInputDMY
                   id="endDate"
                   name="endDate"
-                  type="date"
                   value={formData.endDate}
                   onChange={handleChange}
                   disabled={busy}
                   min={formData.eventDate || undefined}
                   max={localDateKey()}
-                  aria-invalid={fieldErrors.endDate ? "true" : undefined}
-                  className="input min-h-10 py-2"
+                  ariaInvalid={fieldErrors.endDate ? "true" : undefined}
                 />
                 {fieldErrors.endDate && <p className="field-error">{fieldErrors.endDate}</p>}
               </div>
