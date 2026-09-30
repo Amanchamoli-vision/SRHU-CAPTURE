@@ -480,6 +480,47 @@ function EventDetails() {
     setShowReportModal(true);
   };
 
+  // The PDF for the chosen sections; with none given, the server uses the
+  // sections the report was last generated with.
+  const savePdf = async (customization = null) => {
+    const response = await apiFetch(`/dean/events/${event.id}/report/download`, {
+      method: customization ? "POST" : "GET",
+      body: customization || undefined,
+    });
+
+    if (!response.ok) {
+      throw await errorFromResponse(response, "Failed to download report");
+    }
+
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    // Named after the event ("IEEE Conference.pdf"): the server's name,
+    // or the same rule applied here if the header cannot be read.
+    link.download = fileNameFromResponse(response) || reportFileName(event.event_name);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(downloadUrl);
+  };
+
+  // Download: the report as last generated, without asking again.
+  const handleDownloadReport = async () => {
+    if (!event) return;
+    try {
+      setReportLoading(true);
+      setError("");
+      setSuccess("");
+      await savePdf();
+      setSuccess("Report downloaded successfully.");
+    } catch (err) {
+      handleApiError(err, "Failed to download report", "Download report error");
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
   const handleGenerateReport = async (customization = null) => {
     if (!event) return;
 
@@ -503,25 +544,7 @@ function EventDetails() {
       setReportGenerated(true);
       setGeneratedAt(data?.generated_at || null);
 
-      // Download the customized PDF report directly
-      const response = await apiFetch(`/dean/events/${event.id}/report/download`, {
-        method: customization ? "POST" : "GET",
-        body: customization || undefined,
-      });
-
-      if (!response.ok) {
-        throw await errorFromResponse(response, "Failed to download report");
-      }
-
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = downloadUrl;
-      link.download = fileNameFromResponse(response) || reportFileName(event.event_name);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(downloadUrl);
+      await savePdf(customization);
 
       setShowReportModal(false);
       setSuccess("Report generated and downloaded successfully.");
@@ -994,7 +1017,7 @@ function EventDetails() {
 
                       <button
                         type="button"
-                        onClick={handleOpenReportModal}
+                        onClick={handleDownloadReport}
                         disabled={reportLoading || !reportGenerated || !canReport}
                         className="btn btn-ghost btn-sm flex-1"
                       >
@@ -1534,8 +1557,8 @@ function EventDetails() {
         eventName={event?.event_name}
         photoCount={media?.filter((m) => m.media_type === "image").length}
         documentCount={documents?.length}
-        noticeCount={documents?.filter((d) => (d.category || d.doc_category) === "notice").length}
-        reportDocCount={documents?.filter((d) => (d.category || d.doc_category) === "report").length}
+        noticeCount={documents?.filter((d) => d.category !== "report").length}
+        attachmentCount={(documents?.filter((d) => d.category === "report").length || 0) + (media?.length || 0)}
       />
     </DeanShell>
   );

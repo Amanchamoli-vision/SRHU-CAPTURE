@@ -43,12 +43,14 @@ from app.models.documents import (
     new_notification_document,
 )
 from app.schemas.events import (
+    BulkEventIdsRequest,
     DeanBulkArchiveEventsRequest,
     DeanBulkDeleteEventsRequest,
     DeanDecisionBody,
     EventCreateRequest,
     EventUpdateRequest,
     NotificationCreateRequest,
+    draft_details_error,
     future_schedule_error,
 )
 from app.schemas.event_manager import ReportPhotosRequest
@@ -315,6 +317,34 @@ def paginate(
     return serialize_many(cursor), total
 
 
+def paginate_with_managed(
+    query: dict,
+    events_sort: list[tuple[str, int]],
+    managed_sort: list[tuple[str, int]],
+    stamp,
+    skip: int | None,
+    limit: int | None,
+) -> tuple[list[dict], int]:
+    """paginate() over teacher events and Event Manager events together.
+
+    Each collection is sorted on its own terms, then the two are merged by
+    ``stamp(serialized_doc)`` (newest first). Only the first skip + limit of
+    each can reach the page, so that is all either one is asked for.
+    """
+    total_managed = managed_events.count_documents(query) if _should_include_managed_events() else 0
+    if not total_managed:
+        return paginate(events, query, events_sort, None, skip, limit)
+
+    total = events.count_documents(query) + total_managed
+    start = skip or 0
+    needed = start + (limit if limit is not None else total)
+    merged = serialize_many(events.find(query).sort(events_sort).limit(needed)) + serialize_many(
+        managed_events.find(query).sort(managed_sort).limit(needed)
+    )
+    merged.sort(key=stamp, reverse=True)
+    return merged[start:start + limit if limit is not None else None], total
+
+
 def find_dean_visible_event_or_404(event_id: str, *, allow_archived: bool = False) -> dict:
     """An event as a Dean may see it: drafts are reported as missing.
 
@@ -352,6 +382,19 @@ DEAN_VERBS = {
 }
 
 
+def ensure_not_own_event(event: dict, user: dict) -> None:
+    """A Dean never decides on an event they submitted themselves.
+
+    A teacher promoted to Dean keeps their events, and nothing stopped them
+    approving (or advancing) their own pending submission.
+    """
+    if event.get("teacher_id") and str(event.get("teacher_id")) == str(user.get("id")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You submitted this event, so another Dean has to decide on it.",
+        )
+
+
 def dean_transition(
     event_id: str,
     *,
@@ -369,6 +412,7 @@ def dean_transition(
     on the status that was checked, so two racing decisions cannot both win.
     """
     existing = find_dean_visible_event_or_404(event_id)
+    ensure_not_own_event(existing, user)
     current = existing.get("status")
 
     allowed_from, message = DEAN_VERBS[verb]
@@ -841,7 +885,6 @@ def get_all_events(
     # never see.
     count_query = {key: value for key, value in query.items() if key != "status"}
     managed_counts = {}
-    total_managed = 0
     if _should_include_managed_events():
         try:
             managed_counts = {
@@ -849,7 +892,6 @@ def get_all_events(
                 for name, statuses in STATUS_BUCKETS.items()
             }
             managed_counts["all"] = managed_events.count_documents({**count_query, "status": {"$ne": "draft"}})
-            total_managed = managed_events.count_documents(query)
         except Exception as exc:
             logger.warning("Error counting managed_events: %s", exc)
 
@@ -863,37 +905,18 @@ def get_all_events(
         + managed_counts.get("all", 0)
     )
 
-    total_events = events.count_documents(query)
-    total = total_events + total_managed
+    def newest_first(doc: dict) -> tuple[str, str]:
+        stamp = doc.get("submitted_at") or doc.get("recorded_at") or doc.get("created_at") or ""
+        return (str(stamp), str(doc.get("created_at") or ""))
 
-    if not _should_include_managed_events() or total_managed == 0:
-        event_list, _ = paginate(
-            events, query, [("submitted_at", DESCENDING), ("created_at", DESCENDING)], None, skip, limit
-        )
-    else:
-        needed = (skip or 0) + (limit if limit is not None else total)
-        if needed == 0:
-            needed = 1000
-
-        cursor1 = events.find(query).sort([("submitted_at", DESCENDING), ("created_at", DESCENDING)]).limit(needed)
-        docs1 = serialize_many(cursor1)
-
-        docs2 = []
-        try:
-            cursor2 = managed_events.find(query).sort([("recorded_at", DESCENDING), ("created_at", DESCENDING)]).limit(needed)
-            docs2 = serialize_many(cursor2)
-        except Exception:
-            pass
-
-        combined = docs1 + docs2
-        def _sort_key(doc):
-            stamp = doc.get("submitted_at") or doc.get("recorded_at") or doc.get("created_at") or ""
-            return (str(stamp), str(doc.get("created_at") or ""))
-        combined.sort(key=_sort_key, reverse=True)
-
-        start = skip or 0
-        end = start + limit if limit is not None else len(combined)
-        event_list = combined[start:end]
+    event_list, total = paginate_with_managed(
+        query,
+        [("submitted_at", DESCENDING), ("created_at", DESCENDING)],
+        [("recorded_at", DESCENDING), ("created_at", DESCENDING)],
+        newest_first,
+        skip,
+        limit,
+    )
 
     many_with_legacy_metadata(event_list)
     attach_teachers(event_list)
@@ -980,12 +1003,11 @@ def get_dean_event(
     # *decision* (dean_transition keeps the default) and from reports.
     event = find_dean_visible_event_or_404(event_id, allow_archived=True)
     item = with_legacy_metadata(serialize(event))
+    # Who submitted it, as the list shows: pages used to download every user
+    # account just to find this one name.
+    attach_teachers([item])
     if not item.get("teacher_id") and item.get("owner_id"):
         item["teacher_id"] = item["owner_id"]
-    if not item.get("teacher_name") and item.get("owner_name"):
-        item["teacher_name"] = item["owner_name"]
-    if not item.get("teacher_email") and item.get("owner_email"):
-        item["teacher_email"] = item["owner_email"]
 
     return {
         "success": True,
@@ -1359,11 +1381,19 @@ def get_archived_events(
     user = get_current_user(authorization)
     check_event_viewer(user)
 
+    # Event Manager events can be archived from the Dean's list as well, so
+    # they have to come back here -- or they could never be restored.
     query = {"archived_at": {"$ne": None}}
-    event_list, total = paginate(
-        events, query, "archived_at", DESCENDING, skip, limit
+    event_list, total = paginate_with_managed(
+        query,
+        [("archived_at", DESCENDING)],
+        [("archived_at", DESCENDING)],
+        lambda doc: str(doc.get("archived_at") or ""),
+        skip,
+        limit,
     )
     many_with_legacy_metadata(event_list)
+    attach_teachers(event_list)
 
     return {
         "success": True,
@@ -1735,6 +1765,7 @@ def update_event_stage(
     # lookup let a shelved event be moved through the delivery stages -- and
     # notified the teacher about it.
     existing = find_dean_visible_event_or_404(event_id)
+    ensure_not_own_event(existing, user)
 
     # Delivery stages only make sense once the event has been approved. An
     # event still stored as the retired "in_progress" can be moved on too.
@@ -2158,6 +2189,120 @@ def delete_teacher_event(
         "success": True,
         "message": "Event deleted successfully",
     }
+
+
+# ============================================================
+# TEACHER BULK ACTIONS (My Events)
+# ============================================================
+
+def _own_events_in_order(raw_ids: list[str], teacher_id: str) -> tuple[list[dict], list[dict]]:
+    """The teacher's own events among ``raw_ids``, in the order asked, and a
+    result row for every id that is malformed, repeated or not theirs."""
+    wanted: list[ObjectId] = []
+    missing: list[dict] = []
+    for raw in raw_ids:
+        object_id = to_object_id(raw)
+        if object_id is None:
+            missing.append({"event_id": raw, "event_name": None, "status": "not_found", "reason": "Event not found."})
+        elif object_id not in wanted:
+            wanted.append(object_id)
+    found = {doc["_id"]: doc for doc in events.find({"_id": {"$in": wanted}, "teacher_id": teacher_id})}
+    missing += [
+        {"event_id": str(oid), "event_name": None, "status": "not_found", "reason": "Event not found."}
+        for oid in wanted if oid not in found
+    ]
+    return [found[oid] for oid in wanted if oid in found], missing
+
+
+def submit_draft(event: dict, user: dict) -> dict:
+    """Put one draft in front of the Deans, exactly as the form's Submit does:
+    evidence rule, saved details still valid, status moved atomically, Deans
+    told. Raises HTTPException (with the reason) when it cannot."""
+    if event.get("status") != "draft":
+        raise conflict("Only a draft can be submitted from here.")
+    ensure_submittable(event)
+    problem = draft_details_error(event)
+    if problem:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Complete the event details first. {problem}")
+
+    history = new_history_entry(action="submitted", status="pending", from_status="draft", actor=user)
+    updated = update_event(
+        str(event["_id"]),
+        {"status": "pending", "submitted_at": utc_now(), "rejection_reason": None,
+         "revocation_reason": None, "revoked_at": None},
+        history=history,
+        expected_status="draft",
+    )
+    if not updated:
+        raise conflict(CHANGED_WHILE_EDITING)
+    invalidate_report(str(event["_id"]))
+    announce_to_deans(serialize(updated), "submitted", user)
+    return updated
+
+
+def _bulk_summary(results: list[dict], done: str, verb: str) -> dict:
+    count = sum(1 for row in results if row["status"] == done)
+    return {
+        "success": True,
+        "requested_count": len(results),
+        f"{done}_count": count,
+        "skipped_count": len(results) - count,
+        "results": results,
+        "message": f"{count} event{'s' if count != 1 else ''} {verb}.",
+    }
+
+
+@router.post("/teacher/events/bulk-submit")
+def teacher_bulk_submit(
+    payload: BulkEventIdsRequest,
+    authorization: str | None = Header(default=None),
+):
+    """Submit the selected drafts for approval in one request.
+
+    Each draft goes through the same checks as the form's Submit; one that
+    fails them (a missing photo, an unfinished detail) is reported with the
+    reason and the others still go through.
+    """
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    own, results = _own_events_in_order(payload.event_ids, user["id"])
+    for event in own:
+        row = {"event_id": str(event["_id"]), "event_name": event.get("event_name")}
+        try:
+            submit_draft(event, user)
+            results.append({**row, "status": "submitted", "reason": None})
+        except HTTPException as error:
+            results.append({**row, "status": "skipped", "reason": error.detail})
+    return _bulk_summary(results, "submitted", "submitted for approval")
+
+
+@router.post("/teacher/events/bulk-delete")
+def teacher_bulk_delete(
+    payload: BulkEventIdsRequest,
+    authorization: str | None = Header(default=None),
+):
+    """Delete the selected events that are still the teacher's to delete --
+    drafts and events not yet approved -- with their files. Approved events
+    are reported as skipped, as a single delete refuses them."""
+    user = get_current_user(authorization)
+    require_role(user, "teacher")
+
+    own, results = _own_events_in_order(payload.event_ids, user["id"])
+    for event in own:
+        row = {"event_id": str(event["_id"]), "event_name": event.get("event_name")}
+        if event.get("status") not in TEACHER_EDITABLE_STATUSES:
+            results.append({**row, "status": "skipped", "reason": "An approved event can no longer be deleted."})
+            continue
+        # Filtered on the status just read, like the single delete, so an
+        # approval landing in between is never deleted away.
+        gone = events.delete_one({"_id": event["_id"], "teacher_id": user["id"], "status": event.get("status")})
+        if gone.deleted_count == 0:
+            results.append({**row, "status": "skipped", "reason": CHANGED_WHILE_EDITING})
+            continue
+        delete_event_cascade(str(event["_id"]))
+        results.append({**row, "status": "deleted", "reason": None})
+    return _bulk_summary(results, "deleted", "deleted")
 
 
 # ============================================================

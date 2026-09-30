@@ -43,6 +43,8 @@ const cancelled = () => new ApiError("Upload cancelled", 0, "aborted");
  */
 export async function uploadEventFile(eventPath, { kind, file, category, onProgress, signal } = {}) {
   const uploadKind = kind === "document" ? "documents" : "media";
+  // Notice / Report applies to documents only; photos and videos carry none.
+  if (uploadKind !== "documents") category = undefined;
 
   const startBody = {
     kind: uploadKind,

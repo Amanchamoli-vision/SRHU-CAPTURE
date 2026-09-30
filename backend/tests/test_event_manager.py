@@ -441,9 +441,18 @@ class ReportPhotoTests(EventManagerTestCase):
         detail = self.call("GET", f"/event-manager/events/{event['id']}").json()["event"]
         self.assertEqual(detail["report_photo_ids"], chosen)
 
-    def test_more_than_four_is_refused(self) -> None:
+    def test_any_number_can_be_chosen(self) -> None:
         event = self.draft()
-        ids = self.photos(event["id"], 5)
+        ids = self.photos(event["id"], 6)
+        response = self.call("PUT", f"/event-manager/events/{event['id']}/report-photos", json={"photo_ids": ids})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["report_photo_ids"], ids)
+
+    def test_a_choice_beyond_any_event_is_refused(self) -> None:
+        from app.schemas.event_manager import MAX_REPORT_PHOTO_CHOICE
+
+        event = self.draft()
+        ids = [str(ObjectId()) for _ in range(MAX_REPORT_PHOTO_CHOICE + 1)]
         response = self.call("PUT", f"/event-manager/events/{event['id']}/report-photos", json={"photo_ids": ids})
         self.assertEqual(response.status_code, 422)
 
@@ -505,7 +514,7 @@ class ReportTests(EventManagerTestCase):
         self.assertEqual(response.headers["content-type"], "application/pdf")
         text = pdf_text(response.content)
         for expected in ("Himalayan Robotics Expo", "Main Auditorium", "Dr. Rao", "150 students", "SST",
-                         "10:00 AM", "Student robots on show.", "Event Photos", "Attachments",
+                         "10:00 AM", "Student robots on show.", "Event Photos", "Uploaded Notices", "Uploaded Attachments",
                          "agenda.pdf", "Asha Verma"):
             self.assertIn(expected, text)
         self.assertNotIn("CC_METADATA", text)
@@ -617,7 +626,7 @@ class ReportTests(EventManagerTestCase):
         text = pdf_text(resp.content)
         self.assertIn("Uploaded Notices", text)
         self.assertIn("notice.pdf", text)
-        self.assertNotIn("Uploaded Reports", text)
+        self.assertNotIn("Uploaded Attachments", text)
         self.assertNotIn("summary_report.pdf", text)
 
         # Include reports only:
@@ -629,7 +638,7 @@ class ReportTests(EventManagerTestCase):
         text2 = pdf_text(resp2.content)
         self.assertNotIn("Uploaded Notices", text2)
         self.assertNotIn("notice.pdf", text2)
-        self.assertIn("Uploaded Reports", text2)
+        self.assertIn("Uploaded Attachments", text2)
         self.assertIn("summary_report.pdf", text2)
 
     def test_manager_report_selected_photo_ids(self) -> None:
@@ -794,11 +803,25 @@ class PhotoLayoutTests(unittest.TestCase):
     def test_unreadable_photo_is_skipped(self) -> None:
         self.assertIsNone(prepare_photo(b"nope"))
 
-    def test_report_never_embeds_more_than_four_photos(self) -> None:
+    def test_report_embeds_every_chosen_photo(self) -> None:
         # Distinct pixels: ReportLab stores identical images only once.
-        photos = [prepare_photo(image_bytes(80, 60, shade=20 * n)) for n in range(6)]
+        photos = [prepare_photo(image_bytes(80, 60, shade=20 * n)) for n in range(9)]
         pdf = build_managed_report_pdf([ReportEntry(event={"event_name": "X"}, photos=photos)]).getvalue()
-        self.assertEqual(pdf.count(b"/Subtype /Image"), 4 + 1)  # four photos + the crest
+        self.assertEqual(pdf.count(b"/Subtype /Image"), 9 + 1)  # nine photos + the crest
+        self.assertEqual(pdf_text(pdf).count("Event Photos"), 1)  # one section, several blocks
+
+    def test_photo_groups_are_small_and_even(self) -> None:
+        from app.services.managed_report_pdf import PHOTOS_PER_BLOCK, photo_groups
+
+        self.assertEqual(photo_groups(0), [])
+        self.assertEqual([len(g) for g in photo_groups(4)], [4])
+        self.assertEqual([len(g) for g in photo_groups(5)], [3, 2])  # never 4 + a lone photo
+        self.assertEqual([len(g) for g in photo_groups(9)], [3, 3, 3])
+        for count in range(1, 60):
+            groups = photo_groups(count)
+            self.assertEqual([i for g in groups for i in g], list(range(count)))  # order kept
+            self.assertLessEqual(max(map(len, groups)), PHOTOS_PER_BLOCK)
+            self.assertLessEqual(max(map(len, groups)) - min(map(len, groups)), 1)
 
     def test_photo_row_shrinks_into_the_space_left(self) -> None:
         from app.services.managed_report_pdf import MIN_PHOTO_SCALE, _PhotoGrid

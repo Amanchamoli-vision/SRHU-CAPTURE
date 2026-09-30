@@ -331,6 +331,36 @@ export async function errorFromResponse(response, fallback) {
  * apiFetch + JSON parsing. Throws ApiError for non-2xx responses.
  */
 export async function apiJson(path, options = {}) {
+  if (isShareableRead(options)) return sharedRead(path, options);
+  return requestJson(path, options);
+}
+
+// Identical GETs in flight at the same moment share one request. A page and
+// the components on it often ask for the same thing as they mount together
+// (the page's list and the bell's reminder check, AuthContext and the page's
+// own profile read). Only concurrent calls are joined -- nothing is cached
+// once the answer arrives -- and each caller gets its own copy, so one cannot
+// change what another reads. Calls with a signal keep their own request, so
+// cancelling one never cancels another.
+const readsInFlight = new Map();
+
+function isShareableRead(options) {
+  const method = (options.method || "GET").toUpperCase();
+  return method === "GET" && options.body == null && !options.signal && options.auth !== false;
+}
+
+async function sharedRead(path, options) {
+  const key = `${getAccessToken() || ""} ${path}`;
+  let pending = readsInFlight.get(key);
+  if (!pending) {
+    pending = requestJson(path, options).finally(() => readsInFlight.delete(key));
+    readsInFlight.set(key, pending);
+  }
+  const data = await pending;
+  return data == null ? data : structuredClone(data);
+}
+
+async function requestJson(path, options) {
   const response = await apiFetch(path, options);
 
   if (!response.ok) {

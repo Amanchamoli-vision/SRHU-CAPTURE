@@ -8,19 +8,22 @@ from pydantic import BaseModel, Field
 
 from app.schemas.reports import ReportCustomizationOptions
 
-# Photos per event in a report. The Event Manager picks them as they upload;
-# app/services/managed_report_pdf.py lays out at most this many.
-MAX_REPORT_PHOTOS = 4
+# Photos in an event's report. The teacher or Event Manager ticks as many as
+# they like while uploading; until they choose, the report shows the first
+# DEFAULT_REPORT_PHOTOS uploaded. A choice can never name more photos than an
+# event may hold, and the Super Admin's ceiling for that is 100.
+DEFAULT_REPORT_PHOTOS = 4
+MAX_REPORT_PHOTO_CHOICE = 100
 
-# Events per consolidated report. Each one can carry MAX_REPORT_PHOTOS photos,
-# so this bounds both the work of one request and the size of the PDF.
+# Events per consolidated report: bounds the work of one request and the size
+# of the PDF.
 MAX_EVENTS_PER_REPORT = 50
 
 
 class ReportPhotosRequest(BaseModel):
     """Which photos go into the event's report, in order. Empty means none."""
 
-    photo_ids: list[str] = Field(default_factory=list, max_length=MAX_REPORT_PHOTOS)
+    photo_ids: list[str] = Field(default_factory=list, max_length=MAX_REPORT_PHOTO_CHOICE)
 
 
 class ManagedReportRequest(BaseModel):

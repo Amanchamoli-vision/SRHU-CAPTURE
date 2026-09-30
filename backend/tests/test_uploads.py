@@ -711,9 +711,11 @@ class ReportPhotoChoiceTests(UploadTests):
         self.assertEqual(event["report_photo_ids"], [ids[4], ids[0], ids[2]])
         self.assertTrue(event["report_photos_chosen"])
 
-    def test_more_than_four_or_foreign_ids_are_refused(self) -> None:
+    def test_any_number_chosen_but_foreign_ids_are_refused(self) -> None:
         ids = self.photos(5)
-        self.assertEqual(self.choose(ids).status_code, 422)
+        response = self.choose(ids)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.detail()["report_photo_ids"], ids)
         document = self.upload("a.pdf", PDF, "application/pdf", kind="documents").json()["document"]["id"]
         self.assertEqual(self.choose([document]).status_code, 400)
 

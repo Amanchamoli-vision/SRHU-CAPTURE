@@ -21,7 +21,8 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from pymongo import ASCENDING
 
 from app.config import settings
-from app.schemas.event_manager import MAX_REPORT_PHOTOS
+from app.schemas.event_manager import DEFAULT_REPORT_PHOTOS
+from app.schemas.reports import ReportCustomizationOptions, has_any_section, normalize_customization
 from app.services import r2_service
 from app.services.storage_service import content_disposition, serving_policy
 
@@ -43,12 +44,13 @@ def photo_ids(media_collection, event_key: str) -> list[str]:
 
 
 def choose_photo_ids(chosen: list[str] | None, available: list[str]) -> list[str]:
-    """The saved choice (still-existing photos only, in the chosen order), or
-    the first MAX_REPORT_PHOTOS of ``available`` while nothing is chosen."""
+    """The saved choice (still-existing photos only, in the chosen order, as
+    many as were chosen), or the first DEFAULT_REPORT_PHOTOS of ``available``
+    while nothing is chosen."""
     if chosen is None:
-        return available[:MAX_REPORT_PHOTOS]
+        return available[:DEFAULT_REPORT_PHOTOS]
     existing = set(available)
-    return [pid for pid in chosen if pid in existing][:MAX_REPORT_PHOTOS]
+    return [pid for pid in chosen if pid in existing]
 
 
 def report_photo_ids(event: dict, media_collection) -> list[str]:
@@ -87,6 +89,59 @@ def clean_report_choice(requested: list[str], event_key: str, media_collection) 
         if pid not in chosen:
             chosen.append(pid)
     return chosen
+
+
+# ============================================================
+# CUSTOMIZATION (which sections a report prints)
+# ============================================================
+
+NO_SECTION_DETAIL = "Please select at least one section to include in the report."
+
+
+def resolve_customization(
+    payload: ReportCustomizationOptions | None = None,
+    query_flags: dict | None = None,
+    stored: dict | None = None,
+) -> dict | None:
+    """The sections to print, from the first source that says anything: the
+    JSON body, then the query string, then what the stored report was
+    generated with. None means the full report; 400 when nothing is left."""
+    flags = {key: value for key, value in (query_flags or {}).items() if value is not None}
+    options = normalize_customization(payload if payload is not None else flags or stored or None)
+    if options is not None and not has_any_section(options):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=NO_SECTION_DETAIL)
+    return options
+
+
+def document_category(row: dict) -> str:
+    """Uploads from before the Notice / Report split are notices."""
+    return "report" if row.get("category") == "report" else "notice"
+
+
+def report_attachment_rows(
+    media: list[dict], documents: list[dict], options: dict | None
+) -> list[tuple[str, dict]]:
+    """The uploads a report lists as download links, as ``(kind, row)`` with
+    kind "media" or "documents" (the link's path segment): documents first.
+
+    The Notices section holds notice documents and nothing else; every other
+    file -- report documents, then photo and video links -- belongs to the
+    Reports section, so it follows the reports choice. Photo links also
+    follow the photos choice.
+    """
+    options = options or {}
+    notices = options.get("include_notices", True)
+    reports = options.get("include_reports", True)
+    rows: list[tuple[str, dict]] = [
+        ("documents", row) for row in documents
+        if (notices if document_category(row) == "notice" else reports)
+    ]
+    if reports:
+        rows += [
+            ("media", row) for row in media
+            if row.get("media_type") != "image" or options.get("include_photos", True)
+        ]
+    return rows
 
 
 # ============================================================

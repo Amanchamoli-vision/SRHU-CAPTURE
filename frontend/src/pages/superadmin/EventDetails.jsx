@@ -56,12 +56,13 @@ export default function SuperAdminEventDetails() {
       setLoading(true);
       setError("");
 
-      const [eventData, mediaData, documentData, reportData, userData] = await Promise.all([
+      const [eventData, mediaData, documentData, reportData] = await Promise.all([
         apiJson(`/dean/events/${eventId}`),
         apiJson(`/dean/events/${eventId}/media`),
         apiJson(`/dean/events/${eventId}/documents`),
-        apiJson(`/dean/events/${eventId}/report-status`),
-        apiJson("/superadmin/users"),
+        // Report status is extra, not the page: it answers 404 for an event
+        // on the archive shelf, which blanked the page as "no longer exists".
+        apiJson(`/dean/events/${eventId}/report-status`).catch(() => null),
       ]);
 
       const loaded = eventData?.event || null;
@@ -69,8 +70,7 @@ export default function SuperAdminEventDetails() {
       setMedia(mediaData?.media || []);
       setDocuments(documentData?.documents || []);
       setReportReady(Boolean(reportData?.report_generated));
-      const owner = (userData?.users || []).find((u) => u.id === loaded?.teacher_id);
-      setTeacherName(owner ? owner.name || owner.email : "");
+      setTeacherName(loaded?.teacher_name || loaded?.teacher_email || "");
     } catch (err) {
       if (err?.status === 401) {
         navigate("/login", { replace: true });
@@ -172,8 +172,9 @@ export default function SuperAdminEventDetails() {
               actions={
                 <div className="flex flex-wrap items-center gap-2.5">
                   <StatusChip status={event.status} size="md" />
-                  {/* Reports exist only for Completed events (server-enforced). */}
-                  {reportReady && event.status === "completed" && (
+                  {/* Reports exist for Completed events and Event Manager
+                      (Recorded) events -- the server's is_completed(). */}
+                  {reportReady && (event.status === "completed" || event.status === "recorded") && (
                     <button
                       type="button"
                       onClick={handleDownloadReport}

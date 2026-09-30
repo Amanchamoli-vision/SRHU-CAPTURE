@@ -13,7 +13,7 @@ export default function SettingsCard({
 }) {
   return (
     <section className="glass reveal flex flex-col p-5 sm:p-7" style={{ "--i": index }}>
-      <div className="flex items-center justify-between gap-3 border-b pb-4">
+      <div className="flex items-center justify-between gap-3 border-b hairline pb-4">
         <div className="flex items-center gap-3">
           <span
             className="icon-tile icon-tile-track"

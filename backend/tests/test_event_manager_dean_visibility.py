@@ -408,3 +408,47 @@ class TestEventManagerDeanVisibility(unittest.TestCase):
         mgr_del = self.client.delete(f"/event-manager/events/{m_id}", headers=mgr_headers)
         self.assertEqual(mgr_del.status_code, 200)
         self.assertIsNone(managed_events.find_one({"_id": m_id}))
+
+    def test_archived_event_manager_event_is_on_the_shelf_and_restorable(self):
+        # Archiving hides the event from the live list, so the shelf is the
+        # only way back to it -- single and bulk archive alike.
+        now = utc_now()
+        m_id, t_id = ObjectId(), ObjectId()
+        self.created_managed_ids.append(m_id)
+        self.created_event_ids.append(t_id)
+        managed_events.insert_one({
+            "_id": m_id, "event_name": "Shelved Seminar", "event_type": "Seminar",
+            "event_date": "2026-09-01", "status": "recorded",
+            "owner_id": str(self.manager_user["_id"]), "owner_name": self.manager_user["name"],
+            "created_at": now, "updated_at": now, "recorded_at": now,
+        })
+        events.insert_one({
+            "_id": t_id, "event_name": "Shelved Talk", "event_type": "Seminar",
+            "event_date": "2026-09-01", "status": "approved",
+            "teacher_id": str(self.teacher_user["_id"]),
+            "created_at": now, "updated_at": now, "submitted_at": now,
+        })
+        headers = {"Authorization": f"Bearer {self.dean_token}"}
+
+        def shelf_ids():
+            response = self.client.get("/dean/archive/events", headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            return {row["id"] for row in response.json()["events"]}
+
+        self.assertEqual(self.client.patch(f"/dean/events/{m_id}/archive", headers=headers).status_code, 200)
+        self.assertIn(str(m_id), shelf_ids())
+        live = self.client.get("/dean/events", headers=headers).json()["events"]
+        self.assertNotIn(str(m_id), {row["id"] for row in live})
+
+        self.assertEqual(self.client.patch(f"/dean/events/{m_id}/restore", headers=headers).status_code, 200)
+        self.assertNotIn(str(m_id), shelf_ids())
+
+        response = self.client.post(
+            "/dean/events/bulk-archive", json={"event_ids": [str(m_id), str(t_id)]}, headers=headers
+        )
+        self.assertEqual(response.json()["archived_count"], 2, response.text)
+        shelf = self.client.get("/dean/archive/events", headers=headers).json()
+        self.assertTrue({str(m_id), str(t_id)} <= {row["id"] for row in shelf["events"]})
+        self.assertGreaterEqual(shelf["total"], 2)
+        by_id = {row["id"]: row for row in shelf["events"]}
+        self.assertEqual(by_id[str(m_id)]["teacher_name"], self.manager_user["name"])

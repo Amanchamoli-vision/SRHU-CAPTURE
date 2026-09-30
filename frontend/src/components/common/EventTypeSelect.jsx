@@ -34,6 +34,11 @@ function EventTypeSelect({
   const [addError, setAddError] = useState("");
 
   const isOther = value === "Other";
+  // An event saved with a custom type ("Other" + text) carries that text as
+  // its type. The list is fetched once per session, so a type saved since --
+  // or one the list does not have -- must still be offered, or the select
+  // shows "Select type" and the saved choice is lost on the next save.
+  const unlisted = value && value !== "Other" && !types.includes(value) ? value : null;
 
   const submitNewType = async () => {
     const label = newLabel.trim();
@@ -78,6 +83,7 @@ function EventTypeSelect({
             {type}
           </option>
         ))}
+        {unlisted && <option value={unlisted}>{unlisted}</option>}
         {/* Always offered, even if the server list happens to include it. */}
         {!types.includes("Other") && <option value="Other">Other</option>}
       </select>

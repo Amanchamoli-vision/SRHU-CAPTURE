@@ -22,8 +22,15 @@ const ACTION_FILTERS = [
   { key: "user_password_reset", label: "Password Resets" },
   { key: "user_profile_updated", label: "Profile Updates" },
   { key: "dean_created", label: "Dean Created" },
-  { key: "user_deleted", label: "Deletions" },
+  { key: "event_manager_created", label: "Event Manager Created" },
+  { key: "event_manager_invite_resent", label: "Invites Resent" },
+  { key: "teachers_bulk_onboarded", label: "Bulk Onboarding" },
+  { key: "teachers_credentials_sent", label: "Credentials Sent" },
+  { key: "user_deleted", label: "User Deletions" },
+  { key: "event_deleted", label: "Event Deletions" },
+  { key: "events_bulk_deleted", label: "Bulk Event Deletions" },
   { key: "upload_limits_updated", label: "Upload Limits" },
+  { key: "upload_limits_reset", label: "Limits Reset" },
   { key: "events_exported", label: "Exports" },
 ];
 
@@ -44,15 +51,15 @@ const formatTimestamp = (iso) => {
 
 const actionTone = (action) => {
   if (action?.includes("deleted") || action?.includes("deactivated")) {
-    return "chip-err bg-err/10 text-err border-err/30";
+    return "bg-err/10 text-err border-err/30";
   }
   if (action?.includes("created") || action?.includes("activated")) {
-    return "chip-ok bg-ok/10 text-ok border-ok/30";
+    return "bg-ok/10 text-ok border-ok/30";
   }
   if (action?.includes("reset") || action?.includes("role")) {
-    return "chip-warn bg-amber-500/10 text-amber-500 border-amber-500/30";
+    return "chip-ember";
   }
-  return "chip-accent bg-accent/10 text-accent border-accent/30";
+  return "bg-accent/10 text-accent border-accent/30";
 };
 
 const formatActionLabel = (action) => {
@@ -219,7 +226,7 @@ export default function AuditLogs() {
               type="search"
               value={searchDraft}
               onChange={(e) => setSearchDraft(e.target.value)}
-              placeholder="Search actor, action or details"
+              placeholder="Search actor, action, or the person or event affected"
               className="input pl-10"
             />
           </label>
@@ -329,7 +336,7 @@ export default function AuditLogs() {
                         </td>
                         <td className="px-5 py-3.5 text-xs">
                           <div className="max-w-md">
-                            <span className="badge badge-subtle font-mono text-[10px]">
+                            <span className="chip chip-sm chip-solid font-mono text-[10px]">
                               {log.target_type}
                             </span>
                             {log.details && Object.keys(log.details).length > 0 && (

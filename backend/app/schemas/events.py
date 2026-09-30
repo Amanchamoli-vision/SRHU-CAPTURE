@@ -243,6 +243,36 @@ class EventUpdateRequest(EventCreateRequest):
     """
 
 
+# The stored fields a draft must still satisfy EventCreateRequest with before
+# a bulk action submits it without the form: the form re-checked them on every
+# single submit, and a bulk submit must not skip that.
+DRAFT_DETAIL_FIELDS = (
+    "event_name", "event_date", "end_date", "event_type", "location", "description",
+    "social_network_url", "start_time", "end_time", "organizer", "coordinator_contact",
+)
+
+# Events one bulk submit or delete from My Events may cover.
+MAX_BULK_OWN_EVENTS = 500
+
+
+class BulkEventIdsRequest(BaseModel):
+    event_ids: list[str] = Field(min_length=1, max_length=MAX_BULK_OWN_EVENTS)
+
+
+def draft_details_error(event: dict) -> str | None:
+    """Why a stored draft cannot be submitted as it stands, or None."""
+    from pydantic import ValidationError
+
+    try:
+        EventCreateRequest(**{key: event.get(key) for key in DRAFT_DETAIL_FIELDS})
+    except ValidationError as error:
+        first = error.errors()[0]
+        field = str(first["loc"][0]).replace("_", " ") if first.get("loc") else "details"
+        message = str(first.get("msg", "")).removeprefix("Value error, ")
+        return f"{field.capitalize()}: {message}" if first.get("loc") else message
+    return None
+
+
 # The only notifications a client may create for itself: the event-day
 # reminders built by frontend/src/utils/notificationService.js. Every other
 # type is raised by the server as the result of a real action.

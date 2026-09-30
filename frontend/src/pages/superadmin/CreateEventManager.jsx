@@ -129,7 +129,7 @@ function CreateEventManager() {
                     {created.sent ? <IconCheckCircle /> : <IconAlertTriangle />}
                   </span>
                   <div className="min-w-0">
-                    <p className="eyebrow" style={{ color: created.sent ? "#10B981" : "#F59E0B" }}>
+                    <p className={`eyebrow ${created.sent ? "text-ok" : "text-emberink"}`}>
                       {created.sent ? "Invitation sent" : "Account created, invitation not sent"}
                     </p>
                     <h2 className="h3 mt-0.5 text-ink">{created.message}</h2>

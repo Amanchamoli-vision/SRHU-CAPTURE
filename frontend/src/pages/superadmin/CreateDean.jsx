@@ -155,7 +155,7 @@ function CreateDean() {
                     <IconCheckCircle />
                   </span>
                   <div className="min-w-0">
-                    <p className="eyebrow" style={{ color: "#10B981" }}>Account created</p>
+                    <p className="eyebrow text-ok">Account created</p>
                     <h2 className="h3 mt-0.5 text-ink">{created.message}</h2>
                     <p className="prose-muted mt-1 text-sm">
                       <span className="font-semibold text-ink">{created.name}</span>

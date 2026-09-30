@@ -60,3 +60,35 @@ class ReportCustomizationOptions(BaseModel):
             elif data.get("include_notices") is True or data.get("include_reports") is True:
                 data["include_documents"] = True
         return data
+
+
+# The choices that each put something on the page. `include_documents` is the
+# umbrella over notices and reports, so it is not a section of its own.
+SECTION_KEYS = (
+    "include_basic_details",
+    "include_schedule_venue",
+    "include_description",
+    "include_other_info",
+    "include_photos",
+    "include_notices",
+    "include_reports",
+)
+
+
+def normalize_customization(raw: ReportCustomizationOptions | dict | None) -> dict | None:
+    """Every choice spelled out, with the documents umbrella reconciled.
+
+    A partial dict (query flags, or a customization stored with an older
+    report) goes through the model, so all three entry points -- JSON body,
+    query string, stored report -- mean the same thing. None stays None: no
+    customization is the full report.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, ReportCustomizationOptions):
+        return raw.model_dump()
+    return ReportCustomizationOptions.model_validate(dict(raw)).model_dump()
+
+
+def has_any_section(options: dict) -> bool:
+    return any(options.get(key, True) for key in SECTION_KEYS)

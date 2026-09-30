@@ -100,8 +100,24 @@ export async function refreshSession() {
  * Returns null (and clears the session) when the token is no longer valid,
  * and null when the session ended while the request was in flight.
  */
-export async function fetchCurrentUser() {
-  if (!readSession()) return null;
+// AuthContext confirms the profile with the server as the app starts, and
+// then nearly every page asked again as it mounted -- one /auth/me per click
+// in the sidebar. A confirmation this recent, for the same session, is reused;
+// the answer is read from the session, so a profile edit shows at once.
+const RECENT_CONFIRMATION_MS = 60_000;
+let lastConfirmation = null; // { token, at }
+
+export async function fetchCurrentUser({ force = false } = {}) {
+  const session = readSession();
+  if (!session) return null;
+  if (
+    !force &&
+    lastConfirmation?.token === session.access_token &&
+    Date.now() - lastConfirmation.at < RECENT_CONFIRMATION_MS &&
+    session.user
+  ) {
+    return session.user;
+  }
   try {
     const data = await apiJson("/auth/me");
     const user = data?.user || null;
@@ -112,8 +128,10 @@ export async function fetchCurrentUser() {
     if (!user || !current) return null;
     if (current.user?.id && current.user.id !== user.id) return null;
     updateSessionUser(user);
+    lastConfirmation = { token: current.access_token, at: Date.now() };
     return user;
   } catch (err) {
+    lastConfirmation = null;
     if (err?.status === 401) clearSession();
     throw err;
   }

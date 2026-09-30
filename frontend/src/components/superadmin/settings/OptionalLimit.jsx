@@ -17,14 +17,14 @@ export default function OptionalLimit({
   const panelId = `${id}-panel`;
 
   return (
-    <div className="space-y-3 rounded-xl border bg-raised/40 p-4">
+    <div className="space-y-3 rounded-xl border hairline bg-raised/40 p-4">
       <label className="flex cursor-pointer select-none items-center gap-3">
         <input
           type="checkbox"
           checked={enabled}
           disabled={disabled}
           onChange={(event) => onToggle(event.target.checked)}
-          className="rounded border text-accent focus:ring-accent"
+          className="rounded border-line text-accent focus:ring-accent"
           aria-expanded={enabled}
           aria-controls={panelId}
         />

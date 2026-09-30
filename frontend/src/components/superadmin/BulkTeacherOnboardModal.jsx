@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import Modal from "../teacher/Modal";
 import { apiJson } from "../../services/api";
+import { copyText } from "../../utils/clipboard";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -17,6 +18,12 @@ import {
   IconX,
 } from "../teacher/icons";
 
+// The server's rules for one roster (schemas/superadmin.py): checking them
+// here names the bad rows instead of the whole upload failing with one 422.
+const MAX_BULK_TEACHERS = 500;
+const MAX_NAME_LENGTH = 120;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) {
   const fileInputRef = useRef(null);
   const [file, setFile] = useState(null);
@@ -31,6 +38,30 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [invalidRows, setInvalidRows] = useState([]);
+
+  // The modal stays mounted while closed, so without this the next opening
+  // showed the last summary -- temporary passwords included -- and a second
+  // import needed a page reload.
+  const resetAll = () => {
+    setFile(null);
+    setParsedRows([]);
+    setInvalidRows([]);
+    setParsingError("");
+    setIsDragging(false);
+    setInputMode("file");
+    setCsvText("");
+    setError("");
+    setResult(null);
+    setCopied(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const close = () => {
+    if (loading) return;
+    resetAll();
+    onClose();
+  };
 
   const handleDownloadSample = () => {
     const csvContent =
@@ -100,22 +131,39 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
     }
 
     const teachers = [];
+    const invalid = [];
     for (let i = startRow; i < rows.length; i++) {
       const row = rows[i];
       if (!row || !row.some((cell) => cell)) continue;
-      const name = row[nameIdx] || "";
-      const email = (row[emailIdx] || "").toLowerCase();
+      const name = (row[nameIdx] || "").trim();
+      const email = (row[emailIdx] || "").trim().toLowerCase();
       // Any other column (an old sheet's Department) is ignored: the
       // platform serves SST only.
-      if (name && email) {
+      const line = i + 1; // as the spreadsheet numbers it
+      if (!name || !email) {
+        invalid.push({ line, label: name || email || "(blank)", reason: !name ? "no name" : "no email" });
+      } else if (!EMAIL_PATTERN.test(email)) {
+        invalid.push({ line, label: email, reason: "not a valid email address" });
+      } else if (name.length > MAX_NAME_LENGTH) {
+        invalid.push({ line, label: `${name.slice(0, 30)}…`, reason: `name longer than ${MAX_NAME_LENGTH} characters` });
+      } else {
         teachers.push({ name, email });
       }
     }
 
     if (!teachers.length) {
-      throw new Error("No valid teacher records found. Please ensure 'Name' and 'Email' columns exist.");
+      throw new Error(
+        invalid.length
+          ? `No valid teacher records found. Row ${invalid[0].line}: ${invalid[0].reason}.`
+          : "No valid teacher records found. Please ensure 'Name' and 'Email' columns exist."
+      );
     }
-    return teachers;
+    if (teachers.length > MAX_BULK_TEACHERS) {
+      throw new Error(
+        `A roster may hold at most ${MAX_BULK_TEACHERS} teachers; this one has ${teachers.length}. Split it and upload each part.`
+      );
+    }
+    return { teachers, invalid };
   };
 
   const handleFileChange = (e) => {
@@ -133,8 +181,9 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
     reader.onload = (event) => {
       try {
         const text = event.target?.result;
-        const parsed = parseCSVText(text);
-        setParsedRows(parsed);
+        const { teachers, invalid } = parseCSVText(text);
+        setParsedRows(teachers);
+        setInvalidRows(invalid);
       } catch (err) {
         setParsingError(err.message || "Failed to parse CSV file.");
         setParsedRows([]);
@@ -168,6 +217,7 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
   const handleClearFile = () => {
     setFile(null);
     setParsedRows([]);
+    setInvalidRows([]);
     setParsingError("");
     setError("");
     setCsvText("");
@@ -214,12 +264,15 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
     URL.revokeObjectURL(url);
   };
 
-  const handleCopyCredentials = () => {
+  const handleCopyCredentials = async () => {
     if (!result?.created_teachers?.length) return;
     const text = result.created_teachers
       .map((t) => `${t.name} | ${t.email} | Temp Password: ${t.temporary_password}`)
       .join("\n");
-    navigator.clipboard.writeText(text);
+    if (!(await copyText(text))) {
+      setError("Could not copy automatically. Use Download CSV instead.");
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -228,8 +281,9 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
     setParsingError("");
     setError("");
     try {
-      const parsed = parseCSVText(csvText);
-      setParsedRows(parsed);
+      const { teachers, invalid } = parseCSVText(csvText);
+      setParsedRows(teachers);
+      setInvalidRows(invalid);
       setFile({ name: "pasted_teachers.csv" });
     } catch (err) {
       setParsingError(err.message || "Failed to parse CSV text.");
@@ -242,9 +296,7 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
   return (
     <Modal
       open={isOpen}
-      onClose={() => {
-        if (!loading) onClose();
-      }}
+      onClose={close}
       title={result ? "Onboarding Summary" : "Bulk Onboard Teachers"}
     >
       {!result ? (
@@ -305,6 +357,22 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
             <div className="flex items-start gap-2.5 rounded-xl border border-err/20 bg-err/10 p-3 text-xs text-err">
               <IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{parsingError}</span>
+            </div>
+          )}
+
+          {invalidRows.length > 0 && parsedRows.length > 0 && (
+            <div className="rounded-xl border border-ember/30 bg-ember/10 p-3 text-xs text-ink" role="status">
+              <p className="font-semibold text-emberink">
+                {invalidRows.length} row{invalidRows.length === 1 ? "" : "s"} left out; the other {parsedRows.length} can be onboarded:
+              </p>
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-muted">
+                {invalidRows.slice(0, 5).map((row) => (
+                  <li key={row.line}>
+                    Row {row.line} ({row.label}): {row.reason}
+                  </li>
+                ))}
+                {invalidRows.length > 5 && <li>and {invalidRows.length - 5} more</li>}
+              </ul>
             </div>
           )}
 
@@ -429,7 +497,7 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
           <div className="flex items-center justify-end gap-2 pt-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={close}
               disabled={loading}
               className="btn btn-ghost btn-sm"
             >
@@ -449,7 +517,7 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
               ) : (
                 <>
                   <IconPlus className="h-4 w-4" />
-                  Onboard {parsedRows.length || ""} Teachers
+                  Onboard {parsedRows.length || ""} {parsedRows.length === 1 ? "Teacher" : "Teachers"}
                 </>
               )}
             </button>
@@ -458,6 +526,12 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
       ) : (
         /* Results View */
         <div className="space-y-4">
+          {error && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-err/20 bg-err/10 p-3 text-xs text-err" role="alert">
+              <IconAlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-xl border hairline bg-raised/40 p-3 text-center">
               <span className="text-[11px] font-medium text-muted">Processed</span>
@@ -480,8 +554,8 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
           </div>
 
           {result.skipped?.length > 0 && (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs">
-              <p className="font-semibold text-amber-600 dark:text-amber-400">
+            <div className="rounded-xl border border-ember/30 bg-ember/10 p-3 text-xs">
+              <p className="font-semibold text-emberink">
                 Skipped Accounts ({result.skipped.length}):
               </p>
               <ul className="mt-1.5 list-disc space-y-1 pl-4 text-muted">
@@ -565,7 +639,7 @@ export default function BulkTeacherOnboardModal({ isOpen, onClose, onSuccess }) 
           <div className="flex items-center justify-end pt-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={close}
               className="btn btn-brand btn-sm"
             >
               Done

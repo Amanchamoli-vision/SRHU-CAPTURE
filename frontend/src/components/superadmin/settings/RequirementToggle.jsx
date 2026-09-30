@@ -9,7 +9,7 @@ export default function RequirementToggle({ id, noun, value, disabled, onChange 
   const hintId = `${id}-hint`;
 
   return (
-    <div className="flex items-start justify-between gap-4 rounded-xl border bg-raised/40 p-4">
+    <div className="flex items-start justify-between gap-4 rounded-xl border hairline bg-raised/40 p-4">
       <div className="min-w-0">
         <p id={labelId} className="text-sm font-semibold text-ink">
           {value ? "Mandatory upload" : "Optional upload"}

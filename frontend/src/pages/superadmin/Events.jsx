@@ -46,7 +46,6 @@ export default function SuperAdminEvents() {
   const [events, setEvents] = useState([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState({ all: 0, pending: 0, approved: 0, rejected: 0 });
-  const [teacherNames, setTeacherNames] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   // Deleting an event: { event, confirmText } while the dialog is open.
@@ -125,20 +124,14 @@ export default function SuperAdminEvents() {
         params.set("q", urlQ);
       }
 
-      const [eventData, userData] = await Promise.all([
-        apiJson(`/dean/events?${params}`),
-        Object.keys(teacherNames).length === 0 ? apiJson("/superadmin/users") : Promise.resolve(null),
-      ]);
+      // Each event carries its teacher's name; the page used to download every
+      // account to look them up -- and storing that list re-ran this load.
+      const eventData = await apiJson(`/dean/events?${params}`);
 
       setEvents(eventData?.events || []);
       setTotal(eventData?.total || 0);
       if (eventData?.counts) {
         setCounts(eventData.counts);
-      }
-      if (userData?.users) {
-        setTeacherNames(
-          Object.fromEntries(userData.users.map((u) => [u.id, u.name || u.email]))
-        );
       }
     } catch (err) {
       if (err?.status === 401) {
@@ -150,7 +143,7 @@ export default function SuperAdminEvents() {
     } finally {
       setLoading(false);
     }
-  }, [skip, per, statusFilter, urlQ, teacherNames, navigate]);
+  }, [skip, per, statusFilter, urlQ, navigate]);
 
   useEffect(() => {
     loadEvents();
@@ -166,7 +159,10 @@ export default function SuperAdminEvents() {
       const data = await apiJson(`/superadmin/events/${event.id}`, { method: "DELETE" });
       setPendingDelete(null);
       setSuccess(data?.message || "Event deleted permanently.");
-      await loadEvents();
+      // Deleting the last row of the last page steps back a page rather than
+      // leaving an empty table that reads as "no matches".
+      if (events.length === 1 && page > 1) setPage(page - 1);
+      else await loadEvents();
     } catch (err) {
       setPendingDelete(null);
       setError(err?.message || "Failed to delete the event.");
@@ -357,7 +353,7 @@ export default function SuperAdminEvents() {
                         {[event.event_type, formatDay(event.event_date), event.location]
                           .filter(Boolean)
                           .join(" · ")}
-                        {teacherNames[event.teacher_id] ? ` · by ${teacherNames[event.teacher_id]}` : ""}
+                        {event.teacher_name || event.teacher_email ? ` · by ${event.teacher_name || event.teacher_email}` : ""}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">

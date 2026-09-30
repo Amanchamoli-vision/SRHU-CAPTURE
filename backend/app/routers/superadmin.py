@@ -19,20 +19,23 @@ from fastapi import (
     status,
 )
 from pymongo import ASCENDING, DESCENDING
+from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
-from app.database import audit_logs, event_media, events, users
+from app.database import audit_logs, event_media, events, managed_events, users
 from app.models.documents import (
     USER_PRIVATE_FIELDS,
     new_user_document,
 )
 from app.routers.auth import find_user_by_email
+from app.routers.events import STATUS_BUCKETS, _dean_event_query
 from app.schemas.superadmin import (
     BulkOnboardTeacherItem,
     BulkOnboardTeachersRequest,
     CreateDeanRequest,
     CreateEventManagerRequest,
+    MAX_BULK_TEACHERS,
     ResetUserPasswordRequest,
     SendCredentialsRequest,
     UpdateUserProfileRequest,
@@ -40,6 +43,7 @@ from app.schemas.superadmin import (
 )
 from app.services import email_service
 from app.services.audit_service import log_audit_event
+from app.services.report_pdf import split_description
 from app.services.storage_service import delete_user_cascade
 from app.services.upload_config_service import (
     CONFIG_KEY,
@@ -132,7 +136,11 @@ def get_dashboard_stats(
         "deans": role_counts.get("dean", 0),
         "superadmins": role_counts.get("superadmin", 0),
         "event_managers": role_counts.get("event_manager", 0),
-        "pending_events": events.count_documents({"status": "pending"}),
+        # The Dean's "pending" -- awaiting a first decision, not archived --
+        # so this card and the Dean dashboard show the same number.
+        "pending_events": events.count_documents(
+            {"status": {"$in": list(STATUS_BUCKETS["pending"])}, "archived_at": None}
+        ),
     }
 
 
@@ -627,7 +635,25 @@ def delete_user(
             detail="Superadmin users cannot be deleted"
         )
 
-    # Removes the user's events, media, documents, reports and notifications.
+    # Permanent deletion would erase everything the account owns -- approved
+    # events, their photos and reports, the accreditation record -- and an
+    # Event Manager's events were left behind without an owner. The same rule
+    # as the Dean's teacher tools: an account with events is deactivated
+    # instead, which keeps every record.
+    owned = events.count_documents({"teacher_id": canonical_id}) + managed_events.count_documents(
+        {"owner_id": canonical_id}
+    )
+    if owned:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{user.get('name') or user.get('email')} has {owned} event{'s' if owned != 1 else ''}, "
+                "so the account cannot be deleted permanently. Deactivate it instead: "
+                "they can no longer sign in, and their records are kept."
+            ),
+        )
+
+    # Removes the user's notifications and the account itself.
     delete_user_cascade(str(user["_id"]))
 
     log_audit_event(
@@ -777,13 +803,16 @@ def toggle_user_active(
         "is_active": new_status,
         "updated_at": utc_now(),
     }
-    # When deactivating, increment token_version to invalidate active sessions immediately
+    update: dict[str, Any] = {"$set": update_fields}
+    # Deactivating ends every session at once. $inc, not a computed $set: a
+    # password reset landing at the same moment bumps the counter too, and a
+    # $set of "read value + 1" could overwrite that bump and revive its tokens.
     if not new_status:
-        update_fields["token_version"] = int(user.get("token_version", 0)) + 1
+        update["$inc"] = {"token_version": 1}
 
     updated = users.find_one_and_update(
         {"_id": user["_id"]},
-        {"$set": update_fields},
+        update,
         return_document=True,
     )
 
@@ -815,10 +844,14 @@ def update_user_profile(
     update_fields: dict[str, Any] = {"updated_at": utc_now()}
     if payload.name is not None:
         update_fields["name"] = payload.name
-    if payload.phone is not None:
+    # A field that was sent is written even when empty: clearing the mobile
+    # number sends null, and skipping it left the number (and the person in the
+    # coordinator directory) in place while the page said "updated".
+    sent = payload.model_fields_set
+    if "phone" in sent:
         update_fields["phone"] = payload.phone
-    if payload.department is not None:
-        update_fields["department"] = payload.department
+    if "department" in sent:
+        update_fields["department"] = payload.department or None
 
     updated = users.find_one_and_update(
         {"_id": user["_id"]},
@@ -938,6 +971,11 @@ def get_audit_logs(
             {"actor_email": {"$regex": pattern, "$options": "i"}},
             {"action": {"$regex": pattern, "$options": "i"}},
             {"target_type": {"$regex": pattern, "$options": "i"}},
+            # Who or what the action touched, as the page's Details column
+            # shows it -- the search box promised details and ignored them.
+            {"details.name": {"$regex": pattern, "$options": "i"}},
+            {"details.email": {"$regex": pattern, "$options": "i"}},
+            {"details.event_name": {"$regex": pattern, "$options": "i"}},
         ]
 
     total = _safe_count(audit_logs, query)
@@ -1012,6 +1050,7 @@ def export_events_csv(
     # would fail with AttributeError on a str. alias keeps the query-string
     # name the frontend already sends.
     event_status: str | None = Query(default=None, alias="status"),
+    q: str | None = Query(default=None, max_length=120),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
@@ -1020,23 +1059,29 @@ def export_events_csv(
 ):
     superadmin = get_superadmin_user(authorization)
 
+    # The same filter the Events page lists with (_dean_event_query): its
+    # search box (`q`), its status tabs -- groups, so "approved" also brings
+    # completed, published and recorded events -- and the draft and archive
+    # exclusions. The export used to match one literal status and ignore the
+    # search, so the file did not contain what the page showed.
+    # A plain status ("completed") still works for anyone calling the API.
+    wanted = (event_status or "").strip().lower()
+    bucket = wanted if wanted in STATUS_BUCKETS else None
+    query: dict[str, Any] = _dean_event_query(
+        None, event_type if (event_type or "").strip().lower() not in ("", "all") else None, q, bucket
+    )
+
     # Drafts are a teacher's private scratchpad and archived events were
     # deliberately shelved; neither belongs in an accreditation return unless
-    # asked for explicitly. Every other read path already hides both.
-    query: dict[str, Any] = {}
-    if not include_drafts:
-        query["status"] = {"$ne": "draft"}
-    if not include_archived:
-        query["archived_at"] = None
-
-    if event_status and event_status.strip().lower() != "all":
-        # An explicit status filter replaces the draft exclusion above, so
-        # ?status=draft with include_drafts=false still returns nothing.
-        wanted = event_status.strip().lower()
-        if include_drafts or wanted != "draft":
-            query["status"] = wanted
-    if event_type and event_type.strip().lower() != "all":
-        query["event_type"] = event_type.strip()
+    # asked for explicitly.
+    if include_archived:
+        query.pop("archived_at", None)
+    if wanted and wanted != "all" and bucket is None:
+        # An explicit status replaces the draft exclusion, so ?status=draft
+        # without include_drafts still returns nothing.
+        query["status"] = wanted if (include_drafts or wanted != "draft") else {"$in": []}
+    elif include_drafts and bucket is None:
+        query.pop("status", None)
     if from_date or to_date:
         date_q = {}
         if from_date:
@@ -1045,11 +1090,19 @@ def export_events_csv(
             date_q["$lte"] = to_date
         query["event_date"] = date_q
 
-    event_docs = list(events.find(query).sort("event_date", DESCENDING))
+    # Event Manager events are listed on the page as well, so they belong here.
+    event_docs = list(events.find(query).sort("event_date", DESCENDING)) + list(
+        managed_events.find(query).sort("event_date", DESCENDING)
+    )
+    event_docs.sort(key=lambda doc: str(doc.get("event_date") or ""), reverse=True)
 
-    # Preload teachers map for name/email/department
-    teacher_ids = {to_object_id(e.get("teacher_id")) for e in event_docs if e.get("teacher_id")}
-    valid_tids = [tid for tid in teacher_ids if tid is not None]
+    # Preload the people behind the events for name/email/department
+    owner_ids = {
+        to_object_id(e.get("teacher_id") or e.get("owner_id"))
+        for e in event_docs
+        if e.get("teacher_id") or e.get("owner_id")
+    }
+    valid_tids = [tid for tid in owner_ids if tid is not None]
     teacher_map = {}
     if valid_tids:
         for t in users.find({"_id": {"$in": valid_tids}}):
@@ -1078,7 +1131,13 @@ def export_events_csv(
     ])
 
     for ev in event_docs:
-        teacher = teacher_map.get(str(ev.get("teacher_id")), {})
+        teacher = teacher_map.get(str(ev.get("teacher_id") or ev.get("owner_id")), {}) or {
+            "name": ev.get("owner_name", ""),
+            "email": ev.get("owner_email", ""),
+        }
+        # The stored description carries the form's metadata comment; the
+        # file wants only the text the teacher wrote.
+        description, _meta = split_description(ev.get("description"))
         writer.writerow([
             csv_cell(ev.get("_id", "")),
             csv_cell(ev.get("event_name", "")),
@@ -1096,7 +1155,7 @@ def export_events_csv(
             csv_cell(teacher.get("email", "")),
             csv_cell(teacher.get("department", "")),
             csv_cell(ev.get("created_at", "")),
-            csv_cell(ev.get("description", "")),
+            csv_cell(description),
         ])
 
     csv_content = output.getvalue()
@@ -1126,11 +1185,26 @@ def get_dashboard_analytics(
 ):
     get_superadmin_user(authorization)
 
+    # Counted the way the Dean's dashboard and the Events page count: no
+    # drafts (a teacher's own until submitted), nothing on the archive shelf,
+    # statuses in their tab groups (approved includes completed, published and
+    # recorded; rejected includes revoked), Event Manager events included.
+    visible = {"status": {"$ne": "draft"}, "archived_at": None}
+    both = (events, managed_events)
+
+    def count_bucket(bucket: str | None) -> int:
+        query = dict(visible)
+        if bucket:
+            query["status"] = {"$in": list(STATUS_BUCKETS[bucket])}
+        return sum(collection.count_documents(query) for collection in both)
+
+    bucket_of = {st: name for name, statuses in STATUS_BUCKETS.items() for st in statuses}
+
     # 1. Total counts / KPIs
-    total_events = events.count_documents({})
-    approved_events = events.count_documents({"status": "approved"})
-    pending_events = events.count_documents({"status": "pending"})
-    rejected_events = events.count_documents({"status": "rejected"})
+    total_events = count_bucket(None)
+    approved_events = count_bucket("approved")
+    pending_events = count_bucket("pending")
+    rejected_events = count_bucket("rejected")
     total_users = users.count_documents({})
     total_teachers = users.count_documents({"role": "teacher"})
     total_deans = users.count_documents({"role": "dean"})
@@ -1140,7 +1214,8 @@ def get_dashboard_analytics(
     pipeline_monthly = [
         {
             "$match": {
-                "event_date": {"$exists": True, "$type": "string", "$regex": r"^\d{4}-\d{2}"}
+                **visible,
+                "event_date": {"$exists": True, "$type": "string", "$regex": r"^\d{4}-\d{2}"},
             }
         },
         {
@@ -1155,27 +1230,32 @@ def get_dashboard_analytics(
         {"$sort": {"_id.month": ASCENDING}},
     ]
     monthly_data: dict[str, dict[str, Any]] = {}
-    for row in events.aggregate(pipeline_monthly):
+    for row in (r for collection in both for r in collection.aggregate(pipeline_monthly)):
         m = row["_id"].get("month")
-        st = row["_id"].get("status")
+        bucket = bucket_of.get(row["_id"].get("status"))
         if not m:
             continue
         if m not in monthly_data:
             monthly_data[m] = {"month": m, "approved": 0, "pending": 0, "rejected": 0, "total": 0}
-        monthly_data[m][st] = monthly_data[m].get(st, 0) + row["count"]
+        # An event moving from approved to completed stays on the approved line.
+        if bucket:
+            monthly_data[m][bucket] += row["count"]
         monthly_data[m]["total"] += row["count"]
 
     monthly_trends = sorted(monthly_data.values(), key=lambda x: x["month"])[-12:]
 
     # 3. Category distribution (Top event types)
     pipeline_cat = [
+        {"$match": visible},
         {"$group": {"_id": "$event_type", "count": {"$sum": 1}}},
-        {"$sort": {"count": DESCENDING}},
-        {"$limit": 8},
     ]
+    by_category: dict[str, int] = {}
+    for row in (r for collection in both for r in collection.aggregate(pipeline_cat)):
+        name = row["_id"] or "Uncategorized"
+        by_category[name] = by_category.get(name, 0) + row["count"]
     category_distribution = [
-        {"name": row["_id"] or "Uncategorized", "value": row["count"]}
-        for row in events.aggregate(pipeline_cat)
+        {"name": name, "value": value}
+        for name, value in sorted(by_category.items(), key=lambda item: item[1], reverse=True)[:8]
     ]
 
     return {
@@ -1349,16 +1429,22 @@ MAX_TEACHER_CSV_BYTES = 2 * 1024 * 1024
 
 
 @router.post("/teachers/bulk-onboard-file")
-async def bulk_onboard_teachers_file(
+def bulk_onboard_teachers_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     send_email: bool = Form(default=True),
     authorization: str | None = Header(default=None),
 ):
-    """Accept a CSV file directly for bulk teacher onboarding."""
+    """Accept a CSV file directly for bulk teacher onboarding.
+
+    A plain ``def``, not ``async``: creating the accounts hashes a password per
+    row and writes through synchronous PyMongo, which on the event loop froze
+    every other request for the length of the import. FastAPI runs a plain
+    ``def`` in its threadpool.
+    """
     get_superadmin_user(authorization)
 
-    content_bytes = await file.read(MAX_TEACHER_CSV_BYTES + 1)
+    content_bytes = file.file.read(MAX_TEACHER_CSV_BYTES + 1)
     if len(content_bytes) > MAX_TEACHER_CSV_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -1380,11 +1466,44 @@ async def bulk_onboard_teachers_file(
             detail="No valid teacher records found in the uploaded CSV file. Ensure it has Name and Email columns.",
         )
 
-    payload = BulkOnboardTeachersRequest(
-        teachers=[BulkOnboardTeacherItem(**t) for t in parsed],
-        send_email=send_email,
+    # Rows are checked one at a time: a single bad email (or a header row the
+    # parser mistook for data) used to fail the whole model and answer 500.
+    # Bad rows are reported as skipped; the good ones are created.
+    max_rows = MAX_BULK_TEACHERS
+    if len(parsed) > max_rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A roster may hold at most {max_rows} teachers; this file has {len(parsed)}. Split it and upload each part.",
+        )
+    items: list[BulkOnboardTeacherItem] = []
+    invalid: list[dict] = []
+    for row in parsed:
+        try:
+            items.append(BulkOnboardTeacherItem(**row))
+        except ValidationError as error:
+            first = error.errors()[0]
+            field = first["loc"][0] if first.get("loc") else "row"
+            invalid.append({
+                "email": row.get("email") or "",
+                "name": row.get("name") or "",
+                "reason": f"Invalid {field}: {first.get('msg', 'not accepted')}",
+            })
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "No valid teacher records found in the uploaded CSV file. Ensure it has Name and Email columns. "
+                + (f"First problem: {invalid[0]['reason']} ({invalid[0]['email'] or invalid[0]['name']})." if invalid else "")
+            ).strip(),
+        )
+
+    result = bulk_onboard_teachers(
+        BulkOnboardTeachersRequest(teachers=items, send_email=send_email), background_tasks, authorization
     )
-    return bulk_onboard_teachers(payload, background_tasks, authorization)
+    if invalid:
+        result["skipped"] = invalid + list(result.get("skipped") or [])
+        result["skipped_count"] = len(result["skipped"])
+    return result
 
 
 @router.post("/teachers/send-credentials")
@@ -1407,8 +1526,13 @@ def send_credentials_to_teachers(
     # belong to a teacher, is reported as a skip rather than failing the batch.
     resolved: list[dict] = []
     skipped: list[dict] = []
+    seen: set[str] = set()
     for user_id in payload.user_ids:
         object_id = to_object_id(user_id)
+        # The same teacher twice (or once upper-case) was reset twice: two
+        # emails, and the first password in the response already dead.
+        if object_id is not None and str(object_id) in seen:
+            continue
         doc = users.find_one({"_id": object_id}) if object_id else None
         if not doc:
             skipped.append({"user_id": user_id, "reason": "No such user"})
@@ -1418,7 +1542,14 @@ def send_credentials_to_teachers(
                 "email": doc.get("email"),
                 "reason": f"Not a teacher (role: {doc.get('role')})",
             })
+        elif doc.get("is_active") is False:
+            skipped.append({
+                "user_id": user_id,
+                "email": doc.get("email"),
+                "reason": "Account is deactivated. Activate it first.",
+            })
         else:
+            seen.add(str(doc["_id"]))
             resolved.append(doc)
 
     updated_teachers: list[dict] = []

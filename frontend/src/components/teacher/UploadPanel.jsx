@@ -6,7 +6,6 @@ import {
   IconArrowRight,
   IconEye,
   IconFilm,
-  IconImagePlus,
   IconRotateCcw,
   IconTrash,
   IconUploadCloud,
@@ -38,6 +37,11 @@ export default function UploadPanel({
   // Videos and documents are limited this way rather than by count (PRD 9/11).
   totalLimitBytes = null,
   usedBytes = 0,
+  // What another panel already spends of the same limits: Notice and Report
+  // documents are two panels over one count cap and one byte budget, so each
+  // must know about the other's files or both could fill the whole budget.
+  sharedCount = 0,
+  sharedBytes = 0,
   maxSizeLabel,
   hint,
   emptyLabel,
@@ -51,7 +55,7 @@ export default function UploadPanel({
   onLoadError,
   // Photos only, for a panel that generates its own reports: a tick on each
   // saved photo choosing whether it appears in the report.
-  // { ids: chosen photo ids in report order, max, busy, onToggle(id) }
+  // { ids: chosen photo ids in report order, max (optional cap), busy, onToggle(id) }
   reportSelection = null,
 }) {
   const inputRef = useRef(null);
@@ -110,15 +114,18 @@ export default function UploadPanel({
   };
 
   const active = items.length + uploads.filter((u) => !u.error).length;
-  const countFull = max != null && active >= max;
-  const budgetFull = totalLimitBytes != null && usedBytes >= totalLimitBytes;
+  const shared = sharedCount > 0 || sharedBytes > 0;
+  const totalActive = active + sharedCount;
+  const totalUsedBytes = usedBytes + sharedBytes;
+  const countFull = max != null && totalActive >= max;
+  const budgetFull = totalLimitBytes != null && totalUsedBytes >= totalLimitBytes;
   const full = countFull || budgetFull;
   const locked = disabled || full;
 
   const budgetPct =
     totalLimitBytes == null
       ? 0
-      : Math.min(100, Math.round((usedBytes / totalLimitBytes) * 100));
+      : Math.min(100, Math.round((totalUsedBytes / totalLimitBytes) * 100));
   // Amber as the budget runs low, red once it is gone -- the same warning
   // language the rest of the app uses for "you are about to be blocked".
   const budgetTone =
@@ -184,7 +191,7 @@ export default function UploadPanel({
 
         <p className="prose-muted mt-2.5 text-[11px]">
           {maxSizeLabel}
-          {max != null && ` · ${active} of ${max} added`}
+          {max != null && ` · ${totalActive} of ${max} added${shared ? " in total" : ""}`}
         </p>
       </div>
 
@@ -193,7 +200,9 @@ export default function UploadPanel({
         <div className="mt-3">
           <div className="flex items-baseline justify-between gap-3">
             <span className="prose-muted text-[11px]">
-              {formatFileSize(usedBytes)} of {formatFileSize(totalLimitBytes)} used
+              {shared
+                ? `${formatFileSize(usedBytes)} here · ${formatFileSize(totalUsedBytes)} of ${formatFileSize(totalLimitBytes)} used in total`
+                : `${formatFileSize(usedBytes)} of ${formatFileSize(totalLimitBytes)} used`}
             </span>
             {budgetFull && (
               <span className="text-[11px] font-semibold text-err">Limit reached</span>
@@ -319,40 +328,46 @@ export default function UploadPanel({
               </li>
             ))}
           </ul>
-        ) : (
-          <>
-            {kind === "image" && items.length > 0 && (
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border hairline bg-raised/40 px-3.5 py-2">
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-ink select-none">
-                    <input
-                      type="checkbox"
-                      checked={items.length > 0 && selectedForPreview.length === items.length}
-                      onChange={handleSelectAll}
-                      className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
-                    />
-                    <span>Select All ({items.length})</span>
-                  </label>
+        ) : kind === "image" ? (
+          // Photos as one compact list: the preview selection and the report
+          // choice read down a single column instead of across scattered cards.
+          <div className="mt-4 overflow-hidden rounded-xl border hairline">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b hairline bg-raised/40 px-3 py-2">
+              <label className="flex cursor-pointer select-none items-center gap-2 text-xs font-medium text-ink">
+                <input
+                  type="checkbox"
+                  checked={selectedForPreview.length === items.length}
+                  onChange={handleSelectAll}
+                  aria-label="Select all photos for preview"
+                  className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
+                />
+                <span>
+                  Select all ({items.length})
                   {selectedForPreview.length > 0 && (
-                    <span className="text-xs text-muted">
-                      {selectedForPreview.length} selected
-                    </span>
+                    <span className="ml-1.5 font-normal text-muted">· {selectedForPreview.length} selected</span>
                   )}
-                </div>
+                </span>
+              </label>
 
+              <div className="flex items-center gap-3">
+                {reportSelection && (
+                  <span className="text-xs text-muted">
+                    <span className="font-semibold text-accent">{reportSelection.ids.length}</span> in report
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={handlePreviewSelected}
                   disabled={selectedForPreview.length === 0}
-                  className="btn btn-secondary btn-xs"
+                  className="btn btn-ghost btn-xs"
                 >
                   <IconEye className="h-3.5 w-3.5" />
-                  Preview Selected {selectedForPreview.length > 0 ? `(${selectedForPreview.length})` : ""}
+                  Preview{selectedForPreview.length > 0 ? ` (${selectedForPreview.length})` : ""}
                 </button>
               </div>
-            )}
+            </div>
 
-            <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <ul className="divide-y divide-line/50">
               {items.map((item) => {
                 const reportPosition = reportSelection ? reportSelection.ids.indexOf(item.id) + 1 : 0;
                 const inReport = reportPosition > 0;
@@ -360,80 +375,32 @@ export default function UploadPanel({
                 return (
                   <li
                     key={item.id}
-                    className={`media-tile group ${inReport ? "ring-2 ring-accent" : ""} ${isSelected ? "border-accent/40" : ""}`}
+                    className={`flex items-center gap-2.5 px-3 py-2 sm:gap-3 ${isSelected ? "bg-accent/[0.05]" : ""}`}
                   >
-                    {kind === "video" ? (
-                      <video
-                        src={item.media_url}
-                        className="media-thumb"
-                        preload="metadata"
-                        muted
-                        playsInline
-                        controls
-                        onError={() => onLoadError?.()}
-                      />
-                    ) : (
-                      <div className="media-thumb flex flex-col items-center justify-center bg-raised/60 p-4 text-center select-none border-b hairline relative">
-                        <label
-                          className="absolute top-2 left-2 flex items-center gap-1.5 cursor-pointer rounded-md bg-(--card-bg)/90 px-2 py-1 backdrop-blur-sm border hairline shadow-xs"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => handleToggleItemSelect(item.id)}
-                            className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
-                            title="Select for multi-image preview"
-                          />
-                          <span className="text-[10px] font-medium text-ink">Select</span>
-                        </label>
-
-                        <span className="icon-tile h-12 w-12 rounded-xl bg-accent/10 text-accent mb-2">
-                          <IconImagePlus className="h-6 w-6" />
-                        </span>
-                        <span className="inline-block rounded bg-line/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                          {getFileExtension(item.file_name)}
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="flex items-start justify-between gap-2 px-3 py-2.5">
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-ink" title={item.file_name}>
-                          {item.file_name}
-                        </p>
-                        <p className="prose-muted mt-0.5 text-[11px]">
-                          {formatFileSize(item.file_size)} · Saved
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        {kind === "image" && (
-                          <button
-                            type="button"
-                            onClick={() => handleSinglePreview(item)}
-                            disabled={disabled || item.removing}
-                            className="btn btn-ghost btn-xs text-accent"
-                            title="Preview image"
-                          >
-                            <IconEye className="h-3.5 w-3.5" />
-                            Preview
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => onRemove?.(item)}
-                          disabled={disabled || item.removing}
-                          className="icon-btn icon-btn-sm shrink-0 text-err"
-                          aria-label={`Remove ${item.file_name}`}
-                          title="Remove"
-                        >
-                          {item.removing ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
-                        </button>
-                      </div>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleToggleItemSelect(item.id)}
+                      aria-label={`Select ${item.file_name} for preview`}
+                      title="Select for preview"
+                      className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded border-line text-accent focus:ring-accent"
+                    />
+                    <span className="icon-tile h-8 w-8 shrink-0 rounded-lg font-display text-[9px] font-bold uppercase">
+                      {getFileExtension(item.file_name)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-ink" title={item.file_name}>
+                        {item.file_name}
+                      </p>
+                      <p className="prose-muted text-[11px]">{formatFileSize(item.file_size)}</p>
                     </div>
 
                     {reportSelection && (
-                      <label className="flex cursor-pointer items-center gap-2 border-t hairline px-3 py-2 text-xs text-ink">
+                      <label
+                        className={`flex shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-lg border px-2 py-1 text-xs ${
+                          inReport ? "border-accent/40 bg-accent/[0.06] font-semibold text-accent" : "border-line/70 text-muted"
+                        }`}
+                      >
                         <input
                           type="checkbox"
                           checked={inReport}
@@ -441,22 +408,89 @@ export default function UploadPanel({
                             disabled ||
                             item.removing ||
                             reportSelection.busy ||
-                            (!inReport && reportSelection.ids.length >= reportSelection.max)
+                            (!inReport &&
+                              reportSelection.max != null &&
+                              reportSelection.ids.length >= reportSelection.max)
                           }
                           onChange={() => reportSelection.onToggle(item.id)}
                           aria-label={`Include ${item.file_name} in the report`}
                           className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
                         />
-                        <span className={inReport ? "font-semibold text-accent" : "text-muted"}>
-                          {inReport ? `In report (${reportPosition})` : "Include in report"}
-                        </span>
+                        {inReport ? (
+                          <span>
+                            <span className="hidden sm:inline">In report · </span>#{reportPosition}
+                          </span>
+                        ) : (
+                          <span>
+                            <span className="hidden sm:inline">Add to </span>report
+                          </span>
+                        )}
                       </label>
                     )}
+
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSinglePreview(item)}
+                        disabled={item.removing}
+                        className="icon-btn icon-btn-sm h-8 w-8 text-accent"
+                        aria-label={`Preview ${item.file_name}`}
+                        title="Preview"
+                      >
+                        <IconEye className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRemove?.(item)}
+                        disabled={disabled || item.removing}
+                        className="icon-btn icon-btn-sm h-8 w-8 text-err"
+                        aria-label={`Remove ${item.file_name}`}
+                        title="Remove"
+                      >
+                        {item.removing ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
+                      </button>
+                    </div>
                   </li>
                 );
               })}
             </ul>
-          </>
+          </div>
+        ) : (
+          <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {items.map((item) => (
+              <li key={item.id} className="media-tile group">
+                <video
+                  src={item.media_url}
+                  className="media-thumb"
+                  preload="metadata"
+                  muted
+                  playsInline
+                  controls
+                  onError={() => onLoadError?.()}
+                />
+                <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium text-ink" title={item.file_name}>
+                      {item.file_name}
+                    </p>
+                    <p className="prose-muted mt-0.5 text-[11px]">
+                      {formatFileSize(item.file_size)} · Saved
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRemove?.(item)}
+                    disabled={disabled || item.removing}
+                    className="icon-btn icon-btn-sm shrink-0 text-err"
+                    aria-label={`Remove ${item.file_name}`}
+                    title="Remove"
+                  >
+                    {item.removing ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
         ))}
 
       {items.length === 0 && uploads.length === 0 && (

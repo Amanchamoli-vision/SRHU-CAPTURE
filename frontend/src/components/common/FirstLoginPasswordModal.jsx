@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import { changePassword } from "../../services/auth";
 import { updateSessionUser } from "../../services/session";
 import { usePanel } from "../teacher/panel";
 import {
@@ -70,13 +70,10 @@ export default function FirstLoginPasswordModal({ isOpen = true }) {
 
     try {
       setLoading(true);
-      const res = await apiJson("/users/me/change-password", {
-        method: "POST",
-        body: {
-          current_password: currentPassword,
-          new_password: newPassword,
-        },
-      });
+      // changePassword stores the fresh session the server hands back: the
+      // change revokes every earlier token, this device's included, so
+      // keeping the old one signed the user out on their very next request.
+      const res = await changePassword(currentPassword, newPassword);
 
       // Update session user to clear must_change_password flag
       const updatedUser = {
