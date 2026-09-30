@@ -25,7 +25,7 @@ export default function ReportCustomizationModal({
   photoCount = null,
   documentCount = null,
   noticeCount = null,
-  reportDocCount = null,
+  attachmentCount = null,
   isConsolidated = false,
   eventCount = 1,
 }) {
@@ -107,23 +107,23 @@ export default function ReportCustomizationModal({
     {
       key: "include_photos",
       title: "Photographs & Images",
-      description: "Up to 4 high-resolution event photographs arranged in the official photo grid.",
+      description: "The chosen event photographs, arranged in the official photo grid.",
       Icon: IconImagePlus,
       badge: photoCount != null ? (photoCount > 0 ? `${photoCount} ${photoCount === 1 ? "photo" : "photos"}` : "No photos") : null,
     },
     {
       key: "include_notices",
       title: "Uploaded Notices",
-      description: "Circulars, event notices, agendas, and invitations with clickable download links.",
+      description: "Only the files uploaded as notices: circulars, event notices, agendas and invitations, with download links.",
       Icon: IconFileText,
       badge: noticeCount != null ? (noticeCount > 0 ? `${noticeCount} ${noticeCount === 1 ? "notice" : "notices"}` : "No notices") : null,
     },
     {
       key: "include_reports",
-      title: "Uploaded Reports",
-      description: "Event summary reports, attendance lists, and documentation with clickable download links.",
+      title: "Uploaded Attachments",
+      description: "Every file that is not a notice: report documents, plus download links for each photo and video.",
       Icon: IconFile,
-      badge: reportDocCount != null ? (reportDocCount > 0 ? `${reportDocCount} ${reportDocCount === 1 ? "report" : "reports"}` : "No reports") : null,
+      badge: attachmentCount != null ? (attachmentCount > 0 ? `${attachmentCount} ${attachmentCount === 1 ? "file" : "files"}` : "No files") : null,
     },
   ];
 
@@ -204,7 +204,7 @@ export default function ReportCustomizationModal({
                 className={`relative flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition-colors select-none ${
                   checked
                     ? "border-accent/40 bg-accent/[0.04] shadow-xs"
-                    : "border-border/60 bg-surface/30 opacity-70 hover:opacity-100 hover:border-border"
+                    : "border-line/60 bg-surface/30 opacity-70 hover:opacity-100 hover:border-line"
                 }`}
               >
                 <input
@@ -212,7 +212,7 @@ export default function ReportCustomizationModal({
                   checked={checked}
                   onChange={() => toggleOption(key)}
                   disabled={generating}
-                  className="mt-0.5 h-4 w-4 rounded border-border text-accent focus:ring-accent"
+                  className="mt-0.5 h-4 w-4 rounded border-line text-accent focus:ring-accent"
                 />
 
                 <div className="min-w-0 flex-1">

@@ -20,14 +20,13 @@ from app.database import (
     users,
 )
 from app.models.documents import APPROVED_STAGES, new_report_document
-from app.schemas.event_manager import MAX_REPORT_PHOTOS
 from app.schemas.events import normalize_social_url
-from app.schemas.reports import ReportCustomizationOptions
+from app.schemas.reports import ReportCustomizationOptions, normalize_customization
 from app.services import report_files
 from app.services.event_fields import with_legacy_metadata
 from app.services.managed_report_pdf import (
-    Attachment,
     ReportEntry,
+    attachment_for,
     build_managed_report_pdf,
     prepare_photo,
 )
@@ -352,23 +351,7 @@ def generate_report(
     if not is_completed(event):
         raise HTTPException(status_code=400, detail=NOT_COMPLETED_DETAIL)
 
-    customization = payload.model_dump() if payload is not None else None
-    if customization and not any([
-        customization.get("include_basic_details", True),
-        customization.get("include_schedule_venue", True),
-        customization.get("include_description", True),
-        customization.get("include_other_info", True),
-        customization.get("include_photos", True),
-        customization.get("include_documents", True) and (
-            customization.get("include_notices", True) or customization.get("include_reports", True)
-        ),
-        customization.get("include_notices", False),
-        customization.get("include_reports", False),
-    ]):
-        raise HTTPException(
-            status_code=400,
-            detail="Please select at least one section to include in the report.",
-        )
+    customization = report_files.resolve_customization(payload)
 
     # --------------------------------------------------------
     # Collect event information
@@ -462,48 +445,20 @@ def download_report(
             detail="Please generate the report first"
         )
 
-    customization = None
-    if payload is not None:
-        customization = payload.model_dump()
-    else:
-        query_opts = {}
-        if include_basic_details is not None:
-            query_opts["include_basic_details"] = include_basic_details
-        if include_schedule_venue is not None:
-            query_opts["include_schedule_venue"] = include_schedule_venue
-        if include_description is not None:
-            query_opts["include_description"] = include_description
-        if include_other_info is not None:
-            query_opts["include_other_info"] = include_other_info
-        if include_photos is not None:
-            query_opts["include_photos"] = include_photos
-        if include_documents is not None:
-            query_opts["include_documents"] = include_documents
-        if include_notices is not None:
-            query_opts["include_notices"] = include_notices
-        if include_reports is not None:
-            query_opts["include_reports"] = include_reports
-        if query_opts:
-            customization = query_opts
-        elif report and report.get("customization"):
-            customization = report.get("customization")
-
-    if customization and not any([
-        customization.get("include_basic_details", True),
-        customization.get("include_schedule_venue", True),
-        customization.get("include_description", True),
-        customization.get("include_other_info", True),
-        customization.get("include_photos", True),
-        customization.get("include_documents", True) and (
-            customization.get("include_notices", True) or customization.get("include_reports", True)
-        ),
-        customization.get("include_notices", False),
-        customization.get("include_reports", False),
-    ]):
-        raise HTTPException(
-            status_code=400,
-            detail="Please select at least one section to include in the report.",
-        )
+    customization = report_files.resolve_customization(
+        payload,
+        {
+            "include_basic_details": include_basic_details,
+            "include_schedule_venue": include_schedule_venue,
+            "include_description": include_description,
+            "include_other_info": include_other_info,
+            "include_photos": include_photos,
+            "include_documents": include_documents,
+            "include_notices": include_notices,
+            "include_reports": include_reports,
+        },
+        stored=(report or {}).get("customization"),
+    )
 
     media = get_event_media(event["id"])
     documents = get_event_documents(event["id"])
@@ -569,20 +524,9 @@ def build_dean_report(
 
     ``event``, ``media`` and ``documents`` are serialized rows (``id``).
     """
-    opts = (
-        customization.model_dump()
-        if hasattr(customization, "model_dump")
-        else (customization if isinstance(customization, dict) else {})
-    )
+    opts = normalize_customization(customization) or {}
     inc_photos = opts.get("include_photos", True)
     selected_pids = opts.get("selected_photo_ids")
-    inc_docs = opts.get("include_documents", True)
-    inc_notices = opts.get("include_notices", inc_docs)
-    inc_reports = opts.get("include_reports", inc_docs)
-    if not inc_docs and "include_notices" not in opts:
-        inc_notices = False
-    if not inc_docs and "include_reports" not in opts:
-        inc_reports = False
 
     photo_rows = sorted(
         (row for row in media if row.get("media_type") == "image"), key=lambda row: row["id"]
@@ -592,7 +536,7 @@ def build_dean_report(
     if not inc_photos:
         chosen = []
     elif selected_pids:
-        chosen = [pid for pid in selected_pids if pid in by_id][:MAX_REPORT_PHOTOS]
+        chosen = [pid for pid in selected_pids if pid in by_id]
     else:
         chosen = report_files.choose_photo_ids(event.get("report_photo_ids"), list(by_id))
 
@@ -609,33 +553,10 @@ def build_dean_report(
     def name(row: dict) -> str:
         return row.get("original_name") or row.get("file_name") or "file"
 
-    if inc_docs or inc_notices or inc_reports:
-        attachments = []
-        if inc_notices or inc_docs:
-            attachments.extend([
-                Attachment(
-                    name=name(row),
-                    kind="photo" if row.get("media_type") == "image" else "video",
-                    size=row.get("file_size"),
-                    url=file_link("media", row["id"]),
-                    category="media",
-                )
-                for row in media
-            ])
-        attachments.extend([
-            Attachment(
-                name=name(row),
-                kind="document",
-                size=row.get("file_size"),
-                url=file_link("documents", row["id"]),
-                category=row.get("category", "notice"),
-            )
-            for row in documents
-            if (row.get("category", "notice") == "notice" and inc_notices)
-            or (row.get("category", "notice") == "report" and inc_reports)
-        ])
-    else:
-        attachments = []
+    attachments = [
+        attachment_for(kind, row, name(row), file_link(kind, row["id"]))
+        for kind, row in report_files.report_attachment_rows(media, documents, opts)
+    ]
 
     # Department and expected participants stay in the description's metadata
     # blob (see services/event_fields.py); the other fields are real columns,

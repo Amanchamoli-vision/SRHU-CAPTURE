@@ -76,7 +76,7 @@ const ROLES = [
     summary: "Propose events once, with everything the Dean needs to decide.",
     points: [
       "Date, time, venue, department and coordinator",
-      "Up to 4 photos, 2 videos and supporting documents",
+      "Photos, videos and supporting documents",
       "Save drafts, duplicate past events, resubmit after feedback",
       "Track every event's status and get notified of decisions",
     ],

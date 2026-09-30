@@ -684,8 +684,8 @@ function EventDetails() {
         eventName={event?.event_name}
         photoCount={media?.filter((m) => m.media_type === "image").length}
         documentCount={documents?.length}
-        noticeCount={documents?.filter((d) => (d.category || d.doc_category) === "notice").length}
-        reportDocCount={documents?.filter((d) => (d.category || d.doc_category) === "report").length}
+        noticeCount={documents?.filter((d) => d.category !== "report").length}
+        attachmentCount={(documents?.filter((d) => d.category === "report").length || 0) + (media?.length || 0)}
       />
     </TeacherShell>
   );

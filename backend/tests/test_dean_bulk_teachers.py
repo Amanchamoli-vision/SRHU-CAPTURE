@@ -32,6 +32,34 @@ class BulkTeacherTests(DeanTeacherTestCase):
         self.assertEqual(self.doc(self.other_dean)["role"], "dean")  # never a Dean
         self.assertEqual(self.audit.actions(), ["teachers_bulk_deleted"])
 
+    def test_drafts_are_not_counted_but_still_protect_the_account(self) -> None:
+        # A draft is the teacher's own until submitted: the Dean's list must
+        # not count it -- yet deleting the account would erase it, so it
+        # still blocks a permanent delete, without revealing a draft count.
+        self.events.documents.append(
+            {"_id": ObjectId(), "teacher_id": str(self.teacher["_id"]), "status": "draft"}
+        )
+        listed = self.client.get("/dean/teachers", headers=self.auth(self.dean)).json()["teachers"]
+        row = next(t for t in listed if t["id"] == str(self.teacher["_id"]))
+        self.assertEqual(row["event_count"], 0)
+
+        response = self.client.post(
+            "/dean/teachers/bulk-delete", json={"user_ids": self.ids(self.teacher)}, headers=self.auth(self.dean)
+        )
+        reason = response.json()["results"][0]["reason"]
+        self.assertIn("Remove the teacher instead", reason)
+        self.assertNotIn("1 event", reason)
+        self.assertIsNotNone(self.doc(self.teacher))
+
+        single = self.client.delete(f"/dean/teachers/{self.teacher['_id']}", headers=self.auth(self.dean))
+        self.assertEqual(single.status_code, 409, single.text)
+        self.assertNotIn("1 event", single.json()["detail"])
+
+        self.events.add(self.teacher, 2)  # submitted events are counted as before
+        listed = self.client.get("/dean/teachers", headers=self.auth(self.dean)).json()["teachers"]
+        row = next(t for t in listed if t["id"] == str(self.teacher["_id"]))
+        self.assertEqual(row["event_count"], 2)
+
     def test_bulk_remove_keeps_records(self) -> None:
         self.events.add(self.teacher, 2)
         response = self.client.post(

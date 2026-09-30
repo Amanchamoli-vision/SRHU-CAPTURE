@@ -185,8 +185,12 @@ class BulkOnboardTeacherItem(BaseModel):
         return normalized
 
 
+# Teachers one bulk onboard (JSON or CSV file) may create.
+MAX_BULK_TEACHERS = 500
+
+
 class BulkOnboardTeachersRequest(BaseModel):
-    teachers: list[BulkOnboardTeacherItem] = Field(min_length=1, max_length=500)
+    teachers: list[BulkOnboardTeacherItem] = Field(min_length=1, max_length=MAX_BULK_TEACHERS)
     send_email: bool = Field(default=True)
 
 

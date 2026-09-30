@@ -8,9 +8,9 @@ its approval (ReportEntry.approval), the Event Manager's says who recorded it
 and has no approval anywhere. The material itself is the same --
 
 - every detail entered when the event was recorded,
-- up to four photos, each at its original aspect ratio (never cropped),
-  arranged as one compact block whatever mix of portrait and landscape
-  they are (see layout_photos),
+- the chosen photos, as many as were chosen, each at its original aspect
+  ratio (never cropped), in compact blocks of up to four whatever mix of
+  portrait and landscape they are (see layout_photos and photo_groups),
 - every uploaded file listed with a download link.
 
 The builder only lays out what it is given: the router loads the photo bytes
@@ -46,7 +46,6 @@ from reportlab.platypus import (
 from reportlab.platypus.tableofcontents import TableOfContents
 
 from app.config import settings
-from app.schemas.event_manager import MAX_REPORT_PHOTOS
 from app.services.report_pdf import (
     CONTENT_WIDTH,
     LABEL_FILL,
@@ -78,11 +77,13 @@ PHOTO_GAP = 5 * mm
 # The photo block (see layout_photos). A row is never taller than
 # ROW_MAX_HEIGHT and the block never taller than BLOCK_MAX_HEIGHT -- about
 # half the page -- so a lone portrait does not fill the page and four photos
-# stay a compact section. A photo whose geometric mean side (the square root
+# stay a compact section. More photos than PHOTOS_PER_BLOCK make several
+# blocks, one under the other (see photo_groups). A photo whose geometric mean side (the square root
 # of its area) falls below MIN_PHOTO_SIDE counts as too small to read.
 ROW_MAX_HEIGHT = 100 * mm
 BLOCK_MAX_HEIGHT = 135 * mm
 MIN_PHOTO_SIDE = 40 * mm
+PHOTOS_PER_BLOCK = 4
 
 # Layout scoring weights, per point (1/72 inch) unless stated. Tuned over
 # every portrait/landscape mix of one to four photos at 3:4, 4:3, 9:16, 16:9
@@ -113,13 +114,32 @@ class Attachment:
     kind: str            # "photo" | "video" | "document"
     size: int | None
     url: str | None      # absolute, long-lived download link
-    category: str = "notice"
+    category: str = "notice"  # documents: "notice" | "report"; media: "media"
+
+
+def attachment_for(kind: str, row: dict, name: str, url: str | None) -> Attachment:
+    """One upload row as a report attachment; ``kind`` is "media" or "documents"."""
+    if kind == "media":
+        return Attachment(
+            name=name,
+            kind="photo" if row.get("media_type") == "image" else "video",
+            size=row.get("file_size"),
+            url=url,
+            category="media",
+        )
+    return Attachment(
+        name=name,
+        kind="document",
+        size=row.get("file_size"),
+        url=url,
+        category="report" if row.get("category") == "report" else "notice",
+    )
 
 
 @dataclass
 class ReportEntry:
     event: dict
-    # The chosen photos (at most MAX_REPORT_PHOTOS), already run through prepare_photo():
+    # The chosen photos, in order, already run through prepare_photo():
     # re-encoded as they are read, so a report over many events never holds
     # the original full-size files in memory.
     photos: list[tuple[BytesIO, int, int]] = field(default_factory=list)
@@ -343,14 +363,40 @@ class _PhotoGrid(Flowable):
             row_top = base - PHOTO_GAP
 
 
+def photo_groups(count: int) -> list[range]:
+    """Split ``count`` photos, in order, into blocks of at most
+    PHOTOS_PER_BLOCK and as even as possible: 5 is 3 + 2, not 4 + 1, so the
+    last block never holds one photo stretched across the page alone.
+
+    layout_photos tries every arrangement of a block, which is only cheap
+    while a block stays this small (4! x 2^3 = 192 candidates).
+    """
+    if count <= 0:
+        return []
+    blocks = -(-count // PHOTOS_PER_BLOCK)
+    size, extra = divmod(count, blocks)
+    groups, start = [], 0
+    for index in range(blocks):
+        end = start + size + (1 if index < extra else 0)
+        groups.append(range(start, end))
+        start = end
+    return groups
+
+
 def _photo_flowables(entry: "ReportEntry", heading: Paragraph, styles) -> list:
-    """The photo section: its heading travels with the photos."""
-    prepared = entry.photos[:MAX_REPORT_PHOTOS]
-    rows = [
-        [(prepared[i][0], w, h) for i, w, h in row]
-        for row in layout_photos([(w, h) for _, w, h in prepared])
-    ]
-    flowables: list = [_PhotoGrid(rows, heading)] if rows else []
+    """The photo section: its heading travels with the first block of photos;
+    later blocks follow on, each moving to a new page whole if it must."""
+    prepared = entry.photos
+    flowables: list = []
+    for group in photo_groups(len(prepared)):
+        block = [prepared[i] for i in group]
+        rows = [
+            [(block[i][0], w, h) for i, w, h in row]
+            for row in layout_photos([(w, h) for _, w, h in block])
+        ]
+        if flowables:
+            flowables.append(Spacer(1, PHOTO_GAP))
+        flowables.append(_PhotoGrid(rows, None if flowables else heading))
     if entry.photo_failures:
         text = (
             f"<i>{entry.photo_failures} selected photo{'s' if entry.photo_failures != 1 else ''}"
@@ -491,13 +537,8 @@ def _event_sections(
     opts = entry.customization if entry.customization is not None else (customization or {})
     inc_desc = opts.get("include_description", True)
     inc_photos = opts.get("include_photos", True)
-    inc_docs = opts.get("include_documents", True)
-    inc_notices = opts.get("include_notices", inc_docs)
-    inc_reports = opts.get("include_reports", inc_docs)
-    if not inc_docs and "include_notices" not in opts:
-        inc_notices = False
-    if not inc_docs and "include_reports" not in opts:
-        inc_reports = False
+    inc_notices = opts.get("include_notices", True)
+    inc_reports = opts.get("include_reports", True)
 
     story = []
     number = 1
@@ -511,58 +552,54 @@ def _event_sections(
         ]
         number += 1
 
+    # Printed even when empty ("No description provided."), as before the
+    # sections became optional: an unticked box is the only way to drop it.
     if inc_desc:
-        desc_text = str(event.get("description") or "").strip()
-        if desc_text:
-            story += [
-                CondPageBreak(SECTION_ROOM),
-                Paragraph(f"{number}. Event Description & Objectives", styles["section"]),
-                *_boxed_text(desc_text, styles["body"]),
-            ]
-            number += 1
+        story += [
+            CondPageBreak(SECTION_ROOM),
+            Paragraph(f"{number}. Event Description & Objectives", styles["section"]),
+            *_boxed_text(str(event.get("description") or "").strip(), styles["body"]),
+        ]
+        number += 1
 
     def photos_section(num: int) -> list:
         heading = Paragraph(f"{num}. Event Photos", styles["section"])
         return _photo_flowables(entry, heading, styles)
 
+    # Notices hold notice documents only, one or many. Everything else --
+    # report documents and the photo and video links -- is listed under
+    # Attachments.
     notice_files = [
         a for a in entry.attachments
-        if getattr(a, "category", "notice") == "notice" or a.kind != "document"
+        if inc_notices and a.kind == "document" and a.category != "report"
     ]
     report_files = [
         a for a in entry.attachments
-        if a.kind == "document" and getattr(a, "category", "notice") == "report"
+        if inc_reports and not (a.kind == "document" and a.category != "report")
     ]
 
     def notices_section(num: int) -> list:
         return [
             CondPageBreak(SECTION_ROOM),
-            Paragraph(f"{num}. Uploaded Notices & Attachments", styles["section"]),
+            Paragraph(f"{num}. Uploaded Notices", styles["section"]),
             *_attachments_table(notice_files, styles),
         ]
 
     def reports_section(num: int) -> list:
         return [
             CondPageBreak(SECTION_ROOM),
-            Paragraph(f"{num}. Uploaded Reports", styles["section"]),
+            Paragraph(f"{num}. Uploaded Attachments", styles["section"]),
             *_attachments_table(report_files, styles),
         ]
 
-    parts = []
-    if attachments_first:
-        if inc_notices and notice_files:
-            parts.append(notices_section)
-        if inc_reports and report_files:
-            parts.append(reports_section)
-        if inc_photos and (entry.photos or entry.photo_failures):
-            parts.append(photos_section)
-    else:
-        if inc_photos and (entry.photos or entry.photo_failures):
-            parts.append(photos_section)
-        if inc_notices and notice_files:
-            parts.append(notices_section)
-        if inc_reports and report_files:
-            parts.append(reports_section)
+    files = [
+        section for present, section in (
+            (bool(notice_files), notices_section),
+            (bool(report_files), reports_section),
+        ) if present
+    ]
+    photos = [photos_section] if inc_photos and (entry.photos or entry.photo_failures) else []
+    parts = files + photos if attachments_first else photos + files
 
     for section_fn in parts:
         story += section_fn(number)
@@ -866,11 +903,12 @@ def build_managed_report_pdf(
 
 __all__ = [
     "Attachment",
-    "MAX_REPORT_PHOTOS",
+    "PHOTOS_PER_BLOCK",
     "ReportEntry",
     "build_managed_report_pdf",
     "fit_within",
     "layout_photos",
     "orientation_of",
+    "photo_groups",
     "prepare_photo",
 ]

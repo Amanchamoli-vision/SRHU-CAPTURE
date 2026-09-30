@@ -16,6 +16,7 @@ import { usePanel } from "../../components/teacher/panel";
 import {
   MAX_EVENTS_PER_REPORT,
   bulkDeleteEvents,
+  bulkSubmitDrafts,
   downloadEventReport,
   downloadEventsReport,
   reportNotice,
@@ -33,6 +34,7 @@ import {
   IconAlertTriangle,
   IconArrowRight,
   IconCheck,
+  IconCheckCircle,
   IconCopy,
   IconDownload,
   IconEdit,
@@ -193,6 +195,8 @@ function MyEvents() {
   const [customizingReport, setCustomizingReport] = useState(null); // { type: 'single' | 'selected', item?, eventIds?, count? }
   const [bulkDelete, setBulkDelete] = useState(null); // { confirmText } while the dialog is open
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkSubmit, setBulkSubmit] = useState(false); // the confirm dialog is open
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
 
   const activeFilter = searchParams.get("filter") || "all";
 
@@ -423,16 +427,23 @@ function MyEvents() {
 
   const canDeleteItem = (item) => item.isDraft || canTeacherEditEvent(item);
 
-  // ---- Event Manager: select, report, delete ----------------------------
-  // Every row can be selected. A report covers the recorded events among the
-  // selection; Delete covers all of it (saved events and browser drafts).
-  const selectable = () => panel.reports;
+  // ---- Select, then submit / report / delete ------------------------------
+  // Every row can be selected, in both panels. Submit covers the drafts saved
+  // on the server (a browser-only draft still lacks required details or its
+  // files); Delete covers what the owner may still delete (every event for an
+  // Event Manager; drafts and not-yet-approved events for a teacher); a report
+  // covers the Event Manager's recorded events.
+  const selectable = () => true;
   const reportable = (item) => panel.reports && !item.isDraft && item.status === "recorded";
-  const visibleSelectable = panel.reports ? filteredItems.map((item) => item.id) : [];
+  const visibleSelectable = filteredItems.map((item) => item.id);
   const allVisibleSelected =
     visibleSelectable.length > 0 && visibleSelectable.every((id) => selected.has(id));
   const selectedItems = allCombinedItems.filter((item) => selected.has(item.id));
   const selectedIds = selectedItems.filter(reportable).map((item) => item.id);
+  const deletableSelected = panel.approval ? selectedItems.filter(canDeleteItem) : selectedItems;
+  const submittableSelected = selectedItems.filter((item) => item.status === "draft" && !item.isDraft);
+  const browserOnlySelected = selectedItems.filter((item) => item.isDraft);
+  const submitVerb = panel.approval ? "Submit" : "Record";
 
   const toggleSelected = (id) =>
     setSelected((current) => {
@@ -497,18 +508,20 @@ function MyEvents() {
   // Delete the selection: one request for the saved events, and the
   // browser-only drafts removed here. The list updates in place -- no refetch.
   const handleBulkDelete = async () => {
-    const serverIds = selectedItems.filter((item) => !item.isDraft).map((item) => item.id);
-    const localIds = selectedItems.filter((item) => item.isDraft).map((item) => item.id);
+    const serverIds = deletableSelected.filter((item) => !item.isDraft).map((item) => item.id);
+    const localIds = deletableSelected.filter((item) => item.isDraft).map((item) => item.id);
     try {
       setBulkDeleting(true);
       let deleted = localIds.length;
       if (serverIds.length) {
-        const result = await bulkDeleteEvents(serverIds);
+        const result = await bulkDeleteEvents(serverIds, panel.api);
         const gone = new Set(
           (result?.results || []).filter((r) => r.status === "deleted").map((r) => r.event_id),
         );
         deleted += gone.size;
         setEvents((prev) => prev.filter((e) => !gone.has(e.id)));
+        const refused = (result?.results || []).filter((r) => r.status === "skipped");
+        if (refused.length) setError(skippedMessage(refused, "deleted"));
       }
       if (localIds.length && profile) {
         localIds.forEach((id) => deleteTeacherDraft(profile.id, id));
@@ -522,6 +535,48 @@ function MyEvents() {
       setBulkDelete(null);
     } finally {
       setBulkDeleting(false);
+    }
+  };
+
+  const skippedMessage = (rows, what) =>
+    `${rows.length} could not be ${what}: ` +
+    rows
+      .slice(0, 3)
+      .map((r) => `"${r.event_name || "Untitled"}" (${r.reason})`)
+      .join("; ") +
+    (rows.length > 3 ? `; and ${rows.length - 3} more.` : ".");
+
+  // Submit (teacher) or record (Event Manager) the selected saved drafts in
+  // one request; the list is updated in place from the answer.
+  const handleBulkSubmit = async () => {
+    const ids = submittableSelected.map((item) => item.id);
+    if (!ids.length) return;
+    try {
+      setBulkSubmitting(true);
+      setError("");
+      const result = await bulkSubmitDrafts(ids, { api: panel.api, approval: panel.approval });
+      const doneStatus = panel.approval ? "submitted" : "recorded";
+      const done = new Set(
+        (result?.results || []).filter((r) => r.status === doneStatus).map((r) => r.event_id),
+      );
+      const newStatus = panel.approval ? "pending" : "recorded";
+      setEvents((prev) => prev.map((e) => (done.has(e.id) ? { ...e, status: newStatus } : e)));
+      setSelected((current) => new Set([...current].filter((id) => !done.has(id))));
+      setBulkSubmit(false);
+      if (done.size) {
+        setSuccessMessage(
+          panel.approval
+            ? `${done.size} event${done.size === 1 ? "" : "s"} submitted for approval.`
+            : `${done.size} event${done.size === 1 ? "" : "s"} recorded.`,
+        );
+      }
+      const refused = (result?.results || []).filter((r) => r.status !== doneStatus);
+      if (refused.length) setError(skippedMessage(refused, panel.approval ? "submitted" : "recorded"));
+    } catch (err) {
+      setError(err?.message || `Could not ${submitVerb.toLowerCase()} the selected drafts.`);
+      setBulkSubmit(false);
+    } finally {
+      setBulkSubmitting(false);
     }
   };
 
@@ -551,8 +606,8 @@ function MyEvents() {
       railBadge={tabCounts.all}
       railNote={
         panel.reports
-          ? "Search and filter, tick events, and download one report for all of them."
-          : "Filter by status, search by name, venue or department, then act on any row."
+          ? "Search and filter, tick events, then record, report on or delete them together."
+          : "Filter and search, then tick drafts to submit or delete several at once."
       }
       locked
     >
@@ -698,7 +753,7 @@ function MyEvents() {
             })}
 
             <div className="ml-auto flex flex-wrap items-center gap-3">
-              {panel.reports && visibleSelectable.length > 0 && (
+              {visibleSelectable.length > 0 && (
                 <>
                   <label className="inline-flex items-center gap-2 text-xs font-medium text-ink">
                     <input
@@ -712,25 +767,43 @@ function MyEvents() {
                   </label>
                   <button
                     type="button"
-                    onClick={handleReportSelected}
-                    disabled={selectedIds.length === 0 || Boolean(reportingId)}
-                    className="btn btn-brand btn-xs"
+                    onClick={() => setBulkSubmit(true)}
+                    disabled={submittableSelected.length === 0 || bulkSubmitting || Boolean(reportingId)}
+                    className="btn btn-primary btn-xs"
+                    title={
+                      browserOnlySelected.length && !submittableSelected.length
+                        ? "Drafts kept only in this browser need their details completed in the form first."
+                        : undefined
+                    }
                   >
-                    {reportingId === "selected" ? <span className="spin h-3 w-3" /> : <IconDownload />}
-                    {selectedIds.length > 1
-                      ? `Report for ${selectedIds.length} events`
-                      : selectedIds.length === 1
-                        ? "Report for 1 event"
-                        : "Report for selected"}
+                    {bulkSubmitting ? <span className="spin h-3 w-3" /> : <IconCheckCircle />}
+                    {submittableSelected.length > 0
+                      ? `${submitVerb} selected (${submittableSelected.length})`
+                      : `${submitVerb} selected`}
                   </button>
+                  {panel.reports && (
+                    <button
+                      type="button"
+                      onClick={handleReportSelected}
+                      disabled={selectedIds.length === 0 || Boolean(reportingId)}
+                      className="btn btn-brand btn-xs"
+                    >
+                      {reportingId === "selected" ? <span className="spin h-3 w-3" /> : <IconDownload />}
+                      {selectedIds.length > 1
+                        ? `Report for ${selectedIds.length} events`
+                        : selectedIds.length === 1
+                          ? "Report for 1 event"
+                          : "Report for selected"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setBulkDelete({ confirmText: "" })}
-                    disabled={selectedItems.length === 0 || bulkDeleting || Boolean(reportingId)}
+                    disabled={deletableSelected.length === 0 || bulkDeleting || Boolean(reportingId)}
                     className="btn btn-danger btn-xs"
                   >
                     <IconTrash />
-                    {selectedItems.length > 0 ? `Delete selected (${selectedItems.length})` : "Delete selected"}
+                    {deletableSelected.length > 0 ? `Delete selected (${deletableSelected.length})` : "Delete selected"}
                   </button>
                 </>
               )}
@@ -1022,8 +1095,12 @@ function MyEvents() {
         open={Boolean(bulkDelete)}
         onClose={() => !bulkDeleting && setBulkDelete(null)}
         eyebrow="Delete"
-        title={`Delete ${selectedItems.length} event${selectedItems.length === 1 ? "" : "s"} permanently?`}
-        subtitle={`${selectedItems.length} selected`}
+        title={`Delete ${deletableSelected.length} event${deletableSelected.length === 1 ? "" : "s"} permanently?`}
+        subtitle={
+          deletableSelected.length < selectedItems.length
+            ? `${deletableSelected.length} of ${selectedItems.length} selected; approved events are kept`
+            : `${selectedItems.length} selected`
+        }
         footer={
           <>
             <button
@@ -1041,7 +1118,7 @@ function MyEvents() {
               disabled={bulkDeleting || bulkDelete?.confirmText !== "DELETE"}
             >
               {bulkDeleting ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
-              Delete {selectedItems.length} permanently
+              Delete {deletableSelected.length} permanently
             </button>
           </>
         }
@@ -1052,7 +1129,7 @@ function MyEvents() {
           working.
         </p>
         <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto rounded-xl border hairline bg-raised/40 px-3 py-2 text-xs text-ink">
-          {selectedItems.map((item) => (
+          {deletableSelected.map((item) => (
             <li key={item.id} className="truncate">
               {item.event_name || item.eventName || "Untitled draft"}
             </li>
@@ -1072,6 +1149,60 @@ function MyEvents() {
             className="input"
           />
         </div>
+      </Modal>
+
+      {/* Bulk submit / record: a short confirmation listing what goes. */}
+      <Modal
+        open={bulkSubmit}
+        onClose={() => !bulkSubmitting && setBulkSubmit(false)}
+        eyebrow={panel.approval ? "Submit for approval" : "Record"}
+        title={
+          panel.approval
+            ? `Submit ${submittableSelected.length} draft${submittableSelected.length === 1 ? "" : "s"} for approval?`
+            : `Record ${submittableSelected.length} draft${submittableSelected.length === 1 ? "" : "s"}?`
+        }
+        subtitle={`${submittableSelected.length} of ${selectedItems.length} selected`}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setBulkSubmit(false)}
+              disabled={bulkSubmitting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleBulkSubmit}
+              disabled={bulkSubmitting || submittableSelected.length === 0}
+            >
+              {bulkSubmitting ? <span className="spin h-3.5 w-3.5" /> : <IconCheckCircle />}
+              {submitVerb} {submittableSelected.length}
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink">
+          {panel.approval
+            ? "Each draft goes to the Dean for review, checked exactly as the form checks it: a draft missing a mandatory photo or document, or an unfinished detail, is left as a draft and the reason is shown."
+            : "Each draft is recorded at once, checked exactly as the form checks it: a draft missing a mandatory photo or document, or an unfinished detail, is left as a draft and the reason is shown."}
+        </p>
+        <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto rounded-xl border hairline bg-raised/40 px-3 py-2 text-xs text-ink">
+          {submittableSelected.map((item) => (
+            <li key={item.id} className="truncate">
+              {item.event_name || item.eventName || "Untitled draft"}
+            </li>
+          ))}
+        </ul>
+        {browserOnlySelected.length > 0 && (
+          <p className="prose-muted mt-3 text-xs">
+            {browserOnlySelected.length} draft{browserOnlySelected.length === 1 ? " is" : "s are"} kept only in
+            this browser and still need{browserOnlySelected.length === 1 ? "s" : ""} their details completed in the
+            form, so {browserOnlySelected.length === 1 ? "it is" : "they are"} not included.
+          </p>
+        )}
       </Modal>
 
       <ReportCustomizationModal

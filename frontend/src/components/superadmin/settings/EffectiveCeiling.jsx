@@ -30,14 +30,14 @@ export default function EffectiveCeiling({ values, deploymentCeilingMb }) {
 
       <dl className="mt-5 grid gap-3 sm:grid-cols-3">
         {rows.map((row) => (
-          <div key={row.label} className="rounded-xl border bg-raised/40 p-4">
+          <div key={row.label} className="rounded-xl border hairline bg-raised/40 p-4">
             <dt className="text-xs text-muted">{row.label}</dt>
             <dd className="font-mono text-lg text-ink">{mb(row.value)}</dd>
           </div>
         ))}
       </dl>
 
-      <div className="mt-5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 border-t pt-4">
+      <div className="mt-5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 border-t hairline pt-4">
         <span className="text-sm text-muted">
           Worst case for a single event:{" "}
           <span className="font-mono font-semibold text-ink">{mb(totals.worstCaseMb)}</span>

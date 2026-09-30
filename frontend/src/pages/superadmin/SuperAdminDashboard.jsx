@@ -69,6 +69,9 @@ function SuperAdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  // The charts are optional: a failure there keeps the counts on screen, but
+  // must not pass for "nothing recorded yet".
+  const [analyticsFailed, setAnalyticsFailed] = useState(false);
 
   const loadStats = useCallback(async ({ silent = false } = {}) => {
     try {
@@ -81,6 +84,7 @@ function SuperAdminDashboard() {
       setError("");
       setStats({ ...EMPTY_STATS, ...statsData });
       if (analyticsData) setAnalytics(analyticsData);
+      setAnalyticsFailed(!analyticsData);
     } catch (err) {
       if (err?.status === 401) {
         navigate("/login", { replace: true });
@@ -365,7 +369,7 @@ function SuperAdminDashboard() {
 
               {analytics.monthly_trends?.length === 0 ? (
                 <div className="flex h-64 items-center justify-center text-sm text-muted">
-                  No monthly trend data recorded yet.
+                  {analyticsFailed ? "The trend could not be loaded. Refresh to try again." : "No monthly trend data recorded yet."}
                 </div>
               ) : (
                 <div className="h-64 w-full">
@@ -426,7 +430,7 @@ function SuperAdminDashboard() {
 
               {analytics.category_distribution?.length === 0 ? (
                 <div className="flex h-64 items-center justify-center text-sm text-muted">
-                  No category data recorded yet.
+                  {analyticsFailed ? "The categories could not be loaded. Refresh to try again." : "No category data recorded yet."}
                 </div>
               ) : (
                 <div className="h-64 w-full">

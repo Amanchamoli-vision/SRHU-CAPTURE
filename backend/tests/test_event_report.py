@@ -335,7 +335,12 @@ class DeanReportDesignTests(unittest.TestCase):
 
     def test_sections_match_the_event_manager_report_plus_approval(self) -> None:
         text = pdf_text(self.build())
-        headings = ["1. Event Details", "2. Event Description", "3. Event Photos", "4. Attachments", "5. Approval"]
+        # The document predates the Notice / Report split, so it is a notice;
+        # the photo links are listed under Reports.
+        headings = [
+            "1. Event Details", "2. Event Description", "3. Event Photos",
+            "4. Uploaded Notices", "5. Uploaded Attachments", "6. Approval",
+        ]
         positions = [text.index(h) for h in headings]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("Submitted by", text)
@@ -491,7 +496,7 @@ class ReportCustomizationTests(unittest.TestCase):
         text = pdf_text(response.content)
         self.assertIn("Uploaded Notices", text)
         self.assertIn("notice.pdf", text)
-        self.assertNotIn("Uploaded Reports", text)
+        self.assertNotIn("Uploaded Attachments", text)
         self.assertNotIn("report.pdf", text)
 
         # Only include reports
@@ -509,5 +514,89 @@ class ReportCustomizationTests(unittest.TestCase):
         text = pdf_text(response.content)
         self.assertNotIn("Uploaded Notices", text)
         self.assertNotIn("notice.pdf", text)
-        self.assertIn("Uploaded Reports", text)
+        self.assertIn("Uploaded Attachments", text)
         self.assertIn("report.pdf", text)
+
+
+class ReportAttachmentChoiceTests(unittest.TestCase):
+    """Which file links a customised report lists."""
+
+    media = [
+        {"id": "66aa00000000000000000001", "media_type": "image", "file_name": "stage.png", "file_size": 10},
+        {"id": "66aa00000000000000000002", "media_type": "video", "file_name": "teaser.mp4", "file_size": 10},
+    ]
+    documents = [
+        {"id": "66bb00000000000000000001", "file_name": "circular.pdf", "file_size": 10, "category": "notice"},
+        {"id": "66bb00000000000000000002", "file_name": "summary.pdf", "file_size": 10, "category": "report"},
+        {"id": "66bb00000000000000000003", "file_name": "legacy.pdf", "file_size": 10},
+    ]
+
+    def listed(self, **options) -> str:
+        from app.schemas.reports import normalize_customization
+
+        pdf = build_dean_report(
+            approved_event(), {"name": "T"}, self.media, self.documents,
+            file_link=lambda kind, file_id: f"https://api.example/{kind}/{file_id}",
+            customization=normalize_customization(options),
+        )
+        return pdf_text(pdf.getvalue())
+
+    def test_everything_by_default(self) -> None:
+        text = self.listed()
+        for name in ("stage.png", "teaser.mp4", "circular.pdf", "summary.pdf", "legacy.pdf"):
+            self.assertIn(name, text)
+
+    def test_photos_off_drops_the_photo_links_too(self) -> None:
+        text = self.listed(include_photos=False)
+        self.assertNotIn("stage.png", text)
+        self.assertIn("teaser.mp4", text)
+        self.assertIn("circular.pdf", text)
+
+    def test_notices_off_keeps_videos_and_reports(self) -> None:
+        text = self.listed(include_notices=False)
+        self.assertNotIn("circular.pdf", text)
+        self.assertNotIn("legacy.pdf", text)  # no category: a notice
+        self.assertIn("summary.pdf", text)
+        self.assertIn("teaser.mp4", text)
+        self.assertIn("stage.png", text)
+        self.assertIn("Uploaded Attachments", text)
+        self.assertNotIn("Uploaded Notices", text)
+
+    def test_the_notice_section_holds_only_notices(self) -> None:
+        text = self.listed()
+        notices = text[text.index("Uploaded Notices"):text.index("Uploaded Attachments")]
+        reports = text[text.index("Uploaded Attachments"):]
+        for name in ("circular.pdf", "legacy.pdf"):
+            self.assertIn(name, notices)
+            self.assertNotIn(name, reports)
+        for name in ("summary.pdf", "stage.png", "teaser.mp4"):
+            self.assertIn(name, reports)
+            self.assertNotIn(name, notices)
+
+    def test_reports_off_leaves_only_the_notices(self) -> None:
+        text = self.listed(include_reports=False)
+        self.assertIn("circular.pdf", text)
+        for name in ("summary.pdf", "stage.png", "teaser.mp4"):
+            self.assertNotIn(name, text)
+        self.assertNotIn("Uploaded Attachments", text)
+
+    def test_no_document_sections_lists_no_files(self) -> None:
+        text = self.listed(include_notices=False, include_reports=False)
+        for name in ("stage.png", "teaser.mp4", "circular.pdf", "summary.pdf"):
+            self.assertNotIn(name, text)
+
+    def test_empty_description_still_has_its_section(self) -> None:
+        text = pdf_text(build_event_report_pdf(approved_event(description=""), {"name": "T"}, [], []).getvalue())
+        self.assertIn("2. Event Description", text)
+        self.assertIn("No description provided.", text)
+
+    def test_query_flags_and_stored_options_mean_the_same(self) -> None:
+        from app.services.report_files import resolve_customization
+
+        from_query = resolve_customization(None, {"include_documents": False, "include_photos": None})
+        self.assertFalse(from_query["include_notices"])
+        self.assertFalse(from_query["include_reports"])
+        self.assertTrue(from_query["include_photos"])
+        stored = resolve_customization(None, {}, stored={"include_description": False})
+        self.assertFalse(stored["include_description"])
+        self.assertIsNone(resolve_customization(None, {}))

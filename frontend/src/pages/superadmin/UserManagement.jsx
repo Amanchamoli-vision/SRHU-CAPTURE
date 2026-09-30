@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { copyText } from "../../utils/clipboard";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
@@ -114,7 +115,9 @@ const ACTIONS = {
   delete: {
     eyebrow: "Permanent",
     title: "Delete this account?",
-    body: (name) => `${name} will be removed from Campus Capture along with their sign-in. This cannot be undone.`,
+    body: (name) =>
+      `${name} will be removed from Campus Capture along with their sign-in. This cannot be undone. ` +
+      "Only accounts without events can be deleted; for anyone else, deactivate the account instead.",
     confirm: "Delete account",
     busy: "Deleting…",
     tone: "btn-danger",
@@ -368,9 +371,13 @@ function UserManagement() {
     }
   };
 
-  const handleCopyPassword = () => {
+  const handleCopyPassword = async () => {
     if (resetPasswordResult?.temporary_password) {
-      navigator.clipboard.writeText(resetPasswordResult.temporary_password);
+      const ok = await copyText(resetPasswordResult.temporary_password);
+      if (!ok) {
+        setResetError("Could not copy automatically. Select the password and copy it by hand.");
+        return;
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -586,7 +593,7 @@ function UserManagement() {
                             {user.name || "Unnamed user"}
                           </span>
                           {isSelf(user) && (
-                            <span className="badge badge-accent text-[10px]">You</span>
+                            <span className="chip chip-sm border-accent/30 bg-accent/10 text-[10px] text-accent">You</span>
                           )}
                           <RoleChip role={user.role} />
                           <AccountStatus user={user} />
@@ -642,7 +649,7 @@ function UserManagement() {
                                   {user.name || "Unnamed user"}
                                 </span>
                                 {isSelf(user) && (
-                                  <span className="badge badge-accent text-[10px]">You</span>
+                                  <span className="chip chip-sm border-accent/30 bg-accent/10 text-[10px] text-accent">You</span>
                                 )}
                               </div>
                               <p className="prose-muted truncate text-xs">{user.email}</p>
@@ -766,7 +773,8 @@ function UserManagement() {
               >
                 <IconAlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-err" />
                 <p className="text-sm text-ink">
-                  Their events and uploads stay in the record, but they will no longer be able to sign in.
+                  An account that has events cannot be deleted, so their records are never lost.
+                  Deactivate it instead: they can no longer sign in, and everything they submitted stays.
                 </p>
               </div>
             )}
@@ -979,7 +987,7 @@ function AccountStatus({ user }) {
   if (awaitingInvite(user)) {
     return (
       <span
-        className="chip chip-sm bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300"
+        className="chip chip-sm chip-ember"
         title="Invited, but has not verified their email and set a password yet"
       >
         Invitation pending

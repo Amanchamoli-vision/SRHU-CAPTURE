@@ -264,19 +264,34 @@ def _combine(*clauses: dict) -> dict:
     return parts[0] if len(parts) == 1 else {"$and": parts}
 
 
-def _event_counts(teacher_ids: list[str]) -> dict[str, int]:
+def _event_counts(teacher_ids: list[str], *, include_drafts: bool = False) -> dict[str, int]:
     """How many events each teacher owns (events store the id as a string).
+
+    Drafts are the teacher's own until submitted, so the Dean's numbers leave
+    them out. Only the permanent-delete guard counts them: deleting the
+    account would erase them too.
 
     find() and a Python count rather than an aggregation, so it stays testable
     with the collection fakes (see the api skill).
     """
     counts = {teacher_id: 0 for teacher_id in teacher_ids}
+    query: dict[str, Any] = {"teacher_id": {"$in": teacher_ids}}
+    if not include_drafts:
+        query["status"] = {"$ne": "draft"}
     if teacher_ids:
-        for event in events.find({"teacher_id": {"$in": teacher_ids}}, {"teacher_id": 1}):
+        for event in events.find(query, {"teacher_id": 1}):
             key = str(event.get("teacher_id"))
             if key in counts:
                 counts[key] += 1
     return counts
+
+
+def _has_events_text(visible: int) -> str:
+    """Why an account with events cannot be deleted, without counting drafts
+    the Dean cannot see."""
+    if visible:
+        return f"Has {visible} event{'s' if visible != 1 else ''}."
+    return "Has work saved in their account."
 
 
 # ============================================================
@@ -903,15 +918,17 @@ def bulk_delete_teachers(payload: DeanTeacherIdsRequest, dean: dict = Depends(de
     reason, and can be removed instead (which keeps everything).
     """
     teachers, results = _resolve_teachers(payload.user_ids, dean)
-    counts = _event_counts([str(t["_id"]) for t in teachers])
+    ids = [str(t["_id"]) for t in teachers]
+    counts = _event_counts(ids)
+    everything = _event_counts(ids, include_drafts=True)
 
     deletable: list[dict] = []
     for teacher in teachers:
-        event_count = counts.get(str(teacher["_id"]), 0)
-        if event_count:
+        key = str(teacher["_id"])
+        if everything.get(key, 0):
             results.append(_result_row(
-                teacher, str(teacher["_id"]), "skipped",
-                f"Has {event_count} event{'s' if event_count != 1 else ''}. Remove the teacher instead.",
+                teacher, key, "skipped",
+                f"{_has_events_text(counts.get(key, 0))} Remove the teacher instead.",
             ))
         else:
             deletable.append(teacher)
@@ -993,13 +1010,13 @@ def delete_teacher(user_id: str, dean: dict = Depends(dean_dep)):
     """
     teacher = find_teacher_or_404(user_id, dean, include_removed=True)
 
-    event_count = _event_counts([str(teacher["_id"])])[str(teacher["_id"])]
-    if event_count:
+    key = str(teacher["_id"])
+    if _event_counts([key], include_drafts=True)[key]:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"{_label(teacher)} has {event_count} event{'s' if event_count != 1 else ''}, "
-                "so the account cannot be deleted permanently. Remove the teacher instead: "
+                f"{_label(teacher)}: {_has_events_text(_event_counts([key])[key])} "
+                "The account cannot be deleted permanently. Remove the teacher instead: "
                 "their records are kept."
             ),
         )

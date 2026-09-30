@@ -57,6 +57,9 @@ export function saveTeacherDraft(userId, draftData) {
     event_date: draftData.eventDate || draftData.event_date || "",
     end_date: draftData.endDate || draftData.end_date || "",
     event_type: draftData.eventType || draftData.event_type || "",
+    // What was typed under "Other" -- without it a reopened draft shows
+    // "Other" with an empty box and cannot move past step 1.
+    event_type_other: draftData.eventTypeOther?.trim() || draftData.event_type_other || "",
     location: draftData.location?.trim() || "",
     start_time: draftData.startTime || draftData.start_time || "",
     end_time: draftData.endTime || draftData.end_time || "",

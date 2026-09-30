@@ -27,7 +27,7 @@ import {
 } from "../../utils/uploadRules";
 import useUploadLimits from "../../hooks/useUploadLimits";
 import { checkUploadNames } from "../../services/directory";
-import { MAX_REPORT_PHOTOS, saveReportPhotos } from "../../services/eventManager";
+import { DEFAULT_REPORT_PHOTOS, saveReportPhotos } from "../../services/eventManager";
 import Combobox from "../../components/common/Combobox";
 import EventSummary from "../../components/common/EventSummary";
 import EventTypeSelect from "../../components/common/EventTypeSelect";
@@ -53,8 +53,6 @@ import {
   IconBookmark,
   IconCheck,
   IconCheckCircle,
-  IconFile,
-  IconFilePlus,
   IconFilm,
   IconImagePlus,
   IconInfo,
@@ -338,7 +336,7 @@ function CreateEvent() {
   // The server's default is the first photos by _id; ObjectId hex strings
   // sort the same way, so this matches what the report would show.
   const reportPhotoIds =
-    reportChoice ?? photos.map((p) => p.id).sort().slice(0, MAX_REPORT_PHOTOS);
+    reportChoice ?? photos.map((p) => p.id).sort().slice(0, DEFAULT_REPORT_PHOTOS);
   const videos = mediaItems.filter((m) => m.media_type === "video");
 
   const photoUploads = uploads.filter((u) => u.kind === "image");
@@ -363,6 +361,10 @@ function CreateEvent() {
   const documentBytesUsed = usedBytes(documentItems, documentUploads);
   const noticeBytesUsed = usedBytes(noticeDocuments, noticeUploads);
   const reportBytesUsed = usedBytes(reportDocuments, reportUploads);
+  // The two document panels share one count cap and one byte budget.
+  const activeCount = (docs, pending) => docs.length + pending.filter((u) => !u.error).length;
+  const noticeCount = activeCount(noticeDocuments, noticeUploads);
+  const reportCount = activeCount(reportDocuments, reportUploads);
 
   const uploading = uploads.some((u) => !u.error);
   const isDraftEvent = !serverEvent || serverEvent.status === "draft";
@@ -411,7 +413,7 @@ function CreateEvent() {
               eventDate: draft.event_date || "",
               endDate: draft.end_date || draft.event_date || "",
               eventType: draft.event_type || "",
-              eventTypeOther: "",
+              eventTypeOther: draft.event_type_other || "",
               startTime: draft.start_time || "",
               endTime: draft.end_time || "",
               location: draft.location || "",
@@ -932,7 +934,6 @@ function CreateEvent() {
     const next = reportPhotoIds.includes(photoId)
       ? reportPhotoIds.filter((id) => id !== photoId)
       : [...reportPhotoIds, photoId];
-    if (next.length > MAX_REPORT_PHOTOS) return;
 
     const previous = reportChoice;
     setReportChoice(next);
@@ -1717,7 +1718,7 @@ function CreateEvent() {
                     </p>
                   </div>
                   {required.photos && (
-                    <span className="badge badge-brand text-[11px]">Mandatory</span>
+                    <span className="chip chip-sm chip-ember">Mandatory</span>
                   )}
                 </div>
 
@@ -1737,14 +1738,14 @@ function CreateEvent() {
                     <span className="flex items-center gap-2">
                       <IconInfo className="h-4 w-4 shrink-0 text-accent" />
                       <span>
-                        Tick up to {MAX_REPORT_PHOTOS} photos to include in the event report; it
+                        Tick the photos to include in the event report, as many as you like; it
                         arranges them to suit their mix of portrait and landscape.
                         {reportChoice === null &&
-                          ` Until you choose, the first ${MAX_REPORT_PHOTOS} uploaded are used.`}
+                          ` Until you choose, the first ${DEFAULT_REPORT_PHOTOS} uploaded are used.`}
                       </span>
                     </span>
                     <span className="font-semibold text-accent">
-                      {savingReportPhotos ? "Saving…" : `${reportPhotoIds.length} of ${MAX_REPORT_PHOTOS} chosen`}
+                      {savingReportPhotos ? "Saving…" : `${reportPhotoIds.length} of ${photos.length} chosen`}
                     </span>
                   </div>
                 )}
@@ -1768,7 +1769,6 @@ function CreateEvent() {
                   required={required.photos}
                   reportSelection={{
                     ids: reportPhotoIds,
-                    max: MAX_REPORT_PHOTOS,
                     busy: savingReportPhotos,
                     onToggle: toggleReportPhoto,
                   }}
@@ -1792,7 +1792,7 @@ function CreateEvent() {
                     </p>
                   </div>
                   {required.documents && (
-                    <span className="badge badge-brand text-[11px]">Mandatory</span>
+                    <span className="chip chip-sm chip-ember">Mandatory</span>
                   )}
                 </div>
 
@@ -1822,7 +1822,7 @@ function CreateEvent() {
                           Circulars, event notices, agendas, and invitations
                         </p>
                       </div>
-                      <span className="rounded-full bg-raised/80 px-2.5 py-0.5 text-[11px] font-medium text-ink-muted">
+                      <span className="rounded-full bg-raised/80 px-2.5 py-0.5 text-[11px] font-medium text-muted">
                         {noticeDocuments.length}
                       </span>
                     </div>
@@ -1835,6 +1835,8 @@ function CreateEvent() {
                       max={uploadLimits.max_documents_per_event}
                       totalLimitBytes={documentLimitBytes}
                       usedBytes={noticeBytesUsed}
+                      sharedCount={reportCount}
+                      sharedBytes={reportBytesUsed}
                       maxSizeLabel={`Notice · PDF, Word, Excel, PPT, TXT, CSV`}
                       emptyLabel="Drag notice documents here"
                       hint="Upload circulars, event notices, or agendas."
@@ -1852,7 +1854,7 @@ function CreateEvent() {
                     <div className="mb-3.5 flex items-center justify-between gap-2 border-b hairline pb-3">
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="inline-flex items-center rounded-md bg-indigo-500/10 px-2 py-0.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                          <span className="inline-flex items-center rounded-md bg-ok/10 px-2 py-0.5 text-xs font-semibold text-ok">
                             Report
                           </span>
                           <h4 className="text-sm font-semibold text-ink">Report Documents</h4>
@@ -1861,7 +1863,7 @@ function CreateEvent() {
                           Summary reports, attendance lists, and documentation
                         </p>
                       </div>
-                      <span className="rounded-full bg-raised/80 px-2.5 py-0.5 text-[11px] font-medium text-ink-muted">
+                      <span className="rounded-full bg-raised/80 px-2.5 py-0.5 text-[11px] font-medium text-muted">
                         {reportDocuments.length}
                       </span>
                     </div>
@@ -1874,6 +1876,8 @@ function CreateEvent() {
                       max={uploadLimits.max_documents_per_event}
                       totalLimitBytes={documentLimitBytes}
                       usedBytes={reportBytesUsed}
+                      sharedCount={noticeCount}
+                      sharedBytes={noticeBytesUsed}
                       maxSizeLabel={`Report · PDF, Word, Excel, PPT, TXT, CSV`}
                       emptyLabel="Drag report documents here"
                       hint="Upload event reports, summary PDFs, or documentation."

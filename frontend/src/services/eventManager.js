@@ -14,12 +14,27 @@ const BASE = "/event-manager";
 /** Most events one consolidated report may cover (backend MAX_EVENTS_PER_REPORT). */
 export const MAX_EVENTS_PER_REPORT = 50;
 
-/** Photos per event report (backend MAX_REPORT_PHOTOS). */
-export const MAX_REPORT_PHOTOS = 4;
+/**
+ * Photos a report shows until the teacher or Event Manager chooses (backend
+ * DEFAULT_REPORT_PHOTOS). Once they choose, the report shows as many as they tick.
+ */
+export const DEFAULT_REPORT_PHOTOS = 4;
 
-/** Delete these events (with their files) in one request. */
-export const bulkDeleteEvents = (ids) =>
-  apiJson(`${BASE}/events/bulk-delete`, { method: "POST", body: { event_ids: ids } });
+/** Delete these events (with their files) in one request. `api` is the panel's event API. */
+export const bulkDeleteEvents = (ids, api = BASE) =>
+  apiJson(`${api}/events/bulk-delete`, { method: "POST", body: { event_ids: ids } });
+
+/**
+ * Move these drafts on in one request: a teacher's go to the Dean for approval
+ * (bulk-submit), an Event Manager's are recorded at once (bulk-record). Each is
+ * checked like the form's own Submit; the answer says which went and why the
+ * others did not.
+ */
+export const bulkSubmitDrafts = (ids, { api = BASE, approval = false } = {}) =>
+  apiJson(`${api}/events/${approval ? "bulk-submit" : "bulk-record"}`, {
+    method: "POST",
+    body: { event_ids: ids },
+  });
 
 /**
  * Save which photos go into the event's report. Both panels choose them the

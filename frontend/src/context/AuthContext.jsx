@@ -45,9 +45,11 @@ export function AuthProvider({ children }) {
   );
 
   // Re-fetch the profile from the API and verify the role
-  const fetchUserProfile = useCallback(async () => {
+  // `force` skips fetchCurrentUser's reuse of a recent confirmation: startup
+  // and a page restored from the back/forward cache must ask the server.
+  const fetchUserProfile = useCallback(async ({ force = false } = {}) => {
     try {
-      const latest = await fetchCurrentUser();
+      const latest = await fetchCurrentUser({ force });
       if (!latest) {
         clearState();
         return null;
@@ -78,7 +80,7 @@ export function AuthProvider({ children }) {
 
         // Show the cached profile immediately, then confirm it with the API.
         if (isMounted) applyUser(session.user);
-        await fetchUserProfile();
+        await fetchUserProfile({ force: true });
       } catch (err) {
         console.error("Auth initialization error:", err);
         if (isMounted) clearState();
@@ -124,7 +126,7 @@ export function AuthProvider({ children }) {
         });
         return;
       }
-      fetchUserProfile();
+      fetchUserProfile({ force: true });
     };
     window.addEventListener("pageshow", onPageShow);
     return () => window.removeEventListener("pageshow", onPageShow);

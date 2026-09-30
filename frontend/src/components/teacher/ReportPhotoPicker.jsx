@@ -1,10 +1,10 @@
 import { useState } from "react";
 
-import { MAX_REPORT_PHOTOS, saveReportPhotos } from "../../services/eventManager";
+import { saveReportPhotos } from "../../services/eventManager";
 import { IconCamera, IconSave } from "./icons";
 
 /**
- * Which photos (at most MAX_REPORT_PHOTOS) go into the event's report -- the
+ * Which photos -- as many as are ticked -- go into the event's report: the
  * Event Manager's own report, or the Dean's report for a teacher's event.
  * Shown on the event page to change the choice made while uploading; the
  * server defaults to the first photos uploaded until a choice is saved.
@@ -19,7 +19,6 @@ export default function ReportPhotoPicker({ eventId, api, photos, initial, onSav
   const toggle = (id) =>
     setChosen((current) => {
       if (current.includes(id)) return current.filter((x) => x !== id);
-      if (current.length >= MAX_REPORT_PHOTOS) return current;
       return [...current, id];
     });
 
@@ -45,7 +44,7 @@ export default function ReportPhotoPicker({ eventId, api, photos, initial, onSav
           <p className="eyebrow">Report</p>
           <h2 id="report-photos-heading" className="h3 mt-1 text-ink">Photos in the report</h2>
           <p className="prose-muted mt-0.5 text-xs">
-            Tick up to {MAX_REPORT_PHOTOS} photos: {chosen.length} of {MAX_REPORT_PHOTOS} chosen.
+            Tick as many photos as you like: {chosen.length} of {photos.length} chosen.
             The report keeps each photo's shape and arranges them to fit together.
           </p>
         </div>
@@ -86,7 +85,7 @@ export default function ReportPhotoPicker({ eventId, api, photos, initial, onSav
                   <input
                     type="checkbox"
                     checked={inReport}
-                    disabled={saving || (!inReport && chosen.length >= MAX_REPORT_PHOTOS)}
+                    disabled={saving}
                     onChange={() => toggle(photo.id)}
                     aria-label={`Show ${photo.file_name} in the report`}
                     className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
