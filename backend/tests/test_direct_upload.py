@@ -257,19 +257,19 @@ class TeacherDirectUploadTests(R2Fixture, unittest.TestCase):
         self.event_id = created.json()["event"]["id"]
         self.base = f"/teacher/events/{self.event_id}/uploads"
 
-    def start(self, name, size, content_type, kind="media", headers=None):
+    def start(self, name, size, content_type, kind="media", category="notice", headers=None):
         return self.client.post(
             self.base,
-            json={"kind": kind, "file_name": name, "content_type": content_type, "size": size},
+            json={"kind": kind, "file_name": name, "content_type": content_type, "size": size, "category": category},
             headers=headers or self.auth,
         )
 
     def complete(self, session_id, headers=None):
         return self.client.post(f"{self.base}/{session_id}/complete", headers=headers or self.auth)
 
-    def upload(self, name, data, content_type, kind="media"):
+    def upload(self, name, data, content_type, kind="media", category="notice"):
         """start -> PUT every part -> complete."""
-        started = self.start(name, len(data), content_type, kind)
+        started = self.start(name, len(data), content_type, kind, category=category)
         self.assertEqual(started.status_code, 200, started.text)
         send_parts(self.r2, started.json(), data)
         return self.complete(started.json()["session_id"])
@@ -392,7 +392,28 @@ class TeacherDirectUploadTests(R2Fixture, unittest.TestCase):
             document["file_type"],
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
+        self.assertEqual(document.get("category"), "notice")
         self.assertIn("/documents/", self.only_session()["object_key"])
+
+    def test_document_saves_category_notice_and_report(self) -> None:
+        # 1. Direct upload with category="report"
+        started = self.start("Report.docx", len(DOCX), "", kind="documents", category="report").json()
+        send_parts(self.r2, started, DOCX)
+        resp = self.complete(started["session_id"])
+        self.assertEqual(resp.status_code, 201, resp.text)
+        doc = resp.json()["document"]
+        self.assertEqual(doc["category"], "report")
+
+        # 2. Proxied upload with category="report"
+        with patch.object(settings, "r2_bucket_name", None):
+            proxied = self.client.post(
+                f"/teacher/events/{self.event_id}/documents",
+                files={"file": ("Event_Report.docx", DOCX, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+                data={"category": "report"},
+                headers=self.auth,
+            )
+            self.assertEqual(proxied.status_code, 201, proxied.text)
+            self.assertEqual(proxied.json()["document"]["category"], "report")
 
     def test_missing_parts_leave_the_upload_retryable(self) -> None:
         data = mp4(40 * KB)
@@ -601,10 +622,10 @@ class EventManagerDirectUploadTests(R2Fixture, EventManagerTestCase):
         self.event = self.draft()
         self.base = f"/event-manager/events/{self.event['id']}/uploads"
 
-    def start(self, name, data, content_type, kind="media", token="mgr"):
+    def start(self, name, data, content_type, kind="media", category="notice", token="mgr"):
         return self.call(
             "POST", self.base, token,
-            json={"kind": kind, "file_name": name, "content_type": content_type, "size": len(data)},
+            json={"kind": kind, "file_name": name, "content_type": content_type, "size": len(data), "category": category},
         )
 
     def test_round_trip_records_in_the_managed_collections(self) -> None:
@@ -615,12 +636,12 @@ class EventManagerDirectUploadTests(R2Fixture, EventManagerTestCase):
         self.assertEqual(response.json()["media"]["file_name"], "stage_photo.png")
         self.assertEqual(len(self.media.docs), 1)
 
-        # And the recorded file satisfies the save rule like a posted one.
-        document = self.start("agenda.docx", DOCX, "", kind="documents").json()
+        # And the recorded file satisfies the save rule like a posted one, preserving category.
+        document = self.start("agenda.docx", DOCX, "", kind="documents", category="report").json()
         send_parts(self.r2, document, DOCX)
-        self.assertEqual(
-            self.call("POST", f"{self.base}/{document['session_id']}/complete").status_code, 201
-        )
+        comp = self.call("POST", f"{self.base}/{document['session_id']}/complete")
+        self.assertEqual(comp.status_code, 201)
+        self.assertEqual(comp.json()["document"]["category"], "report")
         saved = self.save(self.event["id"])
         self.assertEqual(saved.status_code, 200, saved.text)
         self.assertEqual(saved.json()["event"]["status"], "recorded")

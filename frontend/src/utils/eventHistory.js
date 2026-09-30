@@ -22,6 +22,7 @@ const STAGE_LABEL = {
 
 const ACTION_META = {
   created: { label: "Event created", tone: "draft" },
+  recorded: { label: "Recorded", tone: "approved" },
   submitted: { label: "Submitted for review", tone: "pending" },
   updated: { label: "Details updated", tone: "pending" },
   resubmitted: { label: "Resubmitted for review", tone: "pending" },
@@ -84,6 +85,18 @@ function inferHistory(event) {
       actor_role: "teacher",
     });
     return entries;
+  }
+
+  if (status === "recorded") {
+    entries.push({
+      action: "recorded",
+      status: "recorded",
+      created_at: event.recorded_at || event.created_at,
+      actor_id: event.owner_id || event.teacher_id,
+      actor_name: event.owner_name || event.teacher_name,
+      actor_role: "event_manager",
+    });
+    return entries.map((entry) => ({ ...entry, inferred: true }));
   }
 
   entries.push({

@@ -1,7 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Modal from "./Modal";
 import {
   IconAlertTriangle,
+  IconArrowLeft,
+  IconArrowRight,
+  IconEye,
   IconFilm,
+  IconImagePlus,
   IconRotateCcw,
   IconTrash,
   IconUploadCloud,
@@ -51,6 +56,58 @@ export default function UploadPanel({
 }) {
   const inputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
+
+  const [selectedForPreview, setSelectedForPreview] = useState([]);
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [previewActiveIndex, setPreviewActiveIndex] = useState(0);
+  const [previewItems, setPreviewItems] = useState([]);
+
+  useEffect(() => {
+    if (kind === "image") {
+      setSelectedForPreview((prev) => prev.filter((id) => items.some((item) => item.id === id)));
+    }
+  }, [items, kind]);
+
+  useEffect(() => {
+    if (!previewModalOpen || previewItems.length <= 1) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key === "ArrowLeft") {
+        setPreviewActiveIndex((prev) => (prev - 1 + previewItems.length) % previewItems.length);
+      } else if (e.key === "ArrowRight") {
+        setPreviewActiveIndex((prev) => (prev + 1) % previewItems.length);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewModalOpen, previewItems.length]);
+
+  const handleSinglePreview = (item) => {
+    setPreviewItems([item]);
+    setPreviewActiveIndex(0);
+    setPreviewModalOpen(true);
+  };
+
+  const handlePreviewSelected = () => {
+    const selected = items.filter((item) => selectedForPreview.includes(item.id));
+    if (selected.length === 0) return;
+    setPreviewItems(selected);
+    setPreviewActiveIndex(0);
+    setPreviewModalOpen(true);
+  };
+
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      setSelectedForPreview(items.map((item) => item.id));
+    } else {
+      setSelectedForPreview([]);
+    }
+  };
+
+  const handleToggleItemSelect = (id) => {
+    setSelectedForPreview((prev) =>
+      prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id]
+    );
+  };
 
   const active = items.length + uploads.filter((u) => !u.error).length;
   const countFull = max != null && active >= max;
@@ -263,80 +320,143 @@ export default function UploadPanel({
             ))}
           </ul>
         ) : (
-          <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {items.map((item) => {
-              const reportPosition = reportSelection ? reportSelection.ids.indexOf(item.id) + 1 : 0;
-              const inReport = reportPosition > 0;
-              return (
-              <li
-                key={item.id}
-                className={`media-tile group ${inReport ? "ring-2 ring-accent" : ""}`}
-              >
-                {kind === "video" ? (
-                  <video
-                    src={item.media_url}
-                    className="media-thumb"
-                    preload="metadata"
-                    muted
-                    playsInline
-                    controls
-                    onError={() => onLoadError?.()}
-                  />
-                ) : (
-                  <a href={item.media_url} target="_blank" rel="noreferrer">
-                    <img
-                      src={item.media_url}
-                      alt={item.file_name}
-                      loading="lazy"
-                      className="media-thumb"
-                      onError={() => onLoadError?.()}
-                    />
-                  </a>
-                )}
-
-                <div className="flex items-start justify-between gap-2 px-3 py-2.5">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium text-ink">{item.file_name}</p>
-                    <p className="prose-muted mt-0.5 text-[11px]">
-                      {formatFileSize(item.file_size)} · Saved
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onRemove?.(item)}
-                    disabled={disabled || item.removing}
-                    className="icon-btn icon-btn-sm shrink-0 text-err"
-                    aria-label={`Remove ${item.file_name}`}
-                    title="Remove"
-                  >
-                    {item.removing ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
-                  </button>
-                </div>
-
-                {reportSelection && (
-                  <label className="flex cursor-pointer items-center gap-2 border-t hairline px-3 py-2 text-xs text-ink">
+          <>
+            {kind === "image" && items.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border hairline bg-raised/40 px-3.5 py-2">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-ink select-none">
                     <input
                       type="checkbox"
-                      checked={inReport}
-                      disabled={
-                        disabled ||
-                        item.removing ||
-                        reportSelection.busy ||
-                        (!inReport && reportSelection.ids.length >= reportSelection.max)
-                      }
-                      onChange={() => reportSelection.onToggle(item.id)}
-                      aria-label={`Include ${item.file_name} in the report`}
+                      checked={items.length > 0 && selectedForPreview.length === items.length}
+                      onChange={handleSelectAll}
                       className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
                     />
-                    <span className={inReport ? "font-semibold text-accent" : "text-muted"}>
-                      {inReport ? `In report (${reportPosition})` : "Include in report"}
-                    </span>
+                    <span>Select All ({items.length})</span>
                   </label>
-                )}
-              </li>
-              );
-            })}
-          </ul>
+                  {selectedForPreview.length > 0 && (
+                    <span className="text-xs text-muted">
+                      {selectedForPreview.length} selected
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handlePreviewSelected}
+                  disabled={selectedForPreview.length === 0}
+                  className="btn btn-secondary btn-xs"
+                >
+                  <IconEye className="h-3.5 w-3.5" />
+                  Preview Selected {selectedForPreview.length > 0 ? `(${selectedForPreview.length})` : ""}
+                </button>
+              </div>
+            )}
+
+            <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {items.map((item) => {
+                const reportPosition = reportSelection ? reportSelection.ids.indexOf(item.id) + 1 : 0;
+                const inReport = reportPosition > 0;
+                const isSelected = selectedForPreview.includes(item.id);
+                return (
+                  <li
+                    key={item.id}
+                    className={`media-tile group ${inReport ? "ring-2 ring-accent" : ""} ${isSelected ? "border-accent/40" : ""}`}
+                  >
+                    {kind === "video" ? (
+                      <video
+                        src={item.media_url}
+                        className="media-thumb"
+                        preload="metadata"
+                        muted
+                        playsInline
+                        controls
+                        onError={() => onLoadError?.()}
+                      />
+                    ) : (
+                      <div className="media-thumb flex flex-col items-center justify-center bg-raised/60 p-4 text-center select-none border-b hairline relative">
+                        <label
+                          className="absolute top-2 left-2 flex items-center gap-1.5 cursor-pointer rounded-md bg-(--card-bg)/90 px-2 py-1 backdrop-blur-sm border hairline shadow-xs"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleItemSelect(item.id)}
+                            className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
+                            title="Select for multi-image preview"
+                          />
+                          <span className="text-[10px] font-medium text-ink">Select</span>
+                        </label>
+
+                        <span className="icon-tile h-12 w-12 rounded-xl bg-accent/10 text-accent mb-2">
+                          <IconImagePlus className="h-6 w-6" />
+                        </span>
+                        <span className="inline-block rounded bg-line/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                          {getFileExtension(item.file_name)}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex items-start justify-between gap-2 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-ink" title={item.file_name}>
+                          {item.file_name}
+                        </p>
+                        <p className="prose-muted mt-0.5 text-[11px]">
+                          {formatFileSize(item.file_size)} · Saved
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {kind === "image" && (
+                          <button
+                            type="button"
+                            onClick={() => handleSinglePreview(item)}
+                            disabled={disabled || item.removing}
+                            className="btn btn-ghost btn-xs text-accent"
+                            title="Preview image"
+                          >
+                            <IconEye className="h-3.5 w-3.5" />
+                            Preview
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onRemove?.(item)}
+                          disabled={disabled || item.removing}
+                          className="icon-btn icon-btn-sm shrink-0 text-err"
+                          aria-label={`Remove ${item.file_name}`}
+                          title="Remove"
+                        >
+                          {item.removing ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {reportSelection && (
+                      <label className="flex cursor-pointer items-center gap-2 border-t hairline px-3 py-2 text-xs text-ink">
+                        <input
+                          type="checkbox"
+                          checked={inReport}
+                          disabled={
+                            disabled ||
+                            item.removing ||
+                            reportSelection.busy ||
+                            (!inReport && reportSelection.ids.length >= reportSelection.max)
+                          }
+                          onChange={() => reportSelection.onToggle(item.id)}
+                          aria-label={`Include ${item.file_name} in the report`}
+                          className="h-3.5 w-3.5 rounded border-line text-accent focus:ring-accent"
+                        />
+                        <span className={inReport ? "font-semibold text-accent" : "text-muted"}>
+                          {inReport ? `In report (${reportPosition})` : "Include in report"}
+                        </span>
+                      </label>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
         ))}
 
       {items.length === 0 && uploads.length === 0 && (
@@ -346,6 +466,100 @@ export default function UploadPanel({
             ? "Nothing added yet. At least one file is required before this event can be submitted for approval."
             : "Nothing added yet. This step is optional — you can continue without it."}
         </p>
+      )}
+
+      {/* Lightbox Modal for Image Preview */}
+      {kind === "image" && (
+        <Modal
+          open={previewModalOpen && previewItems.length > 0}
+          onClose={() => setPreviewModalOpen(false)}
+          eyebrow="Image Preview"
+          title={
+            previewItems.length > 1
+              ? `Image Preview (${previewActiveIndex + 1} of ${previewItems.length})`
+              : "Image Preview"
+          }
+          subtitle={previewItems[previewActiveIndex]?.file_name}
+          wide
+          footer={
+            <div className="flex w-full flex-wrap items-center justify-between gap-3">
+              <span className="text-xs text-muted font-medium">
+                {formatFileSize(previewItems[previewActiveIndex]?.file_size)}
+              </span>
+              <div className="flex items-center gap-2">
+                {previewItems.length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreviewActiveIndex(
+                          (prev) => (prev - 1 + previewItems.length) % previewItems.length
+                        )
+                      }
+                      className="btn btn-ghost btn-xs"
+                    >
+                      <IconArrowLeft /> Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreviewActiveIndex(
+                          (prev) => (prev + 1) % previewItems.length
+                        )
+                      }
+                      className="btn btn-ghost btn-xs"
+                    >
+                      Next <IconArrowRight />
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPreviewModalOpen(false)}
+                  className="btn btn-primary btn-xs"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          }
+        >
+          {previewItems[previewActiveIndex] && (
+            <div className="flex flex-col items-center justify-center">
+              <div className="relative flex max-h-[60vh] sm:max-h-[65vh] w-full items-center justify-center overflow-hidden rounded-xl bg-black/5 p-2 border hairline">
+                <img
+                  src={previewItems[previewActiveIndex].media_url}
+                  alt={previewItems[previewActiveIndex].file_name}
+                  className="max-h-[58vh] sm:max-h-[62vh] w-auto max-w-full rounded-lg object-contain shadow-sm"
+                />
+              </div>
+
+              {previewItems.length > 1 && (
+                <div className="mt-3.5 flex max-w-full items-center gap-2 overflow-x-auto p-1">
+                  {previewItems.map((pItem, idx) => (
+                    <button
+                      key={pItem.id}
+                      type="button"
+                      onClick={() => setPreviewActiveIndex(idx)}
+                      className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 transition-all ${
+                        idx === previewActiveIndex
+                          ? "border-accent ring-2 ring-accent/30 scale-105"
+                          : "border-transparent opacity-60 hover:opacity-100"
+                      }`}
+                      title={pItem.file_name}
+                    >
+                      <img
+                        src={pItem.media_url}
+                        alt={pItem.file_name}
+                        className="h-full w-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );

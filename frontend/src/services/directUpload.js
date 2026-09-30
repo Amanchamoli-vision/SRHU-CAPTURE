@@ -41,22 +41,33 @@ const cancelled = () => new ApiError("Upload cancelled", 0, "aborted");
  * between 0 and 1. Resolves with the API's `{ media }` or `{ document }`
  * body; rejects with an ApiError (isAbortError() when `signal` aborted it).
  */
-export async function uploadEventFile(eventPath, { kind, file, onProgress, signal } = {}) {
+export async function uploadEventFile(eventPath, { kind, file, category, onProgress, signal } = {}) {
   const uploadKind = kind === "document" ? "documents" : "media";
+
+  const startBody = {
+    kind: uploadKind,
+    file_name: file.name,
+    content_type: file.type || "",
+    size: file.size,
+  };
+  if (category) {
+    startBody.category = category;
+  }
 
   const started = await apiJson(`${eventPath}/uploads`, {
     method: "POST",
-    body: {
-      kind: uploadKind,
-      file_name: file.name,
-      content_type: file.type || "",
-      size: file.size,
-    },
+    body: startBody,
     signal,
   });
 
   if (!started?.direct) {
-    return apiUpload(`${eventPath}/${uploadKind}`, { file, onProgress, signal });
+    const query = category ? `?category=${encodeURIComponent(category)}` : "";
+    return apiUpload(`${eventPath}/${uploadKind}${query}`, {
+      file,
+      extraFields: category ? { category } : undefined,
+      onProgress,
+      signal,
+    });
   }
 
   const sessionPath = `${eventPath}/uploads/${started.session_id}`;

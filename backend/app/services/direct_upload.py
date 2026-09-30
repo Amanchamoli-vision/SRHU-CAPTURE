@@ -202,6 +202,7 @@ def start_session(
     file_name: str,
     original_name: str | None,
     size: int,
+    category: str = "notice",
 ) -> dict:
     """Open the multipart upload and its session; returns what the browser
     needs to send the bytes. The caller has already applied every check a
@@ -229,6 +230,7 @@ def start_session(
         "owner_id": owner_id,
         "event_id": event_key,
         "kind": kind,
+        "category": category if category in ("notice", "report") else "notice",
         "media_type": info["media_type"],
         "extension": info["extension"],
         "content_type": info["content_type"],
@@ -439,7 +441,12 @@ def new_record(session: dict) -> tuple[dict, dict]:
         "original_name": session["original_name"],
     }
     if session["media_type"] == "document":
-        document = new_document_document(**common, file_url=None, file_type=session["content_type"])
+        document = new_document_document(
+            **common,
+            file_url=None,
+            file_type=session["content_type"],
+            category=session.get("category", "notice"),
+        )
     else:
         document = new_media_document(
             **common,

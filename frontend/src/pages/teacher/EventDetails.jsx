@@ -16,6 +16,7 @@ import ReportPhotoPicker from "../../components/teacher/ReportPhotoPicker";
 import { downloadEventReport, reportNotice } from "../../services/eventManager";
 import PageHero from "../../components/teacher/PageHero";
 import Modal from "../../components/teacher/Modal";
+import ReportCustomizationModal from "../../components/common/ReportCustomizationModal";
 import Lifecycle from "../../components/teacher/Lifecycle";
 import ProgressTimeline from "../../components/teacher/ProgressTimeline";
 import EventMediaSections from "../../components/common/EventMediaSections";
@@ -79,6 +80,7 @@ function EventDetails() {
   const [reporting, setReporting] = useState(false);
   // Report problems are shown in place; `error` is the page's load failure.
   const [reportError, setReportError] = useState("");
+  const [showReportModal, setShowReportModal] = useState(false);
 
   const [event, setEvent] = useState(null);
   const [media, setMedia] = useState([]);
@@ -175,12 +177,17 @@ function EventDetails() {
     }
   };
 
-  const handleDownloadReport = async () => {
+  const handleDownloadReport = () => {
+    setShowReportModal(true);
+  };
+
+  const handleExecuteReport = async (customization) => {
     try {
       setReporting(true);
       setReportError("");
-      const notice = reportNotice(await downloadEventReport(event.id, event.event_name));
+      const notice = reportNotice(await downloadEventReport(event.id, event.event_name, customization));
       if (notice) setActionNotice(notice);
+      setShowReportModal(false);
     } catch (err) {
       setReportError(err?.message || "Could not generate the report.");
     } finally {
@@ -668,6 +675,18 @@ function EventDetails() {
           </p>
         </div>
       </Modal>
+
+      <ReportCustomizationModal
+        open={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        onGenerate={handleExecuteReport}
+        generating={reporting}
+        eventName={event?.event_name}
+        photoCount={media?.filter((m) => m.media_type === "image").length}
+        documentCount={documents?.length}
+        noticeCount={documents?.filter((d) => (d.category || d.doc_category) === "notice").length}
+        reportDocCount={documents?.filter((d) => (d.category || d.doc_category) === "report").length}
+      />
     </TeacherShell>
   );
 }

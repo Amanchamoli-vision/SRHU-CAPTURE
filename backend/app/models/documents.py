@@ -325,7 +325,11 @@ def new_document_document(
     storage: str = "gridfs",
     object_key: str | None = None,
     original_name: str | None = None,
+    category: str = "notice",
 ) -> dict[str, Any]:
+    cat = (category or "notice").strip().lower()
+    if cat not in ("notice", "report"):
+        cat = "notice"
     return {
         "event_id": event_id,
         "storage": storage,
@@ -337,6 +341,7 @@ def new_document_document(
         "file_url": file_url,
         "file_type": file_type,
         "file_size": file_size,
+        "category": cat,
         "created_at": utc_now(),
     }
 

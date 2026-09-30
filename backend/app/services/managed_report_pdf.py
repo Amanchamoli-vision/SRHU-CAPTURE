@@ -113,6 +113,7 @@ class Attachment:
     kind: str            # "photo" | "video" | "document"
     size: int | None
     url: str | None      # absolute, long-lived download link
+    category: str = "notice"
 
 
 @dataclass
@@ -134,6 +135,7 @@ class ReportEntry:
     approval: tuple[str, str] | None = None
     # The reference printed under the title; None uses the Event Manager's.
     reference: str | None = None
+    customization: dict | None = None
 
 
 # ============================================================
@@ -382,43 +384,60 @@ def _human_size(size: int | None) -> str:
     return ""
 
 
-def _details_rows(entry: "ReportEntry") -> list[tuple[str, str]]:
+def _details_rows(entry: "ReportEntry", customization: dict | None = None) -> list[tuple[str, str]]:
     event, recorded_by = entry.event, entry.recorded_by
-    rows = [
-        ("Event Name", rich(event.get("event_name"))),
-        ("Event Type", rich(event.get("event_type"))),
-        ("Event Date", escape(format_date_range(event.get("event_date"), event.get("end_date")))),
-    ]
-    time_range = format_time_range(event.get("start_time") or "", event.get("end_time") or "")
-    if time_range:
-        rows.append(("Time", escape(time_range)))
-    rows.append(("Venue", rich(event.get("location"))))
-    rows.append(("Department", rich(event.get("department") or settings.default_host_department)))
-    for key, label in (
-        ("organizer", "Organiser"),
-        ("coordinator_contact", "Contact"),
-        ("expected_participants", "Expected Participants"),
-    ):
-        value = str(event.get(key) or "").strip()
-        if value:
-            rows.append((label, rich(value)))
+    opts = entry.customization if entry.customization is not None else (customization or {})
+    inc_basic = opts.get("include_basic_details", True)
+    inc_sched = opts.get("include_schedule_venue", True)
+    inc_other = opts.get("include_other_info", True)
 
-    social_url = str(event.get("social_network_url") or "").strip()
-    if social_url:
-        rows.append((
-            "Social Media Post",
-            _link(social_url, social_url)
-            if social_url.lower().startswith(("http://", "https://"))
-            else escape(social_url),
-        ))
+    rows: list[tuple[str, str]] = []
 
-    who = rich(recorded_by.get("name") or "Not available")
-    if recorded_by.get("email"):
-        who += f"<br/><font color='#5B6475'>{escape(recorded_by['email'])}</font>"
-    rows.append((f"{entry.recorded_label} by", who))
-    created = event.get("created_at")
-    if created and entry.show_recorded_on:
-        rows.append((f"{entry.recorded_label} on", escape(format_date(str(created)[:10]))))
+    if inc_basic or inc_sched or inc_other:
+        rows.append(("Event Name", rich(event.get("event_name"))))
+
+    if inc_basic:
+        rows.append(("Event Type", rich(event.get("event_type"))))
+
+    if inc_sched:
+        rows.append(("Event Date", escape(format_date_range(event.get("event_date"), event.get("end_date")))))
+        time_range = format_time_range(event.get("start_time") or "", event.get("end_time") or "")
+        if time_range:
+            rows.append(("Time", escape(time_range)))
+        rows.append(("Venue", rich(event.get("location"))))
+
+    if inc_basic:
+        rows.append(("Department", rich(event.get("department") or settings.default_host_department)))
+        for key, label in (
+            ("organizer", "Organiser"),
+            ("coordinator_contact", "Contact"),
+        ):
+            value = str(event.get(key) or "").strip()
+            if value:
+                rows.append((label, rich(value)))
+
+    if inc_other:
+        val = str(event.get("expected_participants") or "").strip()
+        if val:
+            rows.append(("Expected Participants", rich(val)))
+        social_url = str(event.get("social_network_url") or "").strip()
+        if social_url:
+            rows.append((
+                "Social Media Post",
+                _link(social_url, social_url)
+                if social_url.lower().startswith(("http://", "https://"))
+                else escape(social_url),
+            ))
+
+    if inc_basic:
+        who = rich(recorded_by.get("name") or "Not available")
+        if recorded_by.get("email"):
+            who += f"<br/><font color='#5B6475'>{escape(recorded_by['email'])}</font>"
+        rows.append((f"{entry.recorded_label} by", who))
+        created = event.get("created_at")
+        if created and entry.show_recorded_on:
+            rows.append((f"{entry.recorded_label} on", escape(format_date(str(created)[:10]))))
+
     return rows
 
 
@@ -454,49 +473,101 @@ def _attachments_table(attachments: list[Attachment], styles) -> list:
     return [table]
 
 
-def _event_sections(entry: ReportEntry, styles, *, attachments_first: bool = False) -> list:
-    """Details and description always; photos and attachments only when the
-    event has them, so an event without files takes no empty sections.
+def _event_sections(
+    entry: ReportEntry,
+    styles,
+    *,
+    attachments_first: bool = False,
+    customization: dict | None = None,
+) -> list:
+    """Details and description conditionally included based on customization;
+    photos and attachments only when selected and present.
 
     ``attachments_first`` (the consolidated report) lists the files before the
     photos: the photo block then ends the event's page and can shrink into
     the space left, instead of pushing a short file list onto a page of its
     own."""
     event = entry.event
-    # CondPageBreak keeps each heading off the foot of a page (it needs room
-    # for itself and a few lines below it) without tying it to the whole
-    # section, which pushed long tables to the next page and left gaps.
-    story = [
-        CondPageBreak(SECTION_ROOM),
-        Paragraph("1. Event Details", styles["section"]),
-        _key_value_table(_details_rows(entry), styles),
-        CondPageBreak(SECTION_ROOM),
-        Paragraph("2. Event Description", styles["section"]),
-        *_boxed_text(str(event.get("description") or "").strip(), styles["body"]),
-    ]
-    number = 3
+    opts = entry.customization if entry.customization is not None else (customization or {})
+    inc_desc = opts.get("include_description", True)
+    inc_photos = opts.get("include_photos", True)
+    inc_docs = opts.get("include_documents", True)
+    inc_notices = opts.get("include_notices", inc_docs)
+    inc_reports = opts.get("include_reports", inc_docs)
+    if not inc_docs and "include_notices" not in opts:
+        inc_notices = False
+    if not inc_docs and "include_reports" not in opts:
+        inc_reports = False
 
-    def photos_section(number: int) -> list:
-        heading = Paragraph(f"{number}. Event Photos", styles["section"])
+    story = []
+    number = 1
+
+    details = _details_rows(entry, opts)
+    if details:
+        story += [
+            CondPageBreak(SECTION_ROOM),
+            Paragraph(f"{number}. Event Details", styles["section"]),
+            _key_value_table(details, styles),
+        ]
+        number += 1
+
+    if inc_desc:
+        desc_text = str(event.get("description") or "").strip()
+        if desc_text:
+            story += [
+                CondPageBreak(SECTION_ROOM),
+                Paragraph(f"{number}. Event Description & Objectives", styles["section"]),
+                *_boxed_text(desc_text, styles["body"]),
+            ]
+            number += 1
+
+    def photos_section(num: int) -> list:
+        heading = Paragraph(f"{num}. Event Photos", styles["section"])
         return _photo_flowables(entry, heading, styles)
 
-    def attachments_section(number: int) -> list:
+    notice_files = [
+        a for a in entry.attachments
+        if getattr(a, "category", "notice") == "notice" or a.kind != "document"
+    ]
+    report_files = [
+        a for a in entry.attachments
+        if a.kind == "document" and getattr(a, "category", "notice") == "report"
+    ]
+
+    def notices_section(num: int) -> list:
         return [
             CondPageBreak(SECTION_ROOM),
-            Paragraph(f"{number}. Attachments", styles["section"]),
-            *_attachments_table(entry.attachments, styles),
+            Paragraph(f"{num}. Uploaded Notices & Attachments", styles["section"]),
+            *_attachments_table(notice_files, styles),
         ]
 
-    parts = [
-        (bool(entry.photos or entry.photo_failures), photos_section),
-        (bool(entry.attachments), attachments_section),
-    ]
+    def reports_section(num: int) -> list:
+        return [
+            CondPageBreak(SECTION_ROOM),
+            Paragraph(f"{num}. Uploaded Reports", styles["section"]),
+            *_attachments_table(report_files, styles),
+        ]
+
+    parts = []
     if attachments_first:
-        parts.reverse()
-    for present, section in parts:
-        if present:
-            story += section(number)
-            number += 1
+        if inc_notices and notice_files:
+            parts.append(notices_section)
+        if inc_reports and report_files:
+            parts.append(reports_section)
+        if inc_photos and (entry.photos or entry.photo_failures):
+            parts.append(photos_section)
+    else:
+        if inc_photos and (entry.photos or entry.photo_failures):
+            parts.append(photos_section)
+        if inc_notices and notice_files:
+            parts.append(notices_section)
+        if inc_reports and report_files:
+            parts.append(reports_section)
+
+    for section_fn in parts:
+        story += section_fn(number)
+        number += 1
+
     if entry.approval:
         approved_by, approved_on = entry.approval
         story += [
@@ -508,6 +579,8 @@ def _event_sections(entry: ReportEntry, styles, *, attachments_first: bool = Fal
                 ("Approved on", escape(approved_on or "Not recorded")),
             ], styles),
         ]
+        number += 1
+
     return story
 
 
@@ -645,6 +718,7 @@ def _build_consolidated(
     links_valid_until: datetime | None,
     subject: str,
     prepared_by: dict | None = None,
+    customization: dict | None = None,
 ) -> BytesIO:
     styles["cover_title"] = ParagraphStyle(
         "CoverTitle", parent=styles["title"], fontSize=24, leading=30,
@@ -691,7 +765,7 @@ def _build_consolidated(
             _event_divider(),
             Spacer(1, 1 * mm),
         ]
-        story += _event_sections(entry, styles, attachments_first=True)
+        story += _event_sections(entry, styles, attachments_first=True, customization=customization)
 
     story += _links_note(entries, links_valid_until, styles)
     story.append(_signature_block(styles))
@@ -723,6 +797,7 @@ def build_managed_report_pdf(
     links_valid_until: datetime | None = None,
     subject: str = "Event report",
     prepared_by: dict | None = None,
+    customization: dict | None = None,
 ) -> BytesIO:
     """One report for one event, or a consolidated report for several."""
     if not entries:
@@ -742,7 +817,9 @@ def build_managed_report_pdf(
     issued = escape(format_date(datetime.now().isoformat()))
     single = len(entries) == 1
     if not single:
-        return _build_consolidated(entries, styles, issued, links_valid_until, subject, prepared_by)
+        return _build_consolidated(
+            entries, styles, issued, links_valid_until, subject, prepared_by, customization=customization
+        )
 
     story = _letterhead(styles)
     if single:
@@ -752,7 +829,7 @@ def build_managed_report_pdf(
             Spacer(1, 1.5 * mm),
             Paragraph(f"Issued {issued}", styles["reference"]),
         ]
-        story += _event_sections(entries[0], styles)
+        story += _event_sections(entries[0], styles, customization=customization)
 
     if links_valid_until and any(e.attachments for e in entries):
         story += [

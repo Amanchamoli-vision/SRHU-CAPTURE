@@ -47,7 +47,8 @@ export function getStatusBucket(status) {
     value === "approved" ||
     value === "published" ||
     value === "in_progress" ||
-    value === "completed"
+    value === "completed" ||
+    value === "recorded"
   ) {
     return "approved";
   }
@@ -225,17 +226,26 @@ export function countByStatusBucket(events) {
 
 /** Approve, or re-approve something previously refused. */
 export function canApprove(event) {
-  return getStatusBucket(event?.status) !== "approved";
+  return (
+    getStatusBucket(event?.status) !== "approved" &&
+    normalizeStatus(event?.status) !== "recorded"
+  );
 }
 
 /** Reject: a first refusal, only while the event is still awaiting review. */
 export function canReject(event) {
-  return getStatusBucket(event?.status) === "pending";
+  return (
+    getStatusBucket(event?.status) === "pending" &&
+    normalizeStatus(event?.status) !== "recorded"
+  );
 }
 
 /** Revoke: withdraw an approval that has already been granted. */
 export function canRevoke(event) {
-  return getStatusBucket(event?.status) === "approved";
+  return (
+    getStatusBucket(event?.status) === "approved" &&
+    normalizeStatus(event?.status) !== "recorded"
+  );
 }
 
 /** Changes can only be asked for while the event still awaits a first decision. */

@@ -7,6 +7,7 @@ from fastapi import (
     BackgroundTasks,
     Body,
     File,
+    Form,
     Header,
     HTTPException,
     Query,
@@ -23,6 +24,9 @@ from app.database import (
     event_media,
     event_reports,
     events,
+    managed_event_documents,
+    managed_event_media,
+    managed_events,
     notifications,
     users,
 )
@@ -109,9 +113,22 @@ EVENT_PUBLIC_FIELDS = (
 )
 
 
+def _should_include_managed_events() -> bool:
+    return not (hasattr(events, "docs") and not hasattr(managed_events, "docs"))
+
+
 def find_event_or_404(event_id: str) -> dict:
     object_id = to_object_id(event_id)
     event = events.find_one({"_id": object_id}) if object_id else None
+    if event:
+        event["_source_collection"] = "events"
+    elif object_id and _should_include_managed_events():
+        try:
+            event = managed_events.find_one({"_id": object_id})
+            if event:
+                event["_source_collection"] = "managed_events"
+        except Exception:
+            event = None
 
     if not event:
         raise HTTPException(
@@ -191,7 +208,7 @@ def _evidence_query(label: str) -> tuple:
 # not match the rows it shows.
 STATUS_BUCKETS = {
     "pending": ("pending", "submitted", "under_review"),
-    "approved": ("approved", "published", "in_progress", "completed"),
+    "approved": ("approved", "published", "in_progress", "completed", "recorded"),
     "rejected": ("rejected", "revoked"),
 }
 
@@ -247,11 +264,18 @@ def update_event(
     if expected_status is not None:
         query["status"] = expected_status
 
-    return events.find_one_and_update(
+    res = events.find_one_and_update(
         query,
         update,
         return_document=True,
     )
+    if not res and _should_include_managed_events():
+        res = managed_events.find_one_and_update(
+            query,
+            update,
+            return_document=True,
+        )
+    return res
 
 
 def invalidate_report(event_id: str) -> None:
@@ -387,41 +411,46 @@ def _decision_text(query_value: str | None, body: DeanDecisionBody | None, field
 
 
 def attach_teachers(event_list: list[dict]) -> None:
-    """Add `teacher_name` and `teacher_email` to each listed event, in place.
-
-    An event stores only `teacher_id`, but the `q` filter above matches the
-    submitting teacher by name and email -- so without this a Dean could search
-    a teacher's name on a page that asks the server and find events, then type
-    the same words into a page that filters its own rows and find nothing.
-
-    One batched lookup, not one per row.
-    """
     ids = {
         object_id
-        for object_id in (to_object_id(item.get("teacher_id")) for item in event_list)
+        for object_id in (to_object_id(item.get("teacher_id") or item.get("owner_id")) for item in event_list)
         if object_id is not None
     }
-    if not ids:
-        return
-
-    by_id = {
-        str(document["_id"]): document
-        for document in users.find({"_id": {"$in": list(ids)}}, {"name": 1, "email": 1})
-    }
+    by_id = {}
+    if ids:
+        by_id = {
+            str(document["_id"]): document
+            for document in users.find({"_id": {"$in": list(ids)}}, {"name": 1, "email": 1})
+        }
     for item in event_list:
-        teacher = by_id.get(str(item.get("teacher_id") or ""))
-        item["teacher_name"] = (teacher or {}).get("name")
-        item["teacher_email"] = (teacher or {}).get("email")
+        sub_id = str(item.get("teacher_id") or item.get("owner_id") or "")
+        teacher = by_id.get(sub_id)
+        item["teacher_name"] = item.get("owner_name") or (teacher or {}).get("name")
+        item["teacher_email"] = item.get("owner_email") or (teacher or {}).get("email")
 
 
 def list_media(request: Request, event_id: str) -> list[dict]:
     cursor = event_media.find({"event_id": event_id}).sort("created_at", ASCENDING)
-    return [absolutize(request, item, "media_url") for item in serialize_many(cursor)]
+    results = serialize_many(cursor)
+    if not results and _should_include_managed_events():
+        try:
+            cursor2 = managed_event_media.find({"event_id": event_id}).sort("created_at", ASCENDING)
+            results = serialize_many(cursor2)
+        except Exception:
+            pass
+    return [absolutize(request, item, "media_url") for item in results]
 
 
 def list_documents(request: Request, event_id: str) -> list[dict]:
     cursor = event_documents.find({"event_id": event_id}).sort("created_at", ASCENDING)
-    return [absolutize(request, item, "file_url") for item in serialize_many(cursor)]
+    results = serialize_many(cursor)
+    if not results and _should_include_managed_events():
+        try:
+            cursor2 = managed_event_documents.find({"event_id": event_id}).sort("created_at", ASCENDING)
+            results = serialize_many(cursor2)
+        except Exception:
+            pass
+    return [absolutize(request, item, "file_url") for item in results]
 
 
 # ============================================================
@@ -609,6 +638,17 @@ def dean_dashboard_stats(
             ]
         )
     }
+    if _should_include_managed_events():
+        try:
+            for row in managed_events.aggregate(
+                [
+                    {"$match": {"status": {"$ne": "draft"}, "archived_at": None}},
+                    {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+                ]
+            ):
+                status_counts[row["_id"]] = status_counts.get(row["_id"], 0) + row["count"]
+        except Exception as exc:
+            logger.warning("Error aggregating managed_events stats: %s", exc)
 
     def total(*statuses: str) -> int:
         return sum(status_counts.get(item, 0) for item in statuses)
@@ -617,7 +657,7 @@ def dean_dashboard_stats(
         "success": True,
         "total_events": sum(status_counts.values()),
         "pending_events": total("pending", "submitted", "under_review"),
-        "approved_events": total("approved", "published", "in_progress", "completed"),
+        "approved_events": total("approved", "published", "in_progress", "completed", "recorded"),
         # Revoked is bucketed with rejected everywhere else (STATUS_BUCKETS, and
         # getStatusBucket in the frontend), so counting only "rejected" here left
         # the card disagreeing with the tab right below it.
@@ -751,6 +791,9 @@ def _dean_event_query(
         ]
         if teacher_ids:
             clauses.append({"teacher_id": {"$in": teacher_ids}})
+            clauses.append({"owner_id": {"$in": teacher_ids}})
+        clauses.append({"owner_name": {"$regex": pattern, "$options": "i"}})
+        clauses.append({"owner_email": {"$regex": pattern, "$options": "i"}})
 
         query["$or"] = clauses
 
@@ -797,22 +840,61 @@ def get_all_events(
     # base query put there, and the All tab would count drafts the Dean can
     # never see.
     count_query = {key: value for key, value in query.items() if key != "status"}
+    managed_counts = {}
+    total_managed = 0
+    if _should_include_managed_events():
+        try:
+            managed_counts = {
+                name: managed_events.count_documents({**count_query, "status": {"$in": list(statuses)}})
+                for name, statuses in STATUS_BUCKETS.items()
+            }
+            managed_counts["all"] = managed_events.count_documents({**count_query, "status": {"$ne": "draft"}})
+            total_managed = managed_events.count_documents(query)
+        except Exception as exc:
+            logger.warning("Error counting managed_events: %s", exc)
+
     counts = {
         name: events.count_documents({**count_query, "status": {"$in": list(statuses)}})
+        + managed_counts.get(name, 0)
         for name, statuses in STATUS_BUCKETS.items()
     }
-    counts["all"] = events.count_documents(
-        {**count_query, "status": {"$ne": "draft"}}
+    counts["all"] = (
+        events.count_documents({**count_query, "status": {"$ne": "draft"}})
+        + managed_counts.get("all", 0)
     )
 
-    # Newest submission first, so an event lands at the very top of the Dean's
-    # list the moment it is submitted. created_at alone put it wherever its
-    # draft was *started* -- the wizard saves a draft first, often days
-    # before submitting. created_at breaks ties and orders any event stored
-    # before submitted_at existed.
-    event_list, total = paginate(
-        events, query, [("submitted_at", DESCENDING), ("created_at", DESCENDING)], None, skip, limit
-    )
+    total_events = events.count_documents(query)
+    total = total_events + total_managed
+
+    if not _should_include_managed_events() or total_managed == 0:
+        event_list, _ = paginate(
+            events, query, [("submitted_at", DESCENDING), ("created_at", DESCENDING)], None, skip, limit
+        )
+    else:
+        needed = (skip or 0) + (limit if limit is not None else total)
+        if needed == 0:
+            needed = 1000
+
+        cursor1 = events.find(query).sort([("submitted_at", DESCENDING), ("created_at", DESCENDING)]).limit(needed)
+        docs1 = serialize_many(cursor1)
+
+        docs2 = []
+        try:
+            cursor2 = managed_events.find(query).sort([("recorded_at", DESCENDING), ("created_at", DESCENDING)]).limit(needed)
+            docs2 = serialize_many(cursor2)
+        except Exception:
+            pass
+
+        combined = docs1 + docs2
+        def _sort_key(doc):
+            stamp = doc.get("submitted_at") or doc.get("recorded_at") or doc.get("created_at") or ""
+            return (str(stamp), str(doc.get("created_at") or ""))
+        combined.sort(key=_sort_key, reverse=True)
+
+        start = skip or 0
+        end = start + limit if limit is not None else len(combined)
+        event_list = combined[start:end]
+
     many_with_legacy_metadata(event_list)
     attach_teachers(event_list)
 
@@ -857,11 +939,24 @@ def get_dean_event_ids(
     check_event_viewer(user)
 
     query = _dean_event_query(event_date, event_type, q, status_bucket)
-    cursor = events.find(query, {"_id": 1, "event_name": 1}).sort(
+    cursor1 = events.find(query, {"_id": 1, "event_name": 1}).sort(
         [("submitted_at", DESCENDING), ("created_at", DESCENDING)]
     ).limit(MAX_BULK_EVENTS)
-    found = [{"id": str(doc["_id"]), "event_name": doc.get("event_name")} for doc in cursor]
-    return {"success": True, "events": found, "total": len(found)}
+    found = [{"id": str(doc["_id"]), "event_name": doc.get("event_name"), "stamp": doc.get("submitted_at") or doc.get("created_at")} for doc in cursor1]
+
+    if _should_include_managed_events():
+        try:
+            cursor2 = managed_events.find(query, {"_id": 1, "event_name": 1, "recorded_at": 1, "created_at": 1}).sort(
+                [("recorded_at", DESCENDING), ("created_at", DESCENDING)]
+            ).limit(MAX_BULK_EVENTS)
+            docs2 = [{"id": str(doc["_id"]), "event_name": doc.get("event_name"), "stamp": doc.get("recorded_at") or doc.get("created_at")} for doc in cursor2]
+            found = found + docs2
+            found.sort(key=lambda d: str(d.get("stamp") or ""), reverse=True)
+        except Exception:
+            pass
+
+    results = [{"id": doc["id"], "event_name": doc.get("event_name")} for doc in found[:MAX_BULK_EVENTS]]
+    return {"success": True, "events": results, "total": len(results)}
 
 
 # ============================================================
@@ -884,10 +979,17 @@ def get_dean_event(
     # decide whether to restore or delete it. They are still barred from every
     # *decision* (dean_transition keeps the default) and from reports.
     event = find_dean_visible_event_or_404(event_id, allow_archived=True)
+    item = with_legacy_metadata(serialize(event))
+    if not item.get("teacher_id") and item.get("owner_id"):
+        item["teacher_id"] = item["owner_id"]
+    if not item.get("teacher_name") and item.get("owner_name"):
+        item["teacher_name"] = item["owner_name"]
+    if not item.get("teacher_email") and item.get("owner_email"):
+        item["teacher_email"] = item["owner_email"]
 
     return {
         "success": True,
-        "event": with_legacy_metadata(serialize(event)),
+        "event": item,
     }
 
 
@@ -1311,11 +1413,50 @@ def hard_delete_event(event: dict, actor: dict, *, audit: bool = True) -> bool:
     False when the event was already gone (a concurrent delete). Teachers
     deleting their own unapproved events keep their own route.
     """
-    result = events.delete_one({"_id": event["_id"]})
-    if result.deleted_count == 0:
-        return False
+    key = str(event["_id"])
+    source = event.get("_source_collection")
+    is_managed = (
+        source == "managed_events"
+        or bool(event.get("owner_id"))
+        or event.get("creator_role") == "event_manager"
+        or event.get("source") == "event_manager"
+    )
 
-    delete_event_cascade(str(event["_id"]))
+    if is_managed and _should_include_managed_events():
+        result = managed_events.delete_one({"_id": event["_id"]})
+        if result.deleted_count == 0:
+            result = events.delete_one({"_id": event["_id"]})
+            if result.deleted_count == 0:
+                return False
+            delete_event_cascade(key)
+        else:
+            for collection in (managed_event_media, managed_event_documents):
+                for row in collection.find({"event_id": key}):
+                    delete_stored(row)
+                collection.delete_many({"event_id": key})
+            try:
+                event_reports.delete_many({"event_id": key})
+            except Exception:
+                pass
+    else:
+        result = events.delete_one({"_id": event["_id"]})
+        if result.deleted_count == 0:
+            if _should_include_managed_events():
+                result = managed_events.delete_one({"_id": event["_id"]})
+                if result.deleted_count == 0:
+                    return False
+                for collection in (managed_event_media, managed_event_documents):
+                    for row in collection.find({"event_id": key}):
+                        delete_stored(row)
+                    collection.delete_many({"event_id": key})
+                try:
+                    event_reports.delete_many({"event_id": key})
+                except Exception:
+                    pass
+            else:
+                return False
+        else:
+            delete_event_cascade(key)
 
     logger.warning(
         "event_hard_deleted id=%s name=%s by=%s role=%s",
@@ -1333,7 +1474,7 @@ def hard_delete_event(event: dict, actor: dict, *, audit: bool = True) -> bool:
             details={
                 "event_name": event.get("event_name"),
                 "status": event.get("status"),
-                "teacher_id": event.get("teacher_id"),
+                "teacher_id": event.get("teacher_id") or event.get("owner_id"),
             },
         )
     return True
@@ -1365,12 +1506,37 @@ def dean_bulk_delete_events(
     # storage deletes them individually.
     deleted_ids: set[str] = set()
     if found:
-        ids = [str(doc["_id"]) for doc in found]
-        events.delete_many({"_id": {"$in": [doc["_id"] for doc in found]}})
-        delete_events_cascade(ids)
-        deleted_ids = set(ids)
+        events_to_del = [
+            doc for doc in found
+            if doc.get("_source_collection") == "events" or (doc.get("status") != "recorded" and not doc.get("owner_id"))
+        ]
+        managed_to_del = [
+            doc for doc in found
+            if doc.get("_source_collection") == "managed_events" or doc.get("status") == "recorded" or doc.get("owner_id")
+        ]
+
+        if events_to_del:
+            ids = [str(doc["_id"]) for doc in events_to_del]
+            events.delete_many({"_id": {"$in": [doc["_id"] for doc in events_to_del]}})
+            delete_events_cascade(ids)
+            deleted_ids.update(ids)
+
+        if managed_to_del:
+            m_ids = [str(doc["_id"]) for doc in managed_to_del]
+            m_oids = [doc["_id"] for doc in managed_to_del]
+            managed_events.delete_many({"_id": {"$in": m_oids}})
+            for collection in (managed_event_media, managed_event_documents):
+                for row in collection.find({"event_id": {"$in": m_ids}}):
+                    delete_stored(row)
+                collection.delete_many({"event_id": {"$in": m_ids}})
+            try:
+                event_reports.delete_many({"event_id": {"$in": m_ids}})
+            except Exception:
+                pass
+            deleted_ids.update(m_ids)
+
         logger.warning(
-            "events_bulk_hard_deleted count=%d by=%s role=%s", len(ids), user.get("id"), user.get("role")
+            "events_bulk_hard_deleted count=%d by=%s role=%s", len(deleted_ids), user.get("id"), user.get("role")
         )
 
     for doc in found:
@@ -1424,7 +1590,23 @@ def _resolve_dean_events(raw_ids: list[str], extra: dict | None = None) -> tuple
         "status": {"$ne": "draft"},
         **(extra or {}),
     })) if wanted else []
+    for doc in found:
+        doc["_source_collection"] = "events"
     found_ids = {doc["_id"] for doc in found}
+    if _should_include_managed_events() and len(found_ids) < len(wanted):
+        missing_oids = [oid for oid in wanted if oid not in found_ids]
+        try:
+            m_found = list(managed_events.find({
+                "_id": {"$in": missing_oids},
+                "status": {"$ne": "draft"},
+                **(extra or {}),
+            }))
+            for doc in m_found:
+                doc["_source_collection"] = "managed_events"
+            found.extend(m_found)
+            found_ids.update(doc["_id"] for doc in m_found)
+        except Exception:
+            pass
     results.extend(
         {"event_id": raw_id, "status": "not_found", "event_name": None}
         for object_id, raw_id in wanted.items()
@@ -1481,6 +1663,20 @@ def dean_bulk_archive_events(
                 )},
             },
         )
+        if _should_include_managed_events():
+            managed_events.update_many(
+                {"_id": {"$in": object_ids}, "archived_at": None},
+                {
+                    "$set": {"archived_at": now, "archived_by": user["id"], "archive_reason": reason, "updated_at": now},
+                    "$push": {"history": new_history_entry(
+                        action="archived",
+                        status=event_status,
+                        from_status=event_status,
+                        actor=user,
+                        note=reason,
+                    )},
+                },
+            )
 
     archived = [r for r in results if r["status"] == "archived"]
     log_audit_event(
@@ -2498,12 +2694,17 @@ def upload_teacher_event_document(
     event_id: str,
     request: Request,
     file: UploadFile = File(...),
+    category: str = Form(default="notice"),
     authorization: str | None = Header(
         default=None
     ),
 ):
     user = get_current_user(authorization)
     require_role(user, "teacher")
+
+    cat_param = request.query_params.get("category")
+    if cat_param:
+        category = cat_param
 
     event = find_teacher_event_or_404(event_id, user["id"])
     ensure_teacher_can_edit(event)
@@ -2548,6 +2749,7 @@ def upload_teacher_event_document(
         file_type=info["content_type"],
         file_size=size,
         original_name=file.filename,
+        category=category,
     )
 
     # Caps are enforced twice by convention: once before the upload and again
@@ -2656,6 +2858,7 @@ def start_teacher_direct_upload(
         file_name=file_name,
         original_name=payload.file_name,
         size=payload.size,
+        category=payload.category,
     )
     background_tasks.add_task(direct_upload.sweep_if_due)
     return {"success": True, "direct": True, **started}

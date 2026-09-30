@@ -21,6 +21,7 @@ import {
   reportNotice,
 } from "../../services/eventManager";
 import Modal from "../../components/teacher/Modal";
+import ReportCustomizationModal from "../../components/common/ReportCustomizationModal";
 import StatusChip from "../../components/teacher/StatusChip";
 import {
   isApprovedStatus,
@@ -187,9 +188,9 @@ function MyEvents() {
   const panel = usePanel();
   const statusTabs = panel.approval ? STATUS_TABS : DIRECT_STATUS_TABS;
 
-  // Event Manager: events ticked for one combined report or a bulk delete.
   const [selected, setSelected] = useState(() => new Set());
   const [reportingId, setReportingId] = useState("");
+  const [customizingReport, setCustomizingReport] = useState(null); // { type: 'single' | 'selected', item?, eventIds?, count? }
   const [bulkDelete, setBulkDelete] = useState(null); // { confirmText } while the dialog is open
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
@@ -448,20 +449,11 @@ function MyEvents() {
       return next;
     });
 
-  const handleReportOne = async (item) => {
-    try {
-      setReportingId(item.id);
-      const outcome = await downloadEventReport(item.id, item.event_name);
-      const notice = reportNotice(outcome, `Report for "${item.event_name}"`);
-      if (notice) setSuccessMessage(notice);
-    } catch (err) {
-      setError(err?.message || "Could not generate the report.");
-    } finally {
-      setReportingId("");
-    }
+  const handleReportOne = (item) => {
+    setCustomizingReport({ type: "single", item });
   };
 
-  const handleReportSelected = async () => {
+  const handleReportSelected = () => {
     if (selectedIds.length > MAX_EVENTS_PER_REPORT) {
       setError(`A report can cover at most ${MAX_EVENTS_PER_REPORT} events; ${selectedIds.length} are selected.`);
       return;
@@ -469,14 +461,32 @@ function MyEvents() {
     // Keep the order the list shows them in.
     const ordered = filteredItems.map((item) => item.id).filter((id) => selectedIds.includes(id));
     const rest = selectedIds.filter((id) => !ordered.includes(id));
+    setCustomizingReport({
+      type: "selected",
+      eventIds: [...ordered, ...rest],
+      count: selectedIds.length,
+    });
+  };
+
+  const handleExecuteCustomReport = async (options) => {
+    if (!customizingReport) return;
     try {
-      setReportingId("selected");
-      const outcome = await downloadEventsReport([...ordered, ...rest]);
-      const notice = reportNotice(
-        outcome,
-        selectedIds.length === 1 ? "Report" : `Report for ${selectedIds.length} events`,
-      );
-      if (notice) setSuccessMessage(notice);
+      if (customizingReport.type === "single") {
+        const item = customizingReport.item;
+        setReportingId(item.id);
+        const outcome = await downloadEventReport(item.id, item.event_name, options);
+        const notice = reportNotice(outcome, `Report for "${item.event_name}"`);
+        if (notice) setSuccessMessage(notice);
+      } else if (customizingReport.type === "selected") {
+        setReportingId("selected");
+        const outcome = await downloadEventsReport(customizingReport.eventIds, options);
+        const notice = reportNotice(
+          outcome,
+          customizingReport.count === 1 ? "Report" : `Report for ${customizingReport.count} events`,
+        );
+        if (notice) setSuccessMessage(notice);
+      }
+      setCustomizingReport(null);
     } catch (err) {
       setError(err?.message || "Could not generate the report.");
     } finally {
@@ -1063,6 +1073,20 @@ function MyEvents() {
           />
         </div>
       </Modal>
+
+      <ReportCustomizationModal
+        open={Boolean(customizingReport)}
+        onClose={() => !reportingId && setCustomizingReport(null)}
+        onGenerate={handleExecuteCustomReport}
+        generating={Boolean(reportingId)}
+        eventName={
+          customizingReport?.type === "single"
+            ? customizingReport.item?.event_name || customizingReport.item?.eventName || ""
+            : ""
+        }
+        isConsolidated={customizingReport?.type === "selected"}
+        eventCount={customizingReport?.count || 1}
+      />
     </TeacherShell>
   );
 }

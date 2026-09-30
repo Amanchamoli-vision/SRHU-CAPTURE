@@ -88,11 +88,18 @@ export function reportNotice(outcome, what = "Report") {
 
 
 /** Download (or, on plain http, open) the report for one event. Resolves with the outcome. */
-export function downloadEventReport(id, eventName) {
-  return fetchReport(`${BASE}/events/${id}/report`, {}, reportFileName(eventName));
+export function downloadEventReport(id, eventName, customization = null) {
+  const options = customization ? { method: "POST", body: customization } : {};
+  return fetchReport(`${BASE}/events/${id}/report`, options, reportFileName(eventName));
 }
 
 /** One consolidated report for several events, in the order given. */
-export function downloadEventsReport(ids) {
-  return fetchReport(`${BASE}/reports`, { method: "POST", body: { event_ids: ids } }, reportFileName(`Consolidated_Event_Report_${new Date().toISOString().slice(0, 10)}`));
+export function downloadEventsReport(ids, customization = null) {
+  const body = { event_ids: ids };
+  if (customization) body.customization = customization;
+  return fetchReport(
+    `${BASE}/reports`,
+    { method: "POST", body },
+    reportFileName(`Consolidated_Event_Report_${new Date().toISOString().slice(0, 10)}`),
+  );
 }
