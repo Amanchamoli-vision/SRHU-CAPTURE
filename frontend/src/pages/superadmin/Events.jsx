@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { submitterOf } from "../../components/common/submitter";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch, apiJson } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
@@ -353,7 +354,9 @@ export default function SuperAdminEvents() {
                         {[event.event_type, formatDay(event.event_date), event.location]
                           .filter(Boolean)
                           .join(" · ")}
-                        {event.teacher_name || event.teacher_email ? ` · by ${event.teacher_name || event.teacher_email}` : ""}
+                        {event.teacher_name || event.teacher_email
+                          ? ` · ${submitterOf(event).verb.toLowerCase()} ${submitterOf(event).name} (${submitterOf(event).role})`
+                          : ""}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">

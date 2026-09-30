@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SubmitterCell } from "../../components/common/submitter";
 import { Link, useNavigate } from "react-router-dom";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { fetchCurrentUser, signOut } from "../../services/auth";
@@ -841,7 +842,7 @@ export default function DeanDashboard() {
                   <table className="w-full text-left">
                     <thead>
                       <tr>
-                        {["Program", "Status", "Type", "Date", "Location", "Action"].map(
+                        {["Program", "Submitted By", "Status", "Type", "Date", "Location", "Action"].map(
                           (label) => (
                             <th
                               key={label}
@@ -868,6 +869,10 @@ export default function DeanDashboard() {
                                 {decodeEventMetadata(event.description).description}
                               </p>
                             )}
+                          </td>
+
+                          <td className="max-w-44 px-5 py-3.5">
+                            <SubmitterCell event={event} />
                           </td>
 
                           <td className="whitespace-nowrap px-5 py-3.5">

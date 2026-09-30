@@ -452,3 +452,51 @@ class TestEventManagerDeanVisibility(unittest.TestCase):
         self.assertGreaterEqual(shelf["total"], 2)
         by_id = {row["id"]: row for row in shelf["events"]}
         self.assertEqual(by_id[str(m_id)]["teacher_name"], self.manager_user["name"])
+
+    def test_dean_sees_who_each_event_came_from_and_can_filter_by_it(self):
+        now = utc_now()
+        t_id, m_id = ObjectId(), ObjectId()
+        self.created_event_ids.append(t_id)
+        self.created_managed_ids.append(m_id)
+        events.insert_one({
+            "_id": t_id, "event_name": "Source Teacher Talk", "event_type": "Seminar",
+            "event_date": "2026-09-01", "status": "pending", "teacher_id": str(self.teacher_user["_id"]),
+            "created_at": now, "submitted_at": now,
+        })
+        managed_events.insert_one({
+            "_id": m_id, "event_name": "Source Manager Seminar", "event_type": "Seminar",
+            "event_date": "2026-09-02", "status": "recorded", "owner_id": str(self.manager_user["_id"]),
+            "owner_name": self.manager_user["name"], "created_at": now, "recorded_at": now,
+        })
+        headers = {"Authorization": f"Bearer {self.dean_token}"}
+
+        def listed(query=""):
+            response = self.client.get(f"/dean/events{query}", headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            return {row["id"]: row for row in response.json()["events"]}, response.json()
+
+        rows, _ = listed()
+        self.assertEqual(rows[str(t_id)]["submitted_by_role"], "teacher")
+        self.assertEqual(rows[str(t_id)]["teacher_name"], self.teacher_user["name"])
+        self.assertEqual(rows[str(m_id)]["submitted_by_role"], "event_manager")
+        self.assertEqual(rows[str(m_id)]["teacher_name"], self.manager_user["name"])
+
+        rows, body = listed("?source=teacher")
+        self.assertIn(str(t_id), rows)
+        self.assertNotIn(str(m_id), rows)
+        self.assertEqual(body["counts"]["all"], body["total"])
+        rows, body = listed("?source=event_manager")
+        self.assertIn(str(m_id), rows)
+        self.assertNotIn(str(t_id), rows)
+        self.assertTrue(all(row["submitted_by_role"] == "event_manager" for row in rows.values()))
+
+        self.assertEqual(self.client.get("/dean/events?source=robots", headers=headers).status_code, 400)
+
+        ids = self.client.get("/dean/events/ids?source=event_manager", headers=headers).json()["events"]
+        self.assertIn(str(m_id), {row["id"] for row in ids})
+        self.assertNotIn(str(t_id), {row["id"] for row in ids})
+
+        detail = self.client.get(f"/dean/events/{m_id}", headers=headers).json()["event"]
+        self.assertEqual(detail["submitted_by_role"], "event_manager")
+        detail = self.client.get(f"/dean/events/{t_id}", headers=headers).json()["event"]
+        self.assertEqual(detail["submitted_by_role"], "teacher")

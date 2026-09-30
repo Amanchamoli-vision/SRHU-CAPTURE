@@ -5,6 +5,7 @@ import { apiFetch, apiJson, errorFromResponse } from "../../services/api";
 import { fileNameFromResponse, reportFileName } from "../../utils/fileNames";
 import useMediaRefresh from "../../components/common/useMediaRefresh";
 import ReportCustomizationModal from "../../components/common/ReportCustomizationModal";
+import { submitterOf } from "../../components/common/submitter";
 import DeanShell from "../../components/dean/DeanShell";
 import Modal from "../../components/teacher/Modal";
 import PageHero from "../../components/teacher/PageHero";
@@ -694,7 +695,18 @@ function EventDetails() {
     },
   ];
 
+  // A teacher submits an event for approval; an Event Manager records one.
+  const submitter = submitterOf(event);
+  const submittedStamp = submitter.isManager
+    ? event.recorded_at || event.created_at
+    : event.submitted_at || event.created_at;
+
   const details = [
+    {
+      label: submitter.verb,
+      value: `${submitter.name} (${submitter.role})${event.teacher_email && event.teacher_email !== submitter.name ? ` · ${event.teacher_email}` : ""}`,
+      Icon: IconUser,
+    },
     {
       label: "Department",
       value: meta.department || "Not provided",
@@ -756,7 +768,7 @@ function EventDetails() {
         <PageHero
           eyebrow={event.event_type || "Program"}
           title={event.event_name}
-          subtitle={`Submitted ${formatStamp(event.created_at)}`}
+          subtitle={`${submitter.verb} ${submitter.name} (${submitter.role}) · ${formatStamp(submittedStamp)}`}
           actions={
             <div className="flex items-center gap-2">
               <StatusChip status={event.status} size="md" />

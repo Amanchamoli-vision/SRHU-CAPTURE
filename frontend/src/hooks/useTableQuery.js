@@ -31,10 +31,11 @@ export default function useTableQuery(defaults = {}) {
       status: searchParams.get("status") ?? defaults.status ?? "all",
       type: searchParams.get("type") ?? defaults.type ?? "",
       date: searchParams.get("date") ?? defaults.date ?? "",
+      source: searchParams.get("source") ?? defaults.source ?? "",
       skip: (page - 1) * per,
     };
     // defaults is a literal at every call site; re-reading it per render is fine.
-  }, [searchParams, defaults.q, defaults.status, defaults.type, defaults.date]);
+  }, [searchParams, defaults.q, defaults.status, defaults.type, defaults.date, defaults.source]);
 
   const write = useCallback(
     (next, { replace = false } = {}) => {
@@ -47,6 +48,7 @@ export default function useTableQuery(defaults = {}) {
       if (next.status && next.status !== "all") params.set("status", next.status);
       if (next.type) params.set("type", next.type);
       if (next.date) params.set("date", next.date);
+      if (next.source) params.set("source", next.source);
       setSearchParams(params, { replace });
     },
     [setSearchParams],
@@ -71,7 +73,7 @@ export default function useTableQuery(defaults = {}) {
   );
 
   const reset = useCallback(
-    () => write({ page: 1, per: query.per, q: "", status: "all", type: "", date: "" }),
+    () => write({ page: 1, per: query.per, q: "", status: "all", type: "", date: "", source: "" }),
     [query.per, write],
   );
 
