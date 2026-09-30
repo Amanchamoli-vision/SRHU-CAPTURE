@@ -317,6 +317,19 @@ def paginate(
     return serialize_many(cursor), total
 
 
+# Who an event came from, for the Dean's "Submitted by" filter: a teacher's
+# events live in `events`, an Event Manager's in `managed_events`.
+EVENT_SOURCES = ("all", "teacher", "event_manager")
+
+
+def event_sources(source: str | None) -> tuple[bool, bool]:
+    """(read teacher events, read Event Manager events) for a source filter."""
+    value = (source or "all").strip().lower()
+    if value not in EVENT_SOURCES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown source filter.")
+    return value != "event_manager", value != "teacher" and _should_include_managed_events()
+
+
 def paginate_with_managed(
     query: dict,
     events_sort: list[tuple[str, int]],
@@ -324,14 +337,22 @@ def paginate_with_managed(
     stamp,
     skip: int | None,
     limit: int | None,
+    *,
+    sources: tuple[bool, bool] = (True, True),
 ) -> tuple[list[dict], int]:
     """paginate() over teacher events and Event Manager events together.
 
     Each collection is sorted on its own terms, then the two are merged by
     ``stamp(serialized_doc)`` (newest first). Only the first skip + limit of
     each can reach the page, so that is all either one is asked for.
+    ``sources`` narrows it to one of the two (the "Submitted by" filter).
     """
-    total_managed = managed_events.count_documents(query) if _should_include_managed_events() else 0
+    use_events, use_managed = sources
+    if not use_events:
+        return paginate(managed_events, query, managed_sort, None, skip, limit)
+    total_managed = (
+        managed_events.count_documents(query) if use_managed and _should_include_managed_events() else 0
+    )
     if not total_managed:
         return paginate(events, query, events_sort, None, skip, limit)
 
@@ -471,6 +492,12 @@ def attach_teachers(event_list: list[dict]) -> None:
         teacher = by_id.get(sub_id)
         item["teacher_name"] = item.get("owner_name") or (teacher or {}).get("name")
         item["teacher_email"] = item.get("owner_email") or (teacher or {}).get("email")
+        # Who it came from, stated rather than left to be guessed from the
+        # status: an Event Manager's event carries owner_id, a teacher's
+        # teacher_id.
+        item["submitted_by_role"] = (
+            "event_manager" if item.get("owner_id") and not item.get("teacher_id") else "teacher"
+        )
 
 
 def list_media(request: Request, event_id: str) -> list[dict]:
@@ -866,6 +893,9 @@ def get_all_events(
     # One of the status buckets the Dean's tabs use, or "all".
     status_bucket: str | None = Query(default=None, max_length=20),
 
+    # Who submitted it: "teacher", "event_manager" or "all".
+    source: str | None = Query(default=None, max_length=20),
+
     # Optional paging. Still no default cap, so an un-paged caller keeps
     # getting everything; the Dean page now asks for a page explicitly.
     skip: int | None = Query(default=None, ge=0),
@@ -875,6 +905,7 @@ def get_all_events(
     check_event_viewer(user)
 
     query = _dean_event_query(event_date, event_type, q, status_bucket)
+    use_events, use_managed = event_sources(source)
 
     # Counts for the status tabs, under the same non-status filters, so the
     # numbers on the tabs match what selecting one would show.
@@ -885,7 +916,7 @@ def get_all_events(
     # never see.
     count_query = {key: value for key, value in query.items() if key != "status"}
     managed_counts = {}
-    if _should_include_managed_events():
+    if use_managed:
         try:
             managed_counts = {
                 name: managed_events.count_documents({**count_query, "status": {"$in": list(statuses)}})
@@ -895,13 +926,16 @@ def get_all_events(
         except Exception as exc:
             logger.warning("Error counting managed_events: %s", exc)
 
+    def teacher_count(query_: dict) -> int:
+        return events.count_documents(query_) if use_events else 0
+
     counts = {
-        name: events.count_documents({**count_query, "status": {"$in": list(statuses)}})
+        name: teacher_count({**count_query, "status": {"$in": list(statuses)}})
         + managed_counts.get(name, 0)
         for name, statuses in STATUS_BUCKETS.items()
     }
     counts["all"] = (
-        events.count_documents({**count_query, "status": {"$ne": "draft"}})
+        teacher_count({**count_query, "status": {"$ne": "draft"}})
         + managed_counts.get("all", 0)
     )
 
@@ -916,6 +950,7 @@ def get_all_events(
         newest_first,
         skip,
         limit,
+        sources=(use_events, use_managed),
     )
 
     many_with_legacy_metadata(event_list)
@@ -952,6 +987,7 @@ def get_dean_event_ids(
     event_type: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=200),
     status_bucket: str | None = Query(default=None, max_length=20),
+    source: str | None = Query(default=None, max_length=20),
 ):
     """Every event matching the Dean list's filters, as ids and names only.
 
@@ -962,12 +998,15 @@ def get_dean_event_ids(
     check_event_viewer(user)
 
     query = _dean_event_query(event_date, event_type, q, status_bucket)
-    cursor1 = events.find(query, {"_id": 1, "event_name": 1}).sort(
-        [("submitted_at", DESCENDING), ("created_at", DESCENDING)]
-    ).limit(MAX_BULK_EVENTS)
-    found = [{"id": str(doc["_id"]), "event_name": doc.get("event_name"), "stamp": doc.get("submitted_at") or doc.get("created_at")} for doc in cursor1]
+    use_events, use_managed = event_sources(source)
+    found = []
+    if use_events:
+        cursor1 = events.find(query, {"_id": 1, "event_name": 1}).sort(
+            [("submitted_at", DESCENDING), ("created_at", DESCENDING)]
+        ).limit(MAX_BULK_EVENTS)
+        found = [{"id": str(doc["_id"]), "event_name": doc.get("event_name"), "stamp": doc.get("submitted_at") or doc.get("created_at")} for doc in cursor1]
 
-    if _should_include_managed_events():
+    if use_managed:
         try:
             cursor2 = managed_events.find(query, {"_id": 1, "event_name": 1, "recorded_at": 1, "created_at": 1}).sort(
                 [("recorded_at", DESCENDING), ("created_at", DESCENDING)]

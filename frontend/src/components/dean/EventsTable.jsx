@@ -5,6 +5,7 @@ import StatusChip from "../teacher/StatusChip";
 import { trackOf } from "../teacher/status";
 import { getRefusalReason, getStatusBucket } from "../../utils/constants";
 import { IconInbox, IconRotateCcw } from "../teacher/icons";
+import { SubmitterCell, SubmitterLine } from "../common/submitter";
 
 /**
  * The Dean's event list: a card list on narrow screens, a table on wide ones.
@@ -40,6 +41,7 @@ function SelectBox({ checked, indeterminate = false, onChange, label }) {
 
 export const COLUMNS = [
   { label: "Event", className: "" },
+  { label: "Submitted By", className: "" },
   { label: "Status", className: "" },
   { label: "Type", className: "" },
   { label: "Date", className: "" },
@@ -118,6 +120,7 @@ function EventsTable({
                         {event.event_name || "Untitled Event"}
                       </Link>
                     </div>
+                    <SubmitterLine event={event} className="mt-1" />
 
                     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted">
                       <StatusChip status={event.status} />
@@ -217,6 +220,11 @@ function EventsTable({
                             {getRefusalReason(event)}
                           </p>
                         )}
+                      </td>
+
+                      {/* Submitted by: who sent it, and in which role */}
+                      <td className="max-w-44 px-4 py-3">
+                        <SubmitterCell event={event} />
                       </td>
 
                       {/* Status */}

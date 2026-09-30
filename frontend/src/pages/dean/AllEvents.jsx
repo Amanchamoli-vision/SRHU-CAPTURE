@@ -210,6 +210,7 @@ function AllEvents() {
       if (query.date) params.set("event_date", query.date);
       if (query.type) params.set("event_type", query.type);
       if (query.q) params.set("q", query.q);
+      if (query.source) params.set("source", query.source);
       if (query.status && query.status !== "all") {
         params.set("status_bucket", query.status);
       }
@@ -232,7 +233,7 @@ function AllEvents() {
     }
     // handleApiError is stable for the lifetime of the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.skip, query.per, query.date, query.type, query.q, query.status]);
+  }, [query.skip, query.per, query.date, query.type, query.q, query.status, query.source]);
 
   // ============================================================
   // INITIAL LOAD
@@ -381,6 +382,7 @@ function AllEvents() {
       if (query.date) params.set("event_date", query.date);
       if (query.type) params.set("event_type", query.type);
       if (query.q) params.set("q", query.q);
+      if (query.source) params.set("source", query.source);
       if (query.status && query.status !== "all") params.set("status_bucket", query.status);
       const next = new Map(selected);
       (await fetchEventIds(params)).forEach((event) => next.set(event.id, event.event_name || "Untitled Event"));
@@ -589,6 +591,7 @@ function AllEvents() {
     searchQuery.trim() !== "" ||
     statusFilter !== "all" ||
     typeFilter !== "" ||
+    query.source !== "" ||
     selectedDate !== "";
 
   const handleClearAllFilters = () => {
@@ -718,6 +721,17 @@ function AllEvents() {
                     {type}
                   </option>
                 ))}
+              </select>
+
+              <select
+                value={query.source}
+                onChange={(e) => setFilter("source", e.target.value)}
+                aria-label="Filter by who submitted the event"
+                className="input min-w-0 flex-1 sm:w-44 sm:flex-none"
+              >
+                <option value="">All submitters</option>
+                <option value="teacher">Teachers</option>
+                <option value="event_manager">Event Managers</option>
               </select>
 
               <input
