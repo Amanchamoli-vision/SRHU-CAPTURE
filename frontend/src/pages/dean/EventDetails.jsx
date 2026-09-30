@@ -4,6 +4,7 @@ import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiFetch, apiJson, errorFromResponse } from "../../services/api";
 import { fileNameFromResponse, reportFileName } from "../../utils/fileNames";
 import useMediaRefresh from "../../components/common/useMediaRefresh";
+import ReportCustomizationModal from "../../components/common/ReportCustomizationModal";
 import DeanShell from "../../components/dean/DeanShell";
 import Modal from "../../components/teacher/Modal";
 import PageHero from "../../components/teacher/PageHero";
@@ -30,6 +31,7 @@ import {
   IconRefresh,
   IconShield,
   IconTag,
+  IconTrash,
   IconUser,
   IconUsers,
   IconX,
@@ -68,6 +70,7 @@ function EventDetails() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportGenerated, setReportGenerated] = useState(false);
   const [generatedAt, setGeneratedAt] = useState(null);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   const [socialNetworkUrl, setSocialNetworkUrl] = useState("");
   const [savingSocialLink, setSavingSocialLink] = useState(false);
@@ -83,6 +86,11 @@ function EventDetails() {
   const [decisionKind, setDecisionKind] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
   const [reasonError, setReasonError] = useState("");
+
+  // Deleting the event permanently
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   // ============================================================
   // ERRORS
@@ -229,6 +237,25 @@ function EventDetails() {
       handleApiError(err, "Failed to restore event", "Restore event error");
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const handleDeleteEvent = async () => {
+    if (!event) return;
+    try {
+      setDeleting(true);
+      setError("");
+      setSuccess("");
+      await apiJson(`/dean/events/${event.id}`, { method: "DELETE" });
+      setDeleteConfirmOpen(false);
+      navigate(archived ? "/dean/archive" : "/dean/events", {
+        replace: true,
+        state: { success: "Event deleted permanently." },
+      });
+    } catch (err) {
+      handleApiError(err, "Failed to delete event", "Delete event error");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -444,7 +471,16 @@ function EventDetails() {
   // GENERATE REPORT
   // ============================================================
 
-  const handleGenerateReport = async () => {
+  const handleOpenReportModal = () => {
+    if (!event) return;
+    if (getStatusBucket(event.status) !== "approved") {
+      setError("Report can only be generated for an approved event.");
+      return;
+    }
+    setShowReportModal(true);
+  };
+
+  const handleGenerateReport = async (customization = null) => {
     if (!event) return;
 
     // The whole approved group -- approved, in progress, completed -- matches
@@ -461,61 +497,36 @@ function EventDetails() {
 
       const data = await apiJson(`/dean/events/${event.id}/generate-report`, {
         method: "POST",
+        body: customization || undefined,
       });
 
       setReportGenerated(true);
-
       setGeneratedAt(data?.generated_at || null);
 
-      setSuccess(data?.message || "Report generated successfully.");
-    } catch (err) {
-      handleApiError(err, "Failed to generate report", "Generate report error");
-    } finally {
-      setReportLoading(false);
-    }
-  };
-
-  // ============================================================
-  // DOWNLOAD REPORT
-  // ============================================================
-
-  const handleDownloadReport = async () => {
-    if (!event) return;
-
-    try {
-      setReportLoading(true);
-      setError("");
-      setSuccess("");
-
-      const response = await apiFetch(`/dean/events/${event.id}/report/download`);
+      // Download the customized PDF report directly
+      const response = await apiFetch(`/dean/events/${event.id}/report/download`, {
+        method: customization ? "POST" : "GET",
+        body: customization || undefined,
+      });
 
       if (!response.ok) {
         throw await errorFromResponse(response, "Failed to download report");
       }
 
       const blob = await response.blob();
-
       const downloadUrl = window.URL.createObjectURL(blob);
-
       const link = document.createElement("a");
-
       link.href = downloadUrl;
-
-      // Named after the event ("IEEE Conference.pdf"): the server's name,
-      // or the same rule applied here if the header cannot be read.
       link.download = fileNameFromResponse(response) || reportFileName(event.event_name);
-
       document.body.appendChild(link);
-
       link.click();
-
       link.remove();
-
       window.URL.revokeObjectURL(downloadUrl);
 
-      setSuccess("Report downloaded successfully.");
+      setShowReportModal(false);
+      setSuccess("Report generated and downloaded successfully.");
     } catch (err) {
-      handleApiError(err, "Failed to download report", "Download report error");
+      handleApiError(err, "Failed to generate report", "Generate report error");
     } finally {
       setReportLoading(false);
     }
@@ -604,9 +615,9 @@ function EventDetails() {
   const nextStage = getNextStage(event.status);
   const previousStage = getPreviousStage(event.status);
   const isApproved = getStatusBucket(event.status) === "approved";
-  // The report exists only once the event is Completed (the server enforces
+  // The report exists once the event is Completed or Recorded (the server enforces
   // the same rule on generate and download).
-  const canReport = event.status === "completed";
+  const canReport = event.status === "completed" || event.status === "recorded";
 
   // Its own action now, not a rejection wearing a different label (PRD 18).
   const isRevoking = decisionKind === "revoke";
@@ -723,7 +734,24 @@ function EventDetails() {
           eyebrow={event.event_type || "Program"}
           title={event.event_name}
           subtitle={`Submitted ${formatStamp(event.created_at)}`}
-          actions={<StatusChip status={event.status} size="md" />}
+          actions={
+            <div className="flex items-center gap-2">
+              <StatusChip status={event.status} size="md" />
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmText("");
+                  setDeleteConfirmOpen(true);
+                }}
+                disabled={processing || deleting}
+                className="btn btn-ghost btn-xs text-err hover:bg-err/10"
+                title="Delete this event permanently"
+              >
+                <IconTrash />
+                Delete
+              </button>
+            </div>
+          }
         >
           <dl className="grid gap-4 border-t hairline pt-5 sm:grid-cols-2 lg:grid-cols-4">
             {facts.map((fact) => (
@@ -948,7 +976,7 @@ function EventDetails() {
                     <div className="flex flex-wrap gap-2.5 border-t hairline pt-5">
                       <button
                         type="button"
-                        onClick={handleGenerateReport}
+                        onClick={handleOpenReportModal}
                         disabled={reportLoading || !canReport}
                         className="btn btn-brand btn-sm flex-1"
                       >
@@ -960,13 +988,13 @@ function EventDetails() {
                         {reportLoading
                           ? "Processing…"
                           : reportGenerated
-                          ? "Regenerate"
-                          : "Generate report"}
+                          ? "Customize & Regenerate"
+                          : "Generate Report"}
                       </button>
 
                       <button
                         type="button"
-                        onClick={handleDownloadReport}
+                        onClick={handleOpenReportModal}
                         disabled={reportLoading || !reportGenerated || !canReport}
                         className="btn btn-ghost btn-sm flex-1"
                       >
@@ -1123,6 +1151,18 @@ function EventDetails() {
                     {processing ? <span className="spin h-3.5 w-3.5" /> : <IconArchive />}
                     {processing ? "Restoring…" : "Restore this event"}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteConfirmText("");
+                      setDeleteConfirmOpen(true);
+                    }}
+                    disabled={processing || deleting}
+                    className="btn btn-danger btn-sm mt-3 w-full"
+                  >
+                    <IconTrash />
+                    Delete permanently
+                  </button>
                 </>
               )}
 
@@ -1132,9 +1172,14 @@ function EventDetails() {
                 <StatusChip status={event.status} />
               </p>
               )}
-              {!archived && (
+              {!archived && event.status !== "recorded" && (
               <p className="prose-muted mt-1.5 text-xs">
                 You can revise a decision at any time; the teacher sees each one in their history.
+              </p>
+              )}
+              {!archived && event.status === "recorded" && (
+              <p className="prose-muted mt-1.5 text-xs">
+                This event was directly recorded by the Event Manager.
               </p>
               )}
 
@@ -1188,6 +1233,21 @@ function EventDetails() {
                     Request changes
                   </button>
                 )}
+
+                <div className="mt-2 w-full border-t hairline pt-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteConfirmText("");
+                      setDeleteConfirmOpen(true);
+                    }}
+                    disabled={processing || deleting}
+                    className="btn btn-ghost btn-sm w-full text-err hover:bg-err/10"
+                  >
+                    <IconTrash />
+                    Delete this event
+                  </button>
+                </div>
               </div>
             </section>
           </aside>
@@ -1395,6 +1455,88 @@ function EventDetails() {
           </div>
         )}
       </Modal>
+
+      {/* Permanent Deletion Dialog */}
+      <Modal
+        open={deleteConfirmOpen}
+        onClose={() => {
+          if (!deleting) {
+            setDeleteConfirmOpen(false);
+            setDeleteConfirmText("");
+          }
+        }}
+        eyebrow="Permanent Deletion"
+        title="Delete this event permanently?"
+        subtitle={event?.event_name || ""}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setDeleteConfirmOpen(false);
+                setDeleteConfirmText("");
+              }}
+              disabled={deleting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={handleDeleteEvent}
+              disabled={deleting || deleteConfirmText !== "DELETE"}
+            >
+              {deleting ? <span className="spin h-3.5 w-3.5" /> : <IconTrash />}
+              Delete permanently
+            </button>
+          </>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <span
+            className="icon-tile icon-tile-track"
+            style={{ "--track": trackOf("rejected") }}
+          >
+            <IconAlertTriangle />
+          </span>
+          <div className="min-w-0">
+            <p className="font-display text-sm font-semibold text-ink">
+              {event?.event_name || "Untitled Event"}
+            </p>
+            <p className="prose-muted mt-1 text-xs">
+              This will permanently delete the event, its media files, documents, and generated reports from the system. This action cannot be undone.
+            </p>
+          </div>
+        </div>
+
+        <div className="field mt-4">
+          <label htmlFor="deanEventDeleteConfirm">
+            Type <span className="font-semibold">DELETE</span> to confirm
+          </label>
+          <input
+            id="deanEventDeleteConfirm"
+            type="text"
+            value={deleteConfirmText}
+            onChange={(e) => setDeleteConfirmText(e.target.value)}
+            autoComplete="off"
+            placeholder="DELETE"
+            className="input"
+          />
+        </div>
+      </Modal>
+
+      <ReportCustomizationModal
+        open={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        onGenerate={handleGenerateReport}
+        generating={reportLoading}
+        eventName={event?.event_name}
+        photoCount={media?.filter((m) => m.media_type === "image").length}
+        documentCount={documents?.length}
+        noticeCount={documents?.filter((d) => (d.category || d.doc_category) === "notice").length}
+        reportDocCount={documents?.filter((d) => (d.category || d.doc_category) === "report").length}
+      />
     </DeanShell>
   );
 }

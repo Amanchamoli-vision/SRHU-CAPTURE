@@ -27,6 +27,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
+    Form,
     Header,
     HTTPException,
     Query,
@@ -38,7 +39,13 @@ from fastapi.responses import StreamingResponse
 from pymongo import ASCENDING, DESCENDING
 
 from app.config import settings
-from app.database import fs, managed_event_documents, managed_event_media, managed_events
+from app.database import (
+    event_reports,
+    fs,
+    managed_event_documents,
+    managed_event_media,
+    managed_events,
+)
 from app.models.documents import (
     new_document_document,
     new_history_entry,
@@ -55,11 +62,13 @@ from app.routers.events import (
     paginate,
 )
 from app.schemas.event_manager import (
+    MAX_REPORT_PHOTOS,
     ManagedBulkDeleteRequest,
     ManagedReportRequest,
     ReportPhotosRequest,
 )
 from app.schemas.events import EventCreateRequest, EventUpdateRequest
+from app.schemas.reports import ReportCustomizationOptions
 from app.schemas.uploads import DirectUploadSignRequest, DirectUploadStartRequest
 from app.services import direct_upload, report_files
 from app.services.event_fields import many_with_legacy_metadata, with_legacy_metadata
@@ -257,6 +266,10 @@ def bulk_delete_events(payload: ManagedBulkDeleteRequest, user: dict = Depends(m
             for row in collection.find({"event_id": {"$in": keys}}):
                 delete_stored(row)
             collection.delete_many({"event_id": {"$in": keys}})
+        try:
+            event_reports.delete_many({"event_id": {"$in": keys}})
+        except Exception:
+            pass
     logger.info("managed_events_bulk_deleted count=%d owner=%s", len(ids), user["id"])
 
     deleted = len(ids)
@@ -333,6 +346,10 @@ def delete_event(event_id: str, user: dict = Depends(manager_dep)):
         for row in collection.find({"event_id": key}):
             delete_stored(row)
         collection.delete_many({"event_id": key})
+    try:
+        event_reports.delete_many({"event_id": key})
+    except Exception:
+        pass
     logger.info("managed_event_deleted id=%s owner=%s", key, user["id"])
     return {"success": True, "message": "Event deleted successfully"}
 
@@ -436,8 +453,13 @@ def upload_document(
     event_id: str,
     request: Request,
     file: UploadFile = File(...),
+    category: str = Form(default="notice"),
     user: dict = Depends(manager_dep),
 ):
+    cat_param = request.query_params.get("category")
+    if cat_param:
+        category = cat_param
+
     event = _own_event_or_404(event_id, user)
     event_key = str(event["_id"])
 
@@ -464,6 +486,7 @@ def upload_document(
         event_id=event_key, storage=stored["storage"], object_key=stored["object_key"],
         file_id=stored["file_id"], file_name=file_name, file_url=stored["url"],
         file_type=info["content_type"], file_size=size, original_name=file.filename,
+        category=category,
     )
     _record(managed_event_documents, document, stored, cap_query, cap, "document", cap_bytes)
     return {
@@ -569,6 +592,7 @@ def start_direct_upload(
         file_name=safe_file_name(payload.file_name),
         original_name=payload.file_name,
         size=payload.size,
+        category=payload.category,
     )
     background_tasks.add_task(direct_upload.sweep_if_due)
     return {"success": True, "direct": True, **started}
@@ -661,39 +685,72 @@ def _download_link(request: Request, kind: str, file_id: str, exp: int) -> str:
     return absolute_url(request, f"/event-manager/files/{kind}/{file_id}?exp={exp}&sig={sig}")
 
 
-def _report_entry(request: Request, event: dict, exp: int) -> ReportEntry:
+def _report_entry(request: Request, event: dict, exp: int, customization: dict | None = None) -> ReportEntry:
+    opts = customization or {}
+    inc_photos = opts.get("include_photos", True)
+    selected_pids = opts.get("selected_photo_ids")
+    inc_docs = opts.get("include_documents", True)
+    inc_notices = opts.get("include_notices", inc_docs)
+    inc_reports = opts.get("include_reports", inc_docs)
+    if not inc_docs and "include_notices" not in opts:
+        inc_notices = False
+    if not inc_docs and "include_reports" not in opts:
+        inc_reports = False
+
     key = str(event["_id"])
     media = list(managed_event_media.find({"event_id": key}).sort("_id", ASCENDING))
     documents = list(managed_event_documents.find({"event_id": key}).sort("_id", ASCENDING))
     by_id = {str(row["_id"]): row for row in media}
 
     photos, failures = [], 0
-    for pid in _report_photo_ids(event):
-        data = report_files.read_file_bytes(by_id[pid], fs)
-        prepared = prepare_photo(data) if data else None
-        del data
-        if prepared:
-            photos.append(prepared)
+    if inc_photos:
+        if selected_pids:
+            pids = [
+                pid for pid in selected_pids
+                if pid in by_id and by_id[pid].get("media_type") == "image"
+            ][:MAX_REPORT_PHOTOS]
         else:
-            failures += 1
+            pids = _report_photo_ids(event)
+        for pid in pids:
+            row = by_id.get(pid)
+            if not row:
+                failures += 1
+                continue
+            data = report_files.read_file_bytes(row, fs)
+            prepared = prepare_photo(data) if data else None
+            del data
+            if prepared:
+                photos.append(prepared)
+            else:
+                failures += 1
 
-    attachments = [
-        Attachment(
-            name=row.get("original_name") or row.get("file_name") or "file",
-            kind="photo" if row.get("media_type") == "image" else "video",
-            size=row.get("file_size"),
-            url=_download_link(request, "media", str(row["_id"]), exp),
-        )
-        for row in media
-    ] + [
-        Attachment(
-            name=row.get("original_name") or row.get("file_name") or "file",
-            kind="document",
-            size=row.get("file_size"),
-            url=_download_link(request, "documents", str(row["_id"]), exp),
-        )
-        for row in documents
-    ]
+    if inc_docs or inc_notices or inc_reports:
+        attachments = []
+        if inc_notices or inc_docs:
+            attachments.extend([
+                Attachment(
+                    name=row.get("original_name") or row.get("file_name") or "file",
+                    kind="photo" if row.get("media_type") == "image" else "video",
+                    size=row.get("file_size"),
+                    url=_download_link(request, "media", str(row["_id"]), exp),
+                    category="media",
+                )
+                for row in media
+            ])
+        attachments.extend([
+            Attachment(
+                name=row.get("original_name") or row.get("file_name") or "file",
+                kind="document",
+                size=row.get("file_size"),
+                url=_download_link(request, "documents", str(row["_id"]), exp),
+                category=row.get("category", "notice"),
+            )
+            for row in documents
+            if (row.get("category", "notice") == "notice" and inc_notices)
+            or (row.get("category", "notice") == "report" and inc_reports)
+        ])
+    else:
+        attachments = []
 
     # The form keeps department and expected participants in the description's
     # metadata blob, exactly as the teacher form does.
@@ -708,6 +765,7 @@ def _report_entry(request: Request, event: dict, exp: int) -> ReportEntry:
         photo_failures=failures,
         attachments=attachments,
         recorded_by={"name": event.get("owner_name"), "email": event.get("owner_email")},
+        customization=opts,
     )
 
 
@@ -727,16 +785,96 @@ def _report_file_name(name: str | None) -> str:
     return report_file_name(name)
 
 
-@router.get("/events/{event_id}/report")
-def event_report(event_id: str, request: Request, user: dict = Depends(manager_dep)):
-    """The report for one event -- generated directly, no approval involved."""
+@router.api_route("/events/{event_id}/report", methods=["GET", "POST"])
+def event_report(
+    event_id: str,
+    request: Request,
+    payload: ReportCustomizationOptions | None = None,
+    user: dict = Depends(manager_dep),
+    include_basic_details: bool | None = Query(default=None),
+    include_schedule_venue: bool | None = Query(default=None),
+    include_description: bool | None = Query(default=None),
+    include_other_info: bool | None = Query(default=None),
+    include_photos: bool | None = Query(default=None),
+    include_documents: bool | None = Query(default=None),
+    include_notices: bool | None = Query(default=None),
+    include_reports: bool | None = Query(default=None),
+):
+    """The report for one event -- generated directly, with optional customization."""
     event = _own_event_or_404(event_id, user)
+
+    customization = None
+    if payload is not None:
+        customization = payload.model_dump()
+    else:
+        query_opts = {}
+        if include_basic_details is not None:
+            query_opts["include_basic_details"] = include_basic_details
+        if include_schedule_venue is not None:
+            query_opts["include_schedule_venue"] = include_schedule_venue
+        if include_description is not None:
+            query_opts["include_description"] = include_description
+        if include_other_info is not None:
+            query_opts["include_other_info"] = include_other_info
+        if include_photos is not None:
+            query_opts["include_photos"] = include_photos
+        if include_documents is not None:
+            query_opts["include_documents"] = include_documents
+        if include_notices is not None:
+            query_opts["include_notices"] = include_notices
+        if include_reports is not None:
+            query_opts["include_reports"] = include_reports
+        if query_opts:
+            customization = query_opts
+
+    if customization and not any([
+        customization.get("include_basic_details", True),
+        customization.get("include_schedule_venue", True),
+        customization.get("include_description", True),
+        customization.get("include_other_info", True),
+        customization.get("include_photos", True),
+        customization.get("include_documents", True) and (
+            customization.get("include_notices", True) or customization.get("include_reports", True)
+        ),
+        customization.get("include_notices", False),
+        customization.get("include_reports", False),
+    ]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please select at least one section to include in the report.",
+        )
+
     exp = report_files.links_expiry()
+    entry = _report_entry(request, event, exp, customization=customization)
     pdf = build_managed_report_pdf(
-        [_report_entry(request, event, exp)],
+        [entry],
         links_valid_until=datetime.fromtimestamp(exp, tz=timezone.utc),
+        customization=customization,
     )
     logger.info("managed_report_generated events=1 owner=%s", user["id"])
+    now = utc_now()
+    try:
+        report_doc = {
+            "event_id": str(event["_id"]),
+            "report_title": f"Event Report - {event.get('event_name')}",
+            "report_content": f"Event Report for {event.get('event_name')}",
+            "generated_at": now,
+            "generated_by": user.get("id"),
+        }
+        if customization:
+            report_doc["customization"] = customization
+        event_reports.replace_one(
+            {"event_id": str(event["_id"])},
+            report_doc,
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning("Could not record report status: %s", exc)
+
+    managed_events.update_one(
+        {"_id": event["_id"]},
+        {"$set": {"report_generated_at": now, "updated_at": now}},
+    )
     return _pdf_response(pdf, _report_file_name(event.get("event_name")))
 
 
@@ -758,20 +896,60 @@ def multi_event_report(payload: ManagedReportRequest, request: Request, user: di
             detail=f"{missing} of the selected events could not be found.",
         )
 
+    customization = payload.customization.model_dump() if payload.customization else None
+    if customization and not any([
+        customization.get("include_basic_details", True),
+        customization.get("include_schedule_venue", True),
+        customization.get("include_description", True),
+        customization.get("include_other_info", True),
+        customization.get("include_photos", True),
+        customization.get("include_documents", True) and (
+            customization.get("include_notices", True) or customization.get("include_reports", True)
+        ),
+        customization.get("include_notices", False),
+        customization.get("include_reports", False),
+    ]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please select at least one section to include in the report.",
+        )
+
     exp = report_files.links_expiry()
-    entries = [_report_entry(request, found[oid], exp) for oid in wanted]
+    entries = [_report_entry(request, found[oid], exp, customization=customization) for oid in wanted]
     pdf = build_managed_report_pdf(
         entries,
         links_valid_until=datetime.fromtimestamp(exp, tz=timezone.utc),
         prepared_by={"name": user.get("name"), "email": user.get("email")},
+        customization=customization,
     )
     logger.info("managed_report_generated events=%d owner=%s", len(entries), user["id"])
+    now = utc_now()
+    try:
+        for oid in wanted:
+            ev = found[oid]
+            report_doc = {
+                "event_id": str(oid),
+                "report_title": f"Event Report - {ev.get('event_name')}",
+                "report_content": f"Event Report for {ev.get('event_name')}",
+                "generated_at": now,
+                "generated_by": user.get("id"),
+            }
+            if customization:
+                report_doc["customization"] = customization
+            event_reports.replace_one(
+                {"event_id": str(oid)},
+                report_doc,
+                upsert=True,
+            )
+    except Exception as exc:
+        logger.warning("Could not record multi report status: %s", exc)
     name = (
         _report_file_name(entries[0].event.get("event_name"))
         if len(entries) == 1
         else report_file_name(f"Consolidated_Event_Report_{utc_now():%Y-%m-%d}")
     )
     return _pdf_response(pdf, name)
+
 
 
 # ============================================================

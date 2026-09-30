@@ -396,3 +396,118 @@ class DeanReportLinkTests(unittest.TestCase):
                 )
             expired = link_signature("event", "documents", str(doc_id), 1000)
             self.assertEqual(client.get(f"/reports/files/documents/{doc_id}?exp=1000&sig={expired}").status_code, 403)
+
+
+class ReportCustomizationTests(unittest.TestCase):
+    """Dean and Event Manager report customization tests."""
+
+    def test_dean_generate_with_customization_saves_options(self) -> None:
+        client = TestClient(app)
+        reports = MagicMock()
+        payload = {
+            "include_basic_details": True,
+            "include_schedule_venue": True,
+            "include_description": False,
+            "include_other_info": False,
+            "include_photos": False,
+            "include_documents": False,
+        }
+        with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
+                patch("app.routers.reports.get_event", return_value=completed_event()), \
+                patch("app.routers.reports.get_event_media", return_value=[]), \
+                patch("app.routers.reports.get_event_documents", return_value=[]), \
+                patch("app.routers.reports.get_teacher", return_value={"name": "Prof Sharma"}), \
+                patch("app.routers.reports.event_reports", reports):
+            response = client.post(
+                "/dean/events/6aac7ecbee2ad335979f1268/generate-report",
+                json=payload,
+                headers={"Authorization": "Bearer token"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(reports.replace_one.called)
+        saved_doc = reports.replace_one.call_args[0][1]
+        expected = {**payload, "include_notices": False, "include_reports": False, "selected_photo_ids": None}
+        self.assertEqual(saved_doc.get("customization"), expected)
+        self.assertEqual(response.json()["customization"], expected)
+
+    def test_dean_generate_all_false_rejected(self) -> None:
+        client = TestClient(app)
+        payload = {
+            "include_basic_details": False,
+            "include_schedule_venue": False,
+            "include_description": False,
+            "include_other_info": False,
+            "include_photos": False,
+            "include_documents": False,
+        }
+        with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
+                patch("app.routers.reports.get_event", return_value=completed_event()):
+            response = client.post(
+                "/dean/events/6aac7ecbee2ad335979f1268/generate-report",
+                json=payload,
+                headers={"Authorization": "Bearer token"},
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("select at least one section", response.json()["detail"])
+
+    def test_dean_download_customization_filtering(self) -> None:
+        client = TestClient(app)
+        ev = completed_event()
+        with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
+                patch("app.routers.reports.get_event", return_value=ev), \
+                patch("app.routers.reports.get_report", return_value={"customization": {"include_description": False}}), \
+                patch("app.routers.reports.get_event_media", return_value=[]), \
+                patch("app.routers.reports.get_event_documents", return_value=[]), \
+                patch("app.routers.reports.get_teacher", return_value={"name": "Prof Sharma"}):
+            response = client.get(
+                f"/dean/events/{ev['id']}/report/download",
+                headers={"Authorization": "Bearer token"},
+            )
+        self.assertEqual(response.status_code, 200)
+        text = pdf_text(response.content)
+        self.assertNotIn("Event Description & Objectives", text)
+        self.assertIn("1. Event Details", text)
+
+    def test_dean_download_notice_and_report_sections_filtering(self) -> None:
+        client = TestClient(app)
+        ev = completed_event()
+        mock_docs = [
+            {"id": "doc1", "file_name": "notice.pdf", "original_name": "notice.pdf", "file_size": 1024, "category": "notice"},
+            {"id": "doc2", "file_name": "report.pdf", "original_name": "report.pdf", "file_size": 2048, "category": "report"},
+        ]
+        # Only include notices
+        with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
+                patch("app.routers.reports.get_event", return_value=ev), \
+                patch("app.routers.reports.get_report", return_value={"customization": {"include_notices": True, "include_reports": False}}), \
+                patch("app.routers.reports.get_event_media", return_value=[]), \
+                patch("app.routers.reports.get_event_documents", return_value=mock_docs), \
+                patch("app.routers.reports.get_teacher", return_value={"name": "Prof Sharma"}):
+            response = client.get(
+                f"/dean/events/{ev['id']}/report/download",
+                headers={"Authorization": "Bearer token"},
+            )
+        self.assertEqual(response.status_code, 200)
+        text = pdf_text(response.content)
+        self.assertIn("Uploaded Notices", text)
+        self.assertIn("notice.pdf", text)
+        self.assertNotIn("Uploaded Reports", text)
+        self.assertNotIn("report.pdf", text)
+
+        # Only include reports
+        with patch("app.routers.reports.get_current_user", return_value={"role": "dean"}), \
+                patch("app.routers.reports.get_event", return_value=ev), \
+                patch("app.routers.reports.get_report", return_value={"customization": {"include_notices": False, "include_reports": True}}), \
+                patch("app.routers.reports.get_event_media", return_value=[]), \
+                patch("app.routers.reports.get_event_documents", return_value=mock_docs), \
+                patch("app.routers.reports.get_teacher", return_value={"name": "Prof Sharma"}):
+            response = client.get(
+                f"/dean/events/{ev['id']}/report/download",
+                headers={"Authorization": "Bearer token"},
+            )
+        self.assertEqual(response.status_code, 200)
+        text = pdf_text(response.content)
+        self.assertNotIn("Uploaded Notices", text)
+        self.assertNotIn("notice.pdf", text)
+        self.assertIn("Uploaded Reports", text)
+        self.assertIn("report.pdf", text)

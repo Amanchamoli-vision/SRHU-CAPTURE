@@ -6,6 +6,8 @@ the Event Manager fills in the Teacher form.
 
 from pydantic import BaseModel, Field
 
+from app.schemas.reports import ReportCustomizationOptions
+
 # Photos per event in a report. The Event Manager picks them as they upload;
 # app/services/managed_report_pdf.py lays out at most this many.
 MAX_REPORT_PHOTOS = 4
@@ -23,6 +25,7 @@ class ReportPhotosRequest(BaseModel):
 
 class ManagedReportRequest(BaseModel):
     event_ids: list[str] = Field(min_length=1, max_length=MAX_EVENTS_PER_REPORT)
+    customization: ReportCustomizationOptions | None = None
 
 
 # Events one bulk delete may cover (the same ceiling as the Dean's).

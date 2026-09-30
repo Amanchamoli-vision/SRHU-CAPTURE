@@ -17,6 +17,7 @@ class DirectUploadStartRequest(BaseModel):
     content_type: str = Field(default="", max_length=255)
     # 0 is let through so the empty-file message matches the proxied upload.
     size: int = Field(ge=0, le=5 * 1024 ** 4)
+    category: str = Field(default="notice", max_length=50)
 
 
 class DirectUploadSignRequest(BaseModel):

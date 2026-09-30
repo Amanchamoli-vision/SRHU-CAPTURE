@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { buildTimeline, describeEntry } from "../../utils/eventHistory";
 import { isPendingStatus, trackOf } from "./status";
 
-const ROLE_LABEL = { teacher: "Teacher", dean: "Dean", admin: "Admin", superadmin: "Super Admin" };
+const ROLE_LABEL = { teacher: "Teacher", dean: "Dean", admin: "Admin", superadmin: "Super Admin", event_manager: "Event Manager" };
 
 const WAITING_TRACK = "#64748B"; // slate: a step that has not happened yet
 

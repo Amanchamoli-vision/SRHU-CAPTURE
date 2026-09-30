@@ -371,7 +371,7 @@ export function isAbortError(err) {
  * Returns the parsed JSON body. Pass `signal` (an AbortSignal) to cancel; a
  * cancelled upload rejects with an ApiError for which isAbortError() is true.
  */
-export function apiUpload(path, { file, fieldName = "file", onProgress, signal } = {}) {
+export function apiUpload(path, { file, fieldName = "file", extraFields, onProgress, signal } = {}) {
   const sendOnce = (token) =>
     new Promise((resolve, reject) => {
       if (signal?.aborted) {
@@ -434,6 +434,11 @@ export function apiUpload(path, { file, fieldName = "file", onProgress, signal }
 
       const form = new FormData();
       form.append(fieldName, file, file.name);
+      if (extraFields && typeof extraFields === "object") {
+        for (const [key, value] of Object.entries(extraFields)) {
+          if (value != null) form.append(key, value);
+        }
+      }
       xhr.send(form);
     });
 

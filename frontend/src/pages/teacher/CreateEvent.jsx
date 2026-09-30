@@ -53,6 +53,7 @@ import {
   IconBookmark,
   IconCheck,
   IconCheckCircle,
+  IconFile,
   IconFilePlus,
   IconFilm,
   IconImagePlus,
@@ -64,9 +65,8 @@ import {
 // from the upload limits at render time rather than fixed here.
 const STEPS = [
   { key: "details", label: "Details", Icon: IconLayers },
-  { key: "photos", label: "Photos", Icon: IconImagePlus },
+  { key: "images_and_documents", label: "Images & Documents", Icon: IconImagePlus },
   { key: "videos", label: "Videos", Icon: IconFilm },
-  { key: "documents", label: "Documents", Icon: IconFilePlus },
 ];
 
 const REQUIRED_DETAILS = [
@@ -345,6 +345,11 @@ function CreateEvent() {
   const videoUploads = uploads.filter((u) => u.kind === "video");
   const documentUploads = uploads.filter((u) => u.kind === "document");
 
+  const noticeDocuments = documentItems.filter((d) => (d.category || "notice") === "notice");
+  const reportDocuments = documentItems.filter((d) => d.category === "report");
+  const noticeUploads = documentUploads.filter((u) => (u.category || "notice") === "notice");
+  const reportUploads = documentUploads.filter((u) => u.category === "report");
+
   /** Saved records and in-flight uploads for one upload kind. */
   const bucketFor = (kind) => {
     if (kind === "image") return { items: photos, uploads: photoUploads };
@@ -356,6 +361,8 @@ function CreateEvent() {
   const photoBytesUsed = usedBytes(photos, photoUploads);
   const videoBytesUsed = usedBytes(videos, videoUploads);
   const documentBytesUsed = usedBytes(documentItems, documentUploads);
+  const noticeBytesUsed = usedBytes(noticeDocuments, noticeUploads);
+  const reportBytesUsed = usedBytes(reportDocuments, reportUploads);
 
   const uploading = uploads.some((u) => !u.error);
   const isDraftEvent = !serverEvent || serverEvent.status === "draft";
@@ -763,6 +770,7 @@ function CreateEvent() {
       const result = await uploadEventFile(`${panel.api}/events/${eventId}`, {
         kind: entry.kind,
         file: entry.file,
+        category: entry.category,
         signal,
         onProgress: (fraction) => setUploadState(entry.key, { progress: fraction }),
       });
@@ -797,7 +805,7 @@ function CreateEvent() {
    * caps hold across repeated picks rather than per batch.
    */
   /** Put files on the upload queue and run them one at a time. */
-  const queueUploads = (files, kind) => {
+  const queueUploads = (files, kind, category = "notice") => {
     if (files.length === 0) return;
 
     const entries = files.map((file) => ({
@@ -805,6 +813,7 @@ function CreateEvent() {
       name: file.name,
       size: file.size,
       kind,
+      category,
       file,
       progress: 0,
       error: null,
@@ -822,7 +831,7 @@ function CreateEvent() {
     })();
   };
 
-  const handlePick = async (files, kind) => {
+  const handlePick = async (files, kind, category = "notice") => {
     const saved = bucketFor(kind).items;
     const pending = bucketFor(kind).uploads;
 
@@ -867,10 +876,10 @@ function CreateEvent() {
     if (duplicates.length > 0) {
       // PRD 10: ask before spending the bytes. Everything non-duplicate goes
       // now so confirming only ever adds files, never re-sends them.
-      setDupPrompt({ kind, duplicates, names: duplicates.map((file) => file.name) });
+      setDupPrompt({ kind, category, duplicates, names: duplicates.map((file) => file.name) });
     }
 
-    queueUploads(accepted, kind);
+    queueUploads(accepted, kind, category);
   };
 
   const handleRemoveMedia = async (item) => {
@@ -976,19 +985,25 @@ function CreateEvent() {
     if (target > 1 && !validateDetails()) {
       return { step: 1, message: "Please complete the required fields before continuing." };
     }
-    const uploadSteps = [
-      { step: 2, bucket: "photos", noun: "photo", items: photos, pending: photoUploads },
-      { step: 3, bucket: "videos", noun: "video", items: videos, pending: videoUploads },
-    ];
-    for (const { step: at, bucket, noun, items, pending } of uploadSteps) {
-      if (target <= at || !required[bucket] || items.length > 0) continue;
-      setUploadErrors((prev) => ({ ...prev, [bucket]: true }));
-      return {
-        step: at,
-        message: pending.some((u) => !u.error)
-          ? `Please wait for your ${noun} to finish uploading before continuing.`
-          : `${noun === "photo" ? "Photo" : "Video"} upload is mandatory. Please upload at least one ${noun} before continuing.`,
-      };
+    if (target > 2) {
+      if (required.photos && photos.length === 0) {
+        setUploadErrors((prev) => ({ ...prev, photos: true }));
+        return {
+          step: 2,
+          message: photoUploads.some((u) => !u.error)
+            ? "Please wait for your photos to finish uploading before continuing."
+            : "Photo upload is mandatory. Please upload at least one photo before continuing.",
+        };
+      }
+      if (required.documents && documentItems.length === 0) {
+        setUploadErrors((prev) => ({ ...prev, documents: true }));
+        return {
+          step: 2,
+          message: documentUploads.some((u) => !u.error)
+            ? "Please wait for your documents to finish uploading before continuing."
+            : "Document upload is mandatory. Please upload at least one document before continuing.",
+        };
+      }
     }
     return null;
   };
@@ -1129,8 +1144,8 @@ function CreateEvent() {
     // Only the kinds the Super Admin has made mandatory, in step order.
     const missing = [
       { step: 2, bucket: "photos", noun: "photo", label: "Photo", count: photos.length },
+      { step: 2, bucket: "documents", noun: "document", label: "Document", count: documentItems.length },
       { step: 3, bucket: "videos", noun: "video", label: "Video", count: videos.length },
-      { step: 4, bucket: "documents", noun: "document", label: "Document", count: documentItems.length },
     ].filter(({ bucket, count }) => required[bucket] && count === 0);
 
     if (missing.length > 0) {
@@ -1389,7 +1404,7 @@ function CreateEvent() {
                       <i>{done ? <IconCheck className="h-3 w-3" /> : number}</i>
                       <span className={number === step ? "" : "hidden sm:inline"}>
                         {item.label}
-                        {required[item.key] && <span className="req ml-0.5">*</span>}
+                        {((item.key === "images_and_documents" ? (required.photos || required.documents) : required[item.key])) && <span className="req ml-0.5">*</span>}
                       </span>
                     </button>
                   </div>
@@ -1405,17 +1420,12 @@ function CreateEvent() {
               {step === 1 && "Event Information"}
               {step === 2 && (
                 <>
-                  Photo Upload {required.photos && <span className="req">*</span>}
+                  Images & Documents {(required.photos || required.documents) && <span className="req">*</span>}
                 </>
               )}
               {step === 3 && (
                 <>
                   Video Upload {required.videos && <span className="req">*</span>}
-                </>
-              )}
-              {step === 4 && (
-                <>
-                  Document Upload {required.documents && <span className="req">*</span>}
                 </>
               )}
               <span className="ml-2 text-[11px] font-semibold uppercase tracking-wider text-accent">
@@ -1431,24 +1441,11 @@ function CreateEvent() {
               )}
               {step === 2 && (
                 <>
-                  {required.photos ? (
-                    <><span className="font-semibold text-ink">Required.</span> Posters, banners and photographs — upload at least 1 photo, up to</>
-                  ) : (
-                    <>Optional. Posters, banners and photographs — up to</>
-                  )} {uploadLimits.max_photos_per_event} images, {formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each{uploadLimits.max_photo_total_mb ? ` (${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total)` : ""}.
+                  Upload event photos, banners, and documents categorized as notices or reports.
                 </>
               )}
               {step === 3 &&
                 `${required.videos ? "Required. Teasers and recordings — upload at least 1 video," : "Optional. Teasers and recordings —"} ${formatMb(uploadLimits.max_video_total_mb * 1024 * 1024)} in total${uploadLimits.max_videos_per_event ? `, up to ${uploadLimits.max_videos_per_event} videos` : ", across any number of videos"}.`}
-              {step === 4 && (
-                <>
-                  {required.documents ? (
-                    <><span className="font-semibold text-ink">Required.</span> PDF, Word, Excel, PowerPoint, Text or CSV — upload at least 1 document, up to</>
-                  ) : (
-                    <>Optional. PDF, Word, Excel, PowerPoint, Text or CSV — up to</>
-                  )} {formatMb(documentLimitBytes)} in total.
-                </>
-              )}
             </p>
           </div>
 
@@ -1705,66 +1702,191 @@ function CreateEvent() {
             </div>
           )}
 
-          {/* ------------------------------------------------- step 2: photos */}
+          {/* ---------------------------------- step 2: images & documents */}
           {step === 2 && (
-            <div className="px-4 py-5 sm:px-6">
-              <RequirementNotice
-                required={required.photos}
-                count={photos.length}
-                noun="photo"
-                plural="photos"
-                example="e.g. event poster, banner, or photograph"
-                blocksNextStep
-                failed={uploadErrors.photos}
-                detail={`Up to ${uploadLimits.max_photos_per_event} photos allowed`}
-              />
-
-              {photos.length > 0 && (
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/15 bg-accent/6 px-3.5 py-2 text-xs text-ink">
-                  <span className="flex items-center gap-2">
-                    <IconInfo className="h-4 w-4 shrink-0 text-accent" />
-                    <span>
-                      Tick up to {MAX_REPORT_PHOTOS} photos to include in the event report; it
-                      arranges them to suit their mix of portrait and landscape.
-                      {reportChoice === null &&
-                        ` Until you choose, the first ${MAX_REPORT_PHOTOS} uploaded are used.`}
-                    </span>
-                  </span>
-                  <span className="font-semibold text-accent">
-                    {savingReportPhotos ? "Saving…" : `${reportPhotoIds.length} of ${MAX_REPORT_PHOTOS} chosen`}
-                  </span>
+            <div className="px-4 py-5 sm:px-6 space-y-8">
+              {/* Section 1: Images */}
+              <section aria-labelledby="section-images-heading">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 id="section-images-heading" className="text-sm font-bold tracking-tight text-ink sm:text-base">
+                      Event Images
+                    </h3>
+                    <p className="prose-muted text-xs">
+                      Posters, banners, and photographs — up to {uploadLimits.max_photos_per_event} images, {formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each{uploadLimits.max_photo_total_mb ? ` (${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total)` : ""}.
+                    </p>
+                  </div>
+                  {required.photos && (
+                    <span className="badge badge-brand text-[11px]">Mandatory</span>
+                  )}
                 </div>
-              )}
 
-              <UploadPanel
-                kind="image"
-                accept={IMAGE_ACCEPT}
-                items={photos}
-                uploads={photoUploads}
-                max={uploadLimits.max_photos_per_event}
-                totalLimitBytes={
-                  uploadLimits.max_photo_total_mb
-                    ? uploadLimits.max_photo_total_mb * 1024 * 1024
-                    : null
-                }
-                usedBytes={photoBytesUsed}
-                maxSizeLabel={`JPG, PNG, WebP or GIF up to ${formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each${uploadLimits.max_photo_total_mb ? ` · ${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total` : ""}`}
-                emptyLabel="Drag photos here"
-                hint="Posters, banners, and photographs of the event."
-                disabled={busy}
-                required={required.photos}
-                reportSelection={{
-                  ids: reportPhotoIds,
-                  max: MAX_REPORT_PHOTOS,
-                  busy: savingReportPhotos,
-                  onToggle: toggleReportPhoto,
-                }}
-                onPick={(files) => handlePick(files, "image")}
-                onRemove={handleRemoveMedia}
-                onRetry={runUpload}
-                onDismiss={dismissUpload}
-                onLoadError={refreshMediaLinks}
-              />
+                <RequirementNotice
+                  required={required.photos}
+                  count={photos.length}
+                  noun="photo"
+                  plural="photos"
+                  example="e.g. event poster, banner, or photograph"
+                  blocksNextStep
+                  failed={uploadErrors.photos}
+                  detail={`Up to ${uploadLimits.max_photos_per_event} photos allowed`}
+                />
+
+                {photos.length > 0 && (
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/15 bg-accent/6 px-3.5 py-2 text-xs text-ink">
+                    <span className="flex items-center gap-2">
+                      <IconInfo className="h-4 w-4 shrink-0 text-accent" />
+                      <span>
+                        Tick up to {MAX_REPORT_PHOTOS} photos to include in the event report; it
+                        arranges them to suit their mix of portrait and landscape.
+                        {reportChoice === null &&
+                          ` Until you choose, the first ${MAX_REPORT_PHOTOS} uploaded are used.`}
+                      </span>
+                    </span>
+                    <span className="font-semibold text-accent">
+                      {savingReportPhotos ? "Saving…" : `${reportPhotoIds.length} of ${MAX_REPORT_PHOTOS} chosen`}
+                    </span>
+                  </div>
+                )}
+
+                <UploadPanel
+                  kind="image"
+                  accept={IMAGE_ACCEPT}
+                  items={photos}
+                  uploads={photoUploads}
+                  max={uploadLimits.max_photos_per_event}
+                  totalLimitBytes={
+                    uploadLimits.max_photo_total_mb
+                      ? uploadLimits.max_photo_total_mb * 1024 * 1024
+                      : null
+                  }
+                  usedBytes={photoBytesUsed}
+                  maxSizeLabel={`JPG, PNG, WebP or GIF up to ${formatMb(uploadLimits.max_photo_size_mb * 1024 * 1024)} each${uploadLimits.max_photo_total_mb ? ` · ${formatMb(uploadLimits.max_photo_total_mb * 1024 * 1024)} total` : ""}`}
+                  emptyLabel="Drag photos here"
+                  hint="Posters, banners, and photographs of the event."
+                  disabled={busy}
+                  required={required.photos}
+                  reportSelection={{
+                    ids: reportPhotoIds,
+                    max: MAX_REPORT_PHOTOS,
+                    busy: savingReportPhotos,
+                    onToggle: toggleReportPhoto,
+                  }}
+                  onPick={(files) => handlePick(files, "image")}
+                  onRemove={handleRemoveMedia}
+                  onRetry={runUpload}
+                  onDismiss={dismissUpload}
+                  onLoadError={refreshMediaLinks}
+                />
+              </section>
+
+              {/* Section 2: Documents */}
+              <section aria-labelledby="section-documents-heading" className="border-t hairline pt-6">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 id="section-documents-heading" className="text-sm font-bold tracking-tight text-ink sm:text-base">
+                      Event Documents
+                    </h3>
+                    <p className="prose-muted text-xs">
+                      PDF, Word, Excel, PowerPoint, TXT or CSV · {formatMb(documentLimitBytes)} total, up to {uploadLimits.max_documents_per_event} files.
+                    </p>
+                  </div>
+                  {required.documents && (
+                    <span className="badge badge-brand text-[11px]">Mandatory</span>
+                  )}
+                </div>
+
+                <RequirementNotice
+                  required={required.documents}
+                  count={documentItems.length}
+                  noun="document"
+                  plural="documents"
+                  example="e.g. event proposal, agenda, circular, or approval letter"
+                  failed={uploadErrors.documents}
+                  detail={`Total: ${formatMb(documentBytesUsed)} / ${formatMb(documentLimitBytes)}`}
+                />
+
+                {/* Categories: Notice & Report */}
+                <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  {/* Category: Notice */}
+                  <div className="rounded-2xl border hairline bg-surface/30 p-4 sm:p-5">
+                    <div className="mb-3.5 flex items-center justify-between gap-2 border-b hairline pb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center rounded-md bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
+                            Notice
+                          </span>
+                          <h4 className="text-sm font-semibold text-ink">Notice Documents</h4>
+                        </div>
+                        <p className="prose-muted mt-0.5 text-xs">
+                          Circulars, event notices, agendas, and invitations
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-raised/80 px-2.5 py-0.5 text-[11px] font-medium text-ink-muted">
+                        {noticeDocuments.length}
+                      </span>
+                    </div>
+
+                    <UploadPanel
+                      kind="document"
+                      accept={DOC_ACCEPT}
+                      items={noticeDocuments}
+                      uploads={noticeUploads}
+                      max={uploadLimits.max_documents_per_event}
+                      totalLimitBytes={documentLimitBytes}
+                      usedBytes={noticeBytesUsed}
+                      maxSizeLabel={`Notice · PDF, Word, Excel, PPT, TXT, CSV`}
+                      emptyLabel="Drag notice documents here"
+                      hint="Upload circulars, event notices, or agendas."
+                      disabled={busy}
+                      onPick={(files) => handlePick(files, "document", "notice")}
+                      onRemove={handleRemoveDocument}
+                      onRetry={runUpload}
+                      onDismiss={dismissUpload}
+                      onLoadError={refreshMediaLinks}
+                    />
+                  </div>
+
+                  {/* Category: Report */}
+                  <div className="rounded-2xl border hairline bg-surface/30 p-4 sm:p-5">
+                    <div className="mb-3.5 flex items-center justify-between gap-2 border-b hairline pb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center rounded-md bg-indigo-500/10 px-2 py-0.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                            Report
+                          </span>
+                          <h4 className="text-sm font-semibold text-ink">Report Documents</h4>
+                        </div>
+                        <p className="prose-muted mt-0.5 text-xs">
+                          Summary reports, attendance lists, and documentation
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-raised/80 px-2.5 py-0.5 text-[11px] font-medium text-ink-muted">
+                        {reportDocuments.length}
+                      </span>
+                    </div>
+
+                    <UploadPanel
+                      kind="document"
+                      accept={DOC_ACCEPT}
+                      items={reportDocuments}
+                      uploads={reportUploads}
+                      max={uploadLimits.max_documents_per_event}
+                      totalLimitBytes={documentLimitBytes}
+                      usedBytes={reportBytesUsed}
+                      maxSizeLabel={`Report · PDF, Word, Excel, PPT, TXT, CSV`}
+                      emptyLabel="Drag report documents here"
+                      hint="Upload event reports, summary PDFs, or documentation."
+                      disabled={busy}
+                      onPick={(files) => handlePick(files, "document", "report")}
+                      onRemove={handleRemoveDocument}
+                      onRetry={runUpload}
+                      onDismiss={dismissUpload}
+                      onLoadError={refreshMediaLinks}
+                    />
+                  </div>
+                </div>
+              </section>
             </div>
           )}
 
@@ -1796,41 +1918,6 @@ function CreateEvent() {
                 required={required.videos}
                 onPick={(files) => handlePick(files, "video")}
                 onRemove={handleRemoveMedia}
-                onRetry={runUpload}
-                onDismiss={dismissUpload}
-                onLoadError={refreshMediaLinks}
-              />
-            </div>
-          )}
-
-          {/* ---------------------------------------------- step 4: documents */}
-          {step === 4 && (
-            <div className="px-4 py-5 sm:px-6">
-              <RequirementNotice
-                required={required.documents}
-                count={documentItems.length}
-                noun="document"
-                plural="documents"
-                example="e.g. event proposal, agenda, circular, or approval letter"
-                failed={uploadErrors.documents}
-                detail={`Total: ${formatMb(documentBytesUsed)} / ${formatMb(documentLimitBytes)}`}
-              />
-
-              <UploadPanel
-                kind="document"
-                accept={DOC_ACCEPT}
-                items={documentItems}
-                uploads={documentUploads}
-                max={uploadLimits.max_documents_per_event}
-                totalLimitBytes={documentLimitBytes}
-                usedBytes={documentBytesUsed}
-                maxSizeLabel={`PDF, Word, Excel, PowerPoint, TXT or CSV · ${formatMb(documentLimitBytes)} total, up to ${uploadLimits.max_documents_per_event} files`}
-                emptyLabel="Drag documents here"
-                hint="Agenda, budget, invitation letter, or approval paperwork."
-                disabled={busy}
-                required={required.documents}
-                onPick={(files) => handlePick(files, "document")}
-                onRemove={handleRemoveDocument}
                 onRetry={runUpload}
                 onDismiss={dismissUpload}
                 onLoadError={refreshMediaLinks}
@@ -2026,7 +2113,7 @@ function CreateEvent() {
               onClick={() => {
                 const pending = dupPrompt;
                 setDupPrompt(null);
-                if (pending) queueUploads(pending.duplicates, pending.kind);
+                if (pending) queueUploads(pending.duplicates, pending.kind, pending.category);
               }}
             >
               Upload anyway

@@ -141,6 +141,15 @@ class FakeCollection:
     def count_documents(self, query):
         return len(self.find(query))
 
+    def replace_one(self, query, replacement, upsert=False):
+        doc = self.find_one(query)
+        if doc:
+            rep = copy.deepcopy(replacement)
+            rep["_id"] = doc["_id"]
+            self.docs[doc["_id"]] = rep
+        elif upsert:
+            self.insert_one(copy.deepcopy(replacement))
+
     def update_one(self, query, update):
         doc = self.find_one(query)
         if not doc:
@@ -189,6 +198,7 @@ class EventManagerTestCase(unittest.TestCase):
         self.events = FakeCollection()
         self.media = FakeCollection()
         self.documents = FakeCollection()
+        self.reports = FakeCollection()
         self.fs = FakeFS()
         self.deleted: list[dict] = []
 
@@ -203,6 +213,7 @@ class EventManagerTestCase(unittest.TestCase):
             ("app.routers.event_manager.managed_events", self.events),
             ("app.routers.event_manager.managed_event_media", self.media),
             ("app.routers.event_manager.managed_event_documents", self.documents),
+            ("app.routers.event_manager.event_reports", self.reports),
             ("app.routers.event_manager.fs", self.fs),
             ("app.routers.event_manager.save_upload", fake_save),
             ("app.routers.event_manager.delete_stored", self.deleted.append),
@@ -464,7 +475,10 @@ def pdf_text(data: bytes) -> str:
 
 
 def pdf_links(data: bytes) -> list[str]:
-    from pypdf import PdfReader
+    try:
+        from pypdf import PdfReader
+    except ImportError:  # pragma: no cover - optional in deployments
+        raise unittest.SkipTest("pypdf not installed")
 
     links = []
     for page in PdfReader(io.BytesIO(data)).pages:
@@ -560,6 +574,112 @@ class ReportTests(EventManagerTestCase):
     def test_teacher_cannot_generate_a_manager_report(self) -> None:
         event = self.draft()
         self.assertEqual(self.call("GET", f"/event-manager/events/{event['id']}/report", "teacher").status_code, 403)
+
+    def test_manager_report_customization_filtering(self) -> None:
+        event = self.seeded()
+        payload = {
+            "include_basic_details": True,
+            "include_schedule_venue": True,
+            "include_description": False,
+            "include_other_info": True,
+            "include_photos": False,
+            "include_documents": True,
+        }
+        response = self.call("POST", f"/event-manager/events/{event['id']}/report", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "application/pdf")
+        text = pdf_text(response.content)
+        self.assertNotIn("Event Description & Objectives", text)
+        self.assertNotIn("Event Photos", text)
+        self.assertIn("1. Event Details", text)
+        self.assertIn("Himalayan Robotics Expo", text)
+
+    def test_manager_report_notice_and_report_filtering(self) -> None:
+        event = self.draft()
+        self.call(
+            "POST", f"/event-manager/events/{event['id']}/documents", "mgr",
+            files={"file": ("notice.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+            data={"category": "notice"},
+        )
+        self.call(
+            "POST", f"/event-manager/events/{event['id']}/documents", "mgr",
+            files={"file": ("summary_report.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+            data={"category": "report"},
+        )
+        self.save(event["id"])
+
+        # Include notices only:
+        resp = self.call("POST", f"/event-manager/events/{event['id']}/report", json={
+            "include_notices": True,
+            "include_reports": False,
+        })
+        self.assertEqual(resp.status_code, 200)
+        text = pdf_text(resp.content)
+        self.assertIn("Uploaded Notices", text)
+        self.assertIn("notice.pdf", text)
+        self.assertNotIn("Uploaded Reports", text)
+        self.assertNotIn("summary_report.pdf", text)
+
+        # Include reports only:
+        resp2 = self.call("POST", f"/event-manager/events/{event['id']}/report", json={
+            "include_notices": False,
+            "include_reports": True,
+        })
+        self.assertEqual(resp2.status_code, 200)
+        text2 = pdf_text(resp2.content)
+        self.assertNotIn("Uploaded Notices", text2)
+        self.assertNotIn("notice.pdf", text2)
+        self.assertIn("Uploaded Reports", text2)
+        self.assertIn("summary_report.pdf", text2)
+
+    def test_manager_report_selected_photo_ids(self) -> None:
+        event = self.draft()
+        photo_resp = self.photo(event["id"])
+        self.assertEqual(photo_resp.status_code, 201)
+        photo_id = photo_resp.json()["media"]["id"]
+        self.save(event["id"])
+
+        payload = {
+            "include_photos": True,
+            "selected_photo_ids": [photo_id, "nonexistent_id"],
+        }
+        response = self.call("POST", f"/event-manager/events/{event['id']}/report", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "application/pdf")
+        text = pdf_text(response.content)
+        self.assertIn("Event Photos", text)
+
+    def test_manager_report_all_false_rejected(self) -> None:
+        event = self.seeded()
+        payload = {
+            "include_basic_details": False,
+            "include_schedule_venue": False,
+            "include_description": False,
+            "include_other_info": False,
+            "include_photos": False,
+            "include_documents": False,
+        }
+        response = self.call("POST", f"/event-manager/events/{event['id']}/report", json=payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("select at least one section", response.json()["detail"])
+
+    def test_manager_multi_event_customization(self) -> None:
+        first = self.seeded(event_name="Alpha Talk")
+        second = self.seeded(event_name="Beta Talk")
+        payload = {
+            "event_ids": [first["id"], second["id"]],
+            "customization": {
+                "include_description": False,
+                "include_photos": False,
+            },
+        }
+        response = self.call("POST", "/event-manager/reports", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        text = pdf_text(response.content)
+        self.assertNotIn("Event Description & Objectives", text)
+        self.assertNotIn("Event Photos", text)
+        self.assertIn("Alpha Talk", text)
+        self.assertIn("Beta Talk", text)
 
 
 class PhotoLayoutTests(unittest.TestCase):
@@ -716,7 +836,10 @@ class PhotoLayoutTests(unittest.TestCase):
         self.assertIn("2. Event Description", text)
 
     def test_consolidated_report_structure(self) -> None:
-        from pypdf import PdfReader
+        try:
+            from pypdf import PdfReader
+        except ImportError:  # pragma: no cover - optional in deployments
+            raise unittest.SkipTest("pypdf not installed")
 
         entries = [
             ReportEntry(
