@@ -101,3 +101,47 @@ export function formatDateRange(start, end) {
 
   return `${first} – ${last}`;
 }
+
+// ---------------------------------------------------------------------------
+// dd/mm/yyyy -- how dates are typed and shown on the event form. The value the
+// app stores and compares stays "YYYY-MM-DD"; these only convert at the edge.
+// Plain arithmetic, no Date objects, so no timezone can move the day.
+// ---------------------------------------------------------------------------
+
+function daysInMonth(year, month) {
+  if (month === 2) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return leap ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/** "2026-09-05" -> "05/09/2026"; anything else -> "". */
+export function isoToDmy(iso) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : "";
+}
+
+/**
+ * "05/09/2026" -> "2026-09-05", or "" unless it is a complete, real calendar
+ * date (31/02/2026 and 29/02/2027 are refused). Dots and dashes work as
+ * separators too.
+ */
+export function dmyToIso(text) {
+  const match = /^(\d{2})[/.-](\d{2})[/.-](\d{4})$/.exec((text || "").trim());
+  if (!match) return "";
+  const [, dd, mm, yyyy] = match;
+  const day = Number(dd);
+  const month = Number(mm);
+  const year = Number(yyyy);
+  if (year < 1900 || month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) return "";
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Digits typed so far, shaped as "dd/mm/yyyy" with the slashes filled in. */
+export function maskDmy(raw) {
+  const digits = String(raw || "").replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
