@@ -1,15 +1,13 @@
-import { useState, useId } from "react";
+import { useState } from "react";
 import Modal from "../teacher/Modal";
 import {
   IconCalendar,
-  IconClock,
   IconDownload,
   IconFile,
   IconFileText,
   IconImagePlus,
   IconTag,
   IconUsers,
-  IconCheck,
 } from "../teacher/icons";
 
 /**
