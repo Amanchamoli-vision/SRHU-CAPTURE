@@ -4,10 +4,12 @@ import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiJson, isAbortError } from "../../services/api";
 import DeanShell from "../../components/dean/DeanShell";
 import Modal from "../../components/teacher/Modal";
+import DateRangeModal from "../../components/common/DateRangeModal";
 import { trackOf } from "../../components/teacher/status";
 import {
   IconAlertTriangle,
   IconArchive,
+  IconCalendar,
   IconCheck,
   IconCheckCircle,
   IconEye,
@@ -141,12 +143,13 @@ function AllEvents() {
   // out of step with the rows it produced. Every filter change resets to
   // page 1 -- narrowing a filter while on page 7 would otherwise show an
   // empty table and read as a bug.
-  const { query, setFilter, setPage, setPerPage, reset } = useTableQuery();
+  const { query, setFilter, setFilters, setPage, setPerPage, reset } = useTableQuery();
   // Categories come from the server now, so a type a teacher added is
   // filterable here -- which the old hardcoded list could not do.
   const { types: eventTypes } = useEventTypes();
   const { page, per, q: searchQuery, status: statusFilter, type: typeFilter,
-          date: selectedDate } = query;
+          date: selectedDate, startDate, endDate } = query;
+  const [showDateRangeModal, setShowDateRangeModal] = useState(false);
 
   // The search box is uncontrolled by the URL while typing: writing every
   // keystroke to history would flood it and refetch per character.
@@ -208,6 +211,8 @@ function AllEvents() {
         limit: String(query.per),
       });
       if (query.date) params.set("event_date", query.date);
+      if (query.startDate) params.set("start_date", query.startDate);
+      if (query.endDate) params.set("end_date", query.endDate);
       if (query.type) params.set("event_type", query.type);
       if (query.q) params.set("q", query.q);
       if (query.source) params.set("source", query.source);
@@ -233,7 +238,7 @@ function AllEvents() {
     }
     // handleApiError is stable for the lifetime of the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.skip, query.per, query.date, query.type, query.q, query.status, query.source]);
+  }, [query.skip, query.per, query.date, query.startDate, query.endDate, query.type, query.q, query.status, query.source]);
 
   // ============================================================
   // INITIAL LOAD
@@ -292,7 +297,8 @@ function AllEvents() {
   // DATE CHANGE
   // ============================================================
 
-  const handleDateChange = (event) => setFilter("date", event.target.value);
+  const handleDateChange = (event) =>
+    setFilters({ date: event.target.value, startDate: "", endDate: "" });
 
   // ============================================================
   // FORMAT DATE
@@ -380,6 +386,8 @@ function AllEvents() {
       // One request for every matching id, however many pages they span.
       const params = new URLSearchParams();
       if (query.date) params.set("event_date", query.date);
+      if (query.startDate) params.set("start_date", query.startDate);
+      if (query.endDate) params.set("end_date", query.endDate);
       if (query.type) params.set("event_type", query.type);
       if (query.q) params.set("q", query.q);
       if (query.source) params.set("source", query.source);
@@ -592,7 +600,9 @@ function AllEvents() {
     statusFilter !== "all" ||
     typeFilter !== "" ||
     query.source !== "" ||
-    selectedDate !== "";
+    selectedDate !== "" ||
+    startDate !== "" ||
+    endDate !== "";
 
   const handleClearAllFilters = () => {
     setSearchDraft("");
@@ -742,6 +752,27 @@ function AllEvents() {
                 aria-label="Filter by event date"
                 className="input min-w-0 flex-1 sm:w-42 sm:flex-none"
               />
+
+              <button
+                type="button"
+                onClick={() => setShowDateRangeModal(true)}
+                className={`btn btn-sm shrink-0 ${
+                  startDate || endDate ? "btn-primary font-medium" : "btn-ghost"
+                }`}
+                title="Filter by date range"
+                aria-label="Filter by date range"
+              >
+                <IconCalendar />
+                <span>
+                  {startDate && endDate
+                    ? `${startDate} – ${endDate}`
+                    : startDate
+                      ? `From ${startDate}`
+                      : endDate
+                        ? `Until ${endDate}`
+                        : "Date Range"}
+                </span>
+              </button>
             </div>
 
             <button
@@ -1296,6 +1327,19 @@ function AllEvents() {
           </div>
         )}
       </Modal>
+
+      <DateRangeModal
+        open={showDateRangeModal}
+        onClose={() => setShowDateRangeModal(false)}
+        startDate={startDate}
+        endDate={endDate}
+        onApply={({ startDate: s, endDate: e }) => {
+          setFilters({ startDate: s, endDate: e, date: "" });
+        }}
+        onClear={() => {
+          setFilters({ startDate: "", endDate: "" });
+        }}
+      />
     </DeanShell>
   );
 }
