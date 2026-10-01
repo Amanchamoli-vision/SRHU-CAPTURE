@@ -73,7 +73,12 @@ export default function DateRangeModal({
       open={open}
       onClose={onClose}
       eyebrow="Filter Events"
-      title="Filter by Date Range"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <IconCalendar className="h-5 w-5 text-accent shrink-0" aria-hidden="true" />
+          <span>Filter by Date Range</span>
+        </span>
+      }
       subtitle="Select a start date and end date to view events within that period."
       footer={
         <div className="flex w-full items-center justify-between gap-3">
