@@ -114,6 +114,10 @@ class FakeEvents:
                     return False
                 if "$nin" in expected and value in expected["$nin"]:
                     return False
+                if "$gte" in expected and (value is None or value < expected["$gte"]):
+                    return False
+                if "$lte" in expected and (value is None or value > expected["$lte"]):
+                    return False
                 if "$regex" in expected:
                     flags = re.I if "i" in expected.get("$options", "") else 0
                     if not isinstance(value, str) or not re.search(

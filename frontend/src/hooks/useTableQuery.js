@@ -31,11 +31,22 @@ export default function useTableQuery(defaults = {}) {
       status: searchParams.get("status") ?? defaults.status ?? "all",
       type: searchParams.get("type") ?? defaults.type ?? "",
       date: searchParams.get("date") ?? defaults.date ?? "",
+      startDate: searchParams.get("start_date") ?? defaults.startDate ?? "",
+      endDate: searchParams.get("end_date") ?? defaults.endDate ?? "",
       source: searchParams.get("source") ?? defaults.source ?? "",
       skip: (page - 1) * per,
     };
     // defaults is a literal at every call site; re-reading it per render is fine.
-  }, [searchParams, defaults.q, defaults.status, defaults.type, defaults.date, defaults.source]);
+  }, [
+    searchParams,
+    defaults.q,
+    defaults.status,
+    defaults.type,
+    defaults.date,
+    defaults.startDate,
+    defaults.endDate,
+    defaults.source,
+  ]);
 
   const write = useCallback(
     (next, { replace = false } = {}) => {
@@ -48,6 +59,8 @@ export default function useTableQuery(defaults = {}) {
       if (next.status && next.status !== "all") params.set("status", next.status);
       if (next.type) params.set("type", next.type);
       if (next.date) params.set("date", next.date);
+      if (next.startDate) params.set("start_date", next.startDate);
+      if (next.endDate) params.set("end_date", next.endDate);
       if (next.source) params.set("source", next.source);
       setSearchParams(params, { replace });
     },
@@ -58,6 +71,14 @@ export default function useTableQuery(defaults = {}) {
   const setFilter = useCallback(
     (name, value, options) => {
       write({ ...query, [name]: value, page: 1 }, options);
+    },
+    [query, write],
+  );
+
+  /** Change multiple filters atomically and return to the first page. */
+  const setFilters = useCallback(
+    (patch, options) => {
+      write({ ...query, ...patch, page: 1 }, options);
     },
     [query, write],
   );
@@ -73,9 +94,20 @@ export default function useTableQuery(defaults = {}) {
   );
 
   const reset = useCallback(
-    () => write({ page: 1, per: query.per, q: "", status: "all", type: "", date: "", source: "" }),
+    () =>
+      write({
+        page: 1,
+        per: query.per,
+        q: "",
+        status: "all",
+        type: "",
+        date: "",
+        startDate: "",
+        endDate: "",
+        source: "",
+      }),
     [query.per, write],
   );
 
-  return { query, setFilter, setPage, setPerPage, reset };
+  return { query, setFilter, setFilters, setPage, setPerPage, reset };
 }

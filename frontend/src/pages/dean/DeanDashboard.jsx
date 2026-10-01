@@ -5,6 +5,7 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiJson, isAbortError } from "../../services/api";
 import DeanShell from "../../components/dean/DeanShell";
+import DateRangeModal from "../../components/common/DateRangeModal";
 import { programShare } from "../../components/dean/programShades";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
@@ -67,6 +68,9 @@ export default function DeanDashboard() {
 
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedEventType, setSelectedEventType] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [showDateRangeModal, setShowDateRangeModal] = useState(false);
 
   // Signed-in Dean, used for the header and rail account blocks.
   const [deanProfile, setDeanProfile] = useState(null);
@@ -87,11 +91,16 @@ export default function DeanDashboard() {
   const [error, setError] = useState("");
 
   // The filters in force, read by the refresh a new notification triggers.
-  const filtersRef = useRef({ selectedDate: "", selectedEventType: "" });
+  const filtersRef = useRef({
+    selectedDate: "",
+    selectedEventType: "",
+    startDate: "",
+    endDate: "",
+  });
 
   useEffect(() => {
-    filtersRef.current = { selectedDate, selectedEventType };
-  }, [selectedDate, selectedEventType]);
+    filtersRef.current = { selectedDate, selectedEventType, startDate, endDate };
+  }, [selectedDate, selectedEventType, startDate, endDate]);
 
   // ============================================
   // LOGOUT
@@ -151,7 +160,7 @@ export default function DeanDashboard() {
 
   useEffect(() => () => eventsControllerRef.current?.abort(), []);
 
-  const loadEvents = async (date = "", eventType = "") => {
+  const loadEvents = async (date = "", eventType = "", start = "", end = "") => {
     eventsControllerRef.current?.abort();
     const controller = new AbortController();
     eventsControllerRef.current = controller;
@@ -164,6 +173,14 @@ export default function DeanDashboard() {
 
       if (date) {
         params.append("event_date", date);
+      }
+
+      if (start) {
+        params.append("start_date", start);
+      }
+
+      if (end) {
+        params.append("end_date", end);
       }
 
       if (eventType) {
@@ -227,7 +244,9 @@ export default function DeanDashboard() {
     loadStats();
     loadEvents(
       filtersRef.current.selectedDate,
-      filtersRef.current.selectedEventType
+      filtersRef.current.selectedEventType,
+      filtersRef.current.startDate,
+      filtersRef.current.endDate
     );
   };
 
@@ -258,7 +277,7 @@ export default function DeanDashboard() {
   // covers a list that shrank under the page being looked at.
   useEffect(() => {
     setPage(1);
-  }, [searchQuery, statusFilter, selectedDate, selectedEventType]);
+  }, [searchQuery, statusFilter, selectedDate, startDate, endDate, selectedEventType]);
 
   const pageCount = Math.max(1, Math.ceil(visibleEvents.length / perPage));
   const currentPage = Math.min(page, pageCount);
@@ -268,6 +287,8 @@ export default function DeanDashboard() {
     searchQuery.trim() !== "" ||
     statusFilter !== "all" ||
     selectedDate !== "" ||
+    startDate !== "" ||
+    endDate !== "" ||
     selectedEventType !== "";
 
   // ============================================
@@ -327,7 +348,7 @@ export default function DeanDashboard() {
     setSelectedEventType(name);
     setActiveView("submissions");
 
-    loadEvents(selectedDate, name);
+    loadEvents(selectedDate, name, startDate, endDate);
   };
 
   // ============================================
@@ -338,8 +359,25 @@ export default function DeanDashboard() {
     const date = event.target.value;
 
     setSelectedDate(date);
+    setStartDate("");
+    setEndDate("");
 
-    loadEvents(date, selectedEventType);
+    loadEvents(date, selectedEventType, "", "");
+  };
+
+  const handleApplyDateRange = ({ startDate: s, endDate: e }) => {
+    setStartDate(s);
+    setEndDate(e);
+    setSelectedDate("");
+
+    loadEvents("", selectedEventType, s, e);
+  };
+
+  const handleClearDateRange = () => {
+    setStartDate("");
+    setEndDate("");
+
+    loadEvents(selectedDate, selectedEventType, "", "");
   };
 
   // ============================================
@@ -351,7 +389,7 @@ export default function DeanDashboard() {
 
     setSelectedEventType(eventType);
 
-    loadEvents(selectedDate, eventType);
+    loadEvents(selectedDate, eventType, startDate, endDate);
   };
 
   // ============================================
@@ -360,11 +398,13 @@ export default function DeanDashboard() {
 
   const clearFilters = () => {
     setSelectedDate("");
+    setStartDate("");
+    setEndDate("");
     setSelectedEventType("");
     setSearchQuery("");
     setStatusFilter("all");
 
-    loadEvents("", "");
+    loadEvents("", "", "", "");
   };
 
   // ============================================
@@ -376,7 +416,7 @@ export default function DeanDashboard() {
 
     await Promise.all([
       loadStats(),
-      loadEvents(selectedDate, selectedEventType),
+      loadEvents(selectedDate, selectedEventType, startDate, endDate),
     ]);
   };
 
@@ -744,6 +784,27 @@ export default function DeanDashboard() {
                   className="input w-full sm:w-auto"
                 />
 
+                <button
+                  type="button"
+                  onClick={() => setShowDateRangeModal(true)}
+                  className={`btn btn-sm shrink-0 ${
+                    startDate || endDate ? "btn-primary font-medium" : "btn-ghost"
+                  }`}
+                  title="Filter by date range"
+                  aria-label="Filter by date range"
+                >
+                  <IconCalendar />
+                  <span>
+                    {startDate && endDate
+                      ? `${startDate} – ${endDate}`
+                      : startDate
+                        ? `From ${startDate}`
+                        : endDate
+                          ? `Until ${endDate}`
+                          : "Date Range"}
+                  </span>
+                </button>
+
                 <select
                   value={selectedEventType}
                   onChange={handleEventTypeChange}
@@ -925,6 +986,15 @@ export default function DeanDashboard() {
           </>
         )}
       </div>
+
+      <DateRangeModal
+        open={showDateRangeModal}
+        onClose={() => setShowDateRangeModal(false)}
+        startDate={startDate}
+        endDate={endDate}
+        onApply={handleApplyDateRange}
+        onClear={handleClearDateRange}
+      />
     </DeanShell>
   );
 }

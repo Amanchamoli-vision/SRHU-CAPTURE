@@ -756,6 +756,8 @@ def _dean_event_query(
     event_type: str | None,
     q: str | None,
     status_bucket: str | None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict:
     """The Dean list's filter, shared with GET /dean/events/ids.
 
@@ -777,6 +779,36 @@ def _dean_event_query(
                     "Use YYYY-MM-DD."
                 )
             )
+
+    if start_date:
+        try:
+            date.fromisoformat(start_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Invalid start_date format. "
+                    "Use YYYY-MM-DD."
+                )
+            )
+
+    if end_date:
+        try:
+            date.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Invalid end_date format. "
+                    "Use YYYY-MM-DD."
+                )
+            )
+
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date cannot be after end_date.",
+        )
 
     # --------------------------------------------------------
     # VALIDATE EVENT TYPE
@@ -805,7 +837,14 @@ def _dean_event_query(
     # moved to the archive shelf (PRD 1).
     query: dict = {"status": {"$ne": "draft"}, "archived_at": None}
 
-    if event_date:
+    if start_date or end_date:
+        date_filter = {}
+        if start_date:
+            date_filter["$gte"] = start_date
+        if end_date:
+            date_filter["$lte"] = end_date
+        query["event_date"] = date_filter
+    elif event_date:
         query["event_date"] = event_date
 
     if normalized_event_type:
@@ -883,6 +922,14 @@ def get_all_events(
         default=None
     ),
 
+    start_date: str | None = Query(
+        default=None
+    ),
+
+    end_date: str | None = Query(
+        default=None
+    ),
+
     event_type: str | None = Query(
         default=None
     ),
@@ -904,7 +951,7 @@ def get_all_events(
     user = get_current_user(authorization)
     check_event_viewer(user)
 
-    query = _dean_event_query(event_date, event_type, q, status_bucket)
+    query = _dean_event_query(event_date, event_type, q, status_bucket, start_date=start_date, end_date=end_date)
     use_events, use_managed = event_sources(source)
 
     # Counts for the status tabs, under the same non-status filters, so the
@@ -968,6 +1015,8 @@ def get_all_events(
 
         "filters": {
             "event_date": event_date,
+            "start_date": start_date,
+            "end_date": end_date,
             # The resolved spelling, which _dean_event_query put in the filter.
             "event_type": query.get("event_type"),
         },
@@ -984,6 +1033,8 @@ def get_all_events(
 def get_dean_event_ids(
     authorization: str | None = Header(default=None),
     event_date: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=200),
     status_bucket: str | None = Query(default=None, max_length=20),
@@ -997,7 +1048,7 @@ def get_dean_event_ids(
     user = get_current_user(authorization)
     check_event_viewer(user)
 
-    query = _dean_event_query(event_date, event_type, q, status_bucket)
+    query = _dean_event_query(event_date, event_type, q, status_bucket, start_date=start_date, end_date=end_date)
     use_events, use_managed = event_sources(source)
     found = []
     if use_events:

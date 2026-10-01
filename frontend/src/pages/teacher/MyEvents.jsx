@@ -22,6 +22,7 @@ import {
   reportNotice,
 } from "../../services/eventManager";
 import Modal from "../../components/teacher/Modal";
+import DateRangeModal from "../../components/common/DateRangeModal";
 import ReportCustomizationModal from "../../components/common/ReportCustomizationModal";
 import StatusChip from "../../components/teacher/StatusChip";
 import {
@@ -33,6 +34,7 @@ import {
 import {
   IconAlertTriangle,
   IconArrowRight,
+  IconCalendar,
   IconCheck,
   IconCheckCircle,
   IconCopy,
@@ -213,6 +215,7 @@ function MyEvents() {
   const [dateFilter, setDateFilter] = useState("all_time"); // all_time | today | this_week | this_month | custom
   const [customFromDate, setCustomFromDate] = useState("");
   const [customToDate, setCustomToDate] = useState("");
+  const [showDateRangeModal, setShowDateRangeModal] = useState(false);
 
   // Delete modal state
   const [deletingEvent, setDeletingEvent] = useState(null);
@@ -691,7 +694,13 @@ function MyEvents() {
                 same five choices in one control instead of a whole row. */}
             <select
               value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setDateFilter(val);
+                if (val === "custom") {
+                  setShowDateRangeModal(true);
+                }
+              }}
               aria-label="Filter by date range"
               className="input w-full sm:w-auto"
             >
@@ -701,6 +710,29 @@ function MyEvents() {
                 </option>
               ))}
             </select>
+
+            <button
+              type="button"
+              onClick={() => setShowDateRangeModal(true)}
+              className={`btn btn-sm shrink-0 ${
+                dateFilter === "custom" && (customFromDate || customToDate)
+                  ? "btn-primary font-medium"
+                  : "btn-ghost"
+              }`}
+              title="Set date range"
+              aria-label="Set date range"
+            >
+              <IconCalendar />
+              <span>
+                {dateFilter === "custom" && customFromDate && customToDate
+                  ? `${customFromDate} – ${customToDate}`
+                  : dateFilter === "custom" && customFromDate
+                    ? `From ${customFromDate}`
+                    : dateFilter === "custom" && customToDate
+                      ? `Until ${customToDate}`
+                      : "Date Range"}
+              </span>
+            </button>
 
             {dateFilter === "custom" && (
               <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -1217,6 +1249,23 @@ function MyEvents() {
         }
         isConsolidated={customizingReport?.type === "selected"}
         eventCount={customizingReport?.count || 1}
+      />
+
+      <DateRangeModal
+        open={showDateRangeModal}
+        onClose={() => setShowDateRangeModal(false)}
+        startDate={customFromDate}
+        endDate={customToDate}
+        onApply={({ startDate, endDate }) => {
+          setCustomFromDate(startDate);
+          setCustomToDate(endDate);
+          setDateFilter("custom");
+        }}
+        onClear={() => {
+          setCustomFromDate("");
+          setCustomToDate("");
+          setDateFilter("all_time");
+        }}
       />
     </TeacherShell>
   );
