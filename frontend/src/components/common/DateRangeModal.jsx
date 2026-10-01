@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Modal from "../teacher/Modal";
 import { IconCalendar, IconRotateCcw } from "../teacher/icons";
+import DateInputDMY from "./DateInputDMY";
 
 /**
  * Date Range Modal
@@ -124,13 +125,12 @@ export default function DateRangeModal({
               <IconCalendar className="h-3.5 w-3.5 text-muted" />
               Start Date
             </label>
-            <input
+            <DateInputDMY
               id="date-range-start"
-              type="date"
+              name="startDate"
               value={draftStart}
               max={draftEnd || undefined}
               onChange={(e) => handleStartChange(e.target.value)}
-              className="input w-full"
               autoFocus
             />
           </div>
@@ -143,13 +143,12 @@ export default function DateRangeModal({
               <IconCalendar className="h-3.5 w-3.5 text-muted" />
               End Date
             </label>
-            <input
+            <DateInputDMY
               id="date-range-end"
-              type="date"
+              name="endDate"
               value={draftEnd}
               min={draftStart || undefined}
               onChange={(e) => handleEndChange(e.target.value)}
-              className="input w-full"
             />
           </div>
         </div>

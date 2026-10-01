@@ -26,6 +26,7 @@ export default function DateInputDMY({
   min,
   max,
   disabled = false,
+  autoFocus = false,
   ariaInvalid,
   className = "input min-h-10 py-2",
 }) {
@@ -80,6 +81,7 @@ export default function DateInputDMY({
         value={text}
         onChange={handleType}
         disabled={disabled}
+        autoFocus={autoFocus}
         aria-invalid={ariaInvalid}
         aria-describedby={id ? `${id}-format` : undefined}
         className={`${className} pr-11`}
