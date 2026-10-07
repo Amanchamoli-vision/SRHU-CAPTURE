@@ -118,3 +118,20 @@ export function downloadEventsReport(ids, customization = null) {
     reportFileName(`Consolidated_Event_Report_${new Date().toISOString().slice(0, 10)}`),
   );
 }
+
+/** Download (or open) the report for one Dean event. Resolves with the outcome. */
+export function downloadDeanEventReport(id, eventName, customization = null) {
+  const options = customization ? { method: "POST", body: customization } : {};
+  return fetchReport(`/dean/events/${id}/report/download`, options, reportFileName(eventName));
+}
+
+/** One consolidated report for several Dean events. */
+export function downloadDeanEventsReport(ids, customization = null) {
+  const body = { event_ids: ids };
+  if (customization) body.customization = customization;
+  return fetchReport(
+    `/dean/reports`,
+    { method: "POST", body },
+    reportFileName(`Consolidated_Event_Report_${new Date().toISOString().slice(0, 10)}`),
+  );
+}

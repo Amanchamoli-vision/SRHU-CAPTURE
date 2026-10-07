@@ -16,11 +16,11 @@ import { useSearchParams } from "react-router-dom";
 export const DEFAULT_PER_PAGE = 25;
 export const PER_PAGE_OPTIONS = [25, 50, 100];
 
-export default function useTableQuery(defaults = {}) {
+export default function useTableQuery(defaults = {}, { paginate = true } = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const query = useMemo(() => {
-    const page = Math.max(1, Number(searchParams.get("page")) || 1);
+    const page = paginate ? Math.max(1, Number(searchParams.get("page")) || 1) : 1;
     const rawPer = Number(searchParams.get("per")) || DEFAULT_PER_PAGE;
     const per = PER_PAGE_OPTIONS.includes(rawPer) ? rawPer : DEFAULT_PER_PAGE;
 
@@ -34,11 +34,12 @@ export default function useTableQuery(defaults = {}) {
       startDate: searchParams.get("start_date") ?? defaults.startDate ?? "",
       endDate: searchParams.get("end_date") ?? defaults.endDate ?? "",
       source: searchParams.get("source") ?? defaults.source ?? "",
-      skip: (page - 1) * per,
+      skip: paginate ? (page - 1) * per : 0,
     };
     // defaults is a literal at every call site; re-reading it per render is fine.
   }, [
     searchParams,
+    paginate,
     defaults.q,
     defaults.status,
     defaults.type,
@@ -53,8 +54,10 @@ export default function useTableQuery(defaults = {}) {
       const params = new URLSearchParams();
       // Only non-default values are written, so the common case stays a clean
       // URL rather than ?page=1&per=25&q=&status=all&type=&date=
-      if (next.page > 1) params.set("page", String(next.page));
-      if (next.per !== DEFAULT_PER_PAGE) params.set("per", String(next.per));
+      if (paginate) {
+        if (next.page > 1) params.set("page", String(next.page));
+        if (next.per !== DEFAULT_PER_PAGE) params.set("per", String(next.per));
+      }
       if (next.q) params.set("q", next.q);
       if (next.status && next.status !== "all") params.set("status", next.status);
       if (next.type) params.set("type", next.type);
@@ -64,7 +67,7 @@ export default function useTableQuery(defaults = {}) {
       if (next.source) params.set("source", next.source);
       setSearchParams(params, { replace });
     },
-    [setSearchParams],
+    [paginate, setSearchParams],
   );
 
   /** Change one filter and return to the first page. */
