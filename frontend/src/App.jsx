@@ -167,6 +167,10 @@ function App() {
 
             {/* ================= DEAN ================= */}
             <Route
+              path="/dean"
+              element={<Navigate to="/dean/dashboard" replace />}
+            />
+            <Route
               path="/dean/dashboard"
               element={
                 <ProtectedRoute allowedRoles={["dean"]}>
