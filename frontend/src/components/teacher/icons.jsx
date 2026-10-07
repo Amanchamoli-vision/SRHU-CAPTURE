@@ -525,3 +525,16 @@ export const IconSave = (p) => (
   </svg>
 );
 
+export const IconChevronRight = (p) => (
+  <svg {...bold} {...p}>
+    <path d="m9 18 6-6-6-6" />
+  </svg>
+);
+
+export const IconChevronDown = (p) => (
+  <svg {...bold} {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+
+

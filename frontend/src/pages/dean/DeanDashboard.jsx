@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SubmitterCell } from "../../components/common/submitter";
 import { Link, useNavigate } from "react-router-dom";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { fetchCurrentUser, signOut } from "../../services/auth";
@@ -10,8 +9,7 @@ import { programShare } from "../../components/dean/programShades";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
 import StatCard from "../../components/common/StatCard";
-import Pagination from "../../components/common/Pagination";
-import { DEFAULT_PER_PAGE } from "../../hooks/useTableQuery";
+import SubmissionsGroupedList from "../../components/dean/SubmissionsGroupedList";
 import { trackOf } from "../../components/teacher/status";
 import useThemeTokens from "../../components/theme/useThemeTokens";
 import {
@@ -79,11 +77,6 @@ export default function DeanDashboard() {
   // the events already fetched and must never trigger a server refetch.
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-
-  // Pages over the filtered list below. The dashboard already holds every
-  // event it shows (the list is filtered client-side), so paging is too.
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
 
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingEvents, setLoadingEvents] = useState(true);
@@ -272,16 +265,6 @@ export default function DeanDashboard() {
       ),
     [events, searchQuery, statusFilter]
   );
-
-  // Any change to what is listed starts again from the first page; the clamp
-  // covers a list that shrank under the page being looked at.
-  useEffect(() => {
-    setPage(1);
-  }, [searchQuery, statusFilter, selectedDate, startDate, endDate, selectedEventType]);
-
-  const pageCount = Math.max(1, Math.ceil(visibleEvents.length / perPage));
-  const currentPage = Math.min(page, pageCount);
-  const pagedEvents = visibleEvents.slice((currentPage - 1) * perPage, currentPage * perPage);
 
   const isFiltered =
     searchQuery.trim() !== "" ||
@@ -855,134 +838,14 @@ export default function DeanDashboard() {
               </div>
             </div>
 
-            {/* -------------------------------------------------------- list */}
-            <div className="glass mt-4 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b hairline px-5 py-4 sm:px-6">
-                <h2 className="h3 text-base text-ink">
-                  {selectedEventType ? `${selectedEventType} programs` : "All programs"}
-                </h2>
-
-                <Link to="/dean/events" className="btn btn-ghost btn-xs">
-                  Open review queue
-                  <IconArrowRight />
-                </Link>
-              </div>
-
-              {loadingEvents ? (
-                <div className="flex items-center justify-center gap-2.5 p-10 text-sm font-medium text-muted">
-                  <span className="spin h-4 w-4 text-accent" />
-                  Loading events…
-                </div>
-              ) : visibleEvents.length === 0 ? (
-                <div className="flex flex-col items-center px-6 py-16 text-center">
-                  <span className="icon-tile mb-4 h-14 w-14 rounded-2xl">
-                    <IconInbox className="h-6 w-6" />
-                  </span>
-
-                  <p className="h3 text-ink">No events found</p>
-
-                  <p className="prose-muted mt-1 text-sm">
-                    {isFiltered
-                      ? "No events match the current filters."
-                      : "No events have been submitted yet."}
-                  </p>
-
-                  {isFiltered && (
-                    <button
-                      type="button"
-                      onClick={clearFilters}
-                      className="btn btn-brand btn-sm mt-5"
-                    >
-                      <IconRotateCcw />
-                      Clear filters
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr>
-                        {["Program", "Submitted By", "Status", "Type", "Date", "Location", "Action"].map(
-                          (label) => (
-                            <th
-                              key={label}
-                              className={`whitespace-nowrap border-b hairline bg-raised/45 px-5 py-3 text-[11px] font-semibold uppercase tracking-[.12em] text-muted ${
-                                label === "Action" ? "text-right" : ""
-                              }`}
-                            >
-                              {label}
-                            </th>
-                          )
-                        )}
-                      </tr>
-                    </thead>
-
-                    <tbody className="divide-y divide-line/8">
-                      {pagedEvents.map((event) => (
-                        <tr key={event.id} className="transition hover:bg-raised/35">
-                          <td className="max-w-72 px-5 py-3.5">
-                            <p className="truncate font-display text-sm font-semibold text-ink">
-                              {event.event_name || "Untitled Program"}
-                            </p>
-                            {event.description && (
-                              <p className="mt-0.5 truncate text-xs text-muted">
-                                {decodeEventMetadata(event.description).description}
-                              </p>
-                            )}
-                          </td>
-
-                          <td className="max-w-44 px-5 py-3.5">
-                            <SubmitterCell event={event} />
-                          </td>
-
-                          <td className="whitespace-nowrap px-5 py-3.5">
-                            <StatusChip status={event.status} />
-                          </td>
-
-                          <td className="whitespace-nowrap px-5 py-3.5 text-sm text-muted">
-                            {event.event_type || "—"}
-                          </td>
-
-                          <td className="whitespace-nowrap px-5 py-3.5 text-sm text-muted">
-                            {event.event_date || "—"}
-                          </td>
-
-                          <td className="max-w-48 px-5 py-3.5 text-sm text-muted">
-                            <span className="block truncate" title={event.location}>
-                              {event.location || "—"}
-                            </span>
-                          </td>
-
-                          <td className="whitespace-nowrap px-5 py-3.5 text-right">
-                            <Link
-                              to={`/dean/events/${event.id}`}
-                              className="btn btn-ghost btn-xs"
-                            >
-                              <IconEye />
-                              View
-                            </Link>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {!loadingEvents && visibleEvents.length > 0 && (
-                <Pagination
-                  page={currentPage}
-                  perPage={perPage}
-                  total={visibleEvents.length}
-                  onPageChange={setPage}
-                  onPerPageChange={(next) => {
-                    setPerPage(next);
-                    setPage(1);
-                  }}
-                />
-              )}
-            </div>
+            {/* -------------------------------------------------------- grouped list */}
+            <SubmissionsGroupedList
+              events={visibleEvents}
+              loading={loadingEvents}
+              isFiltered={isFiltered}
+              onClearFilters={clearFilters}
+              selectedEventType={selectedEventType}
+            />
           </>
         )}
       </div>
