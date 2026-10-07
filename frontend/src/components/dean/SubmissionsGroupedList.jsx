@@ -13,7 +13,7 @@ import {
   groupSubmissionsByDate,
   groupSubmissionsByStatus,
 } from "../../utils/submissionGrouping";
-import { downloadEventReport, downloadEventsReport, reportNotice } from "../../services/eventManager";
+import useEventReportDownload from "../../hooks/useEventReportDownload";
 import {
   IconArrowRight,
   IconCalendar,
@@ -95,6 +95,7 @@ export default function SubmissionsGroupedList({
   onToggleSelect = null,
   onToggleSelectGroup = null,
   onClearSelection = null,
+  defaultExpanded = false,
 }) {
   const [groupBy, setGroupBy] = useState("date"); // "date" | "status"
   const [internalSelectedIds, setInternalSelectedIds] = useState(() => new Set());
@@ -103,8 +104,33 @@ export default function SubmissionsGroupedList({
   const [expandedRows, setExpandedRows] = useState(() => new Set());
   const [showBulkViewModal, setShowBulkViewModal] = useState(false);
   const [bulkActionNotice, setBulkActionNotice] = useState("");
-  const [downloadingRowId, setDownloadingRowId] = useState(null);
-  const [isBulkDownloading, setIsBulkDownloading] = useState(false);
+
+  const {
+    downloadingRowId,
+    isBulkDownloading,
+    downloadProgress,
+    downloadNotice,
+    downloadError,
+    setDownloadNotice,
+    setDownloadError,
+    downloadSingle,
+    downloadBulk,
+    canDownload,
+  } = useEventReportDownload();
+
+  useEffect(() => {
+    if (downloadNotice) {
+      setBulkActionNotice(downloadNotice);
+      setDownloadNotice("");
+    }
+  }, [downloadNotice, setDownloadNotice]);
+
+  useEffect(() => {
+    if (downloadError) {
+      setBulkActionNotice(downloadError);
+      setDownloadError("");
+    }
+  }, [downloadError, setDownloadError]);
 
   // Use controlled selection if provided by parent, otherwise fall back to internal
   const effectiveSelectedIds = controlledSelectedIds || internalSelectedIds;
@@ -114,10 +140,10 @@ export default function SubmissionsGroupedList({
   const statusGroups = useMemo(() => groupSubmissionsByStatus(events), [events]);
   const summary = useMemo(() => getSubmissionsSummary(events), [events]);
 
-  // Expand current year AND current year's months by default (Requirement 4)
+  // Default expansion (only if defaultExpanded is explicitly true)
   const initialExpansionDoneRef = useRef(false);
   useEffect(() => {
-    if (yearGroups.length > 0 && !initialExpansionDoneRef.current) {
+    if (defaultExpanded && yearGroups.length > 0 && !initialExpansionDoneRef.current) {
       initialExpansionDoneRef.current = true;
       const currentCalendarYear = new Date().getFullYear();
       const currentYear = yearGroups.find((y) => y.year === currentCalendarYear) || yearGroups[0];
@@ -125,7 +151,7 @@ export default function SubmissionsGroupedList({
       const currentYearMonthKeys = currentYear.months.map((m) => m.monthKey);
       setExpandedMonths(new Set(currentYearMonthKeys));
     }
-  }, [yearGroups]);
+  }, [defaultExpanded, yearGroups]);
 
   // Map of event by ID for quick lookups
   const eventMap = useMemo(() => new Map(events.map((e) => [e.id, e])), [events]);
@@ -193,19 +219,19 @@ export default function SubmissionsGroupedList({
       const next = new Set(prev);
       if (next.has(year)) {
         next.delete(year);
-      } else {
-        next.add(year);
-        // Expand this year's months when expanding the year if none are expanded
+        // Also collapse its months when the year is collapsed
         const group = yearGroups.find((g) => g.year === year);
         if (group) {
           setExpandedMonths((mPrev) => {
             const mNext = new Set(mPrev);
             for (const m of group.months) {
-              mNext.add(m.monthKey);
+              mNext.delete(m.monthKey);
             }
             return mNext;
           });
         }
+      } else {
+        next.add(year);
       }
       return next;
     });
@@ -241,40 +267,12 @@ export default function SubmissionsGroupedList({
 
   const handleDownloadSingle = async (event) => {
     if (!event) return;
-    try {
-      setDownloadingRowId(event.id);
-      setBulkActionNotice("");
-      const outcome = await downloadEventReport(event.id, event.event_name);
-      setBulkActionNotice(reportNotice(outcome, `Report for "${event.event_name}"`));
-    } catch (err) {
-      console.error("Single download error:", err);
-      setBulkActionNotice(err?.message || "Failed to download report.");
-    } finally {
-      setDownloadingRowId(null);
-    }
+    await downloadSingle(event);
   };
 
   const handleBulkDownload = async () => {
-    const ids = Array.from(effectiveSelectedIds);
-    if (ids.length === 0) return;
-
-    try {
-      setIsBulkDownloading(true);
-      setBulkActionNotice("");
-      if (ids.length === 1) {
-        const item = eventMap.get(ids[0]);
-        const outcome = await downloadEventReport(ids[0], item?.event_name || "Event");
-        setBulkActionNotice(reportNotice(outcome, "Report"));
-      } else {
-        const outcome = await downloadEventsReport(ids);
-        setBulkActionNotice(reportNotice(outcome, `Consolidated report (${ids.length} events)`));
-      }
-    } catch (err) {
-      console.error("Bulk download error:", err);
-      setBulkActionNotice(err?.message || "Failed to generate report.");
-    } finally {
-      setIsBulkDownloading(false);
-    }
+    if (selectedEventsList.length === 0) return;
+    await downloadBulk(selectedEventsList);
   };
 
   // Selected items array for bulk modal
@@ -525,6 +523,7 @@ export default function SubmissionsGroupedList({
                                   onToggleExpand={() => toggleExpandRow(event.id)}
                                   onDownloadSingle={() => handleDownloadSingle(event)}
                                   isDownloading={downloadingRowId === event.id}
+                                  canDownload={canDownload}
                                   renderRowActions={renderRowActions}
                                   renderDrawerActions={renderDrawerActions}
                                   allowDecisions={allowDecisions}
@@ -583,6 +582,7 @@ export default function SubmissionsGroupedList({
                       onToggleExpand={() => toggleExpandRow(event.id)}
                       onDownloadSingle={() => handleDownloadSingle(event)}
                       isDownloading={downloadingRowId === event.id}
+                      canDownload={canDownload}
                       renderRowActions={renderRowActions}
                       renderDrawerActions={renderDrawerActions}
                       allowDecisions={allowDecisions}
@@ -635,13 +635,14 @@ export default function SubmissionsGroupedList({
                   onClick={handleBulkDownload}
                   disabled={isBulkDownloading}
                   className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
+                  title="Download report for selected events"
                 >
                   {isBulkDownloading ? (
                     <span className="spin h-3.5 w-3.5" />
                   ) : (
                     <IconDownload className="h-3.5 w-3.5" />
                   )}
-                  Download
+                  <span>{downloadProgress || "Download"}</span>
                 </button>
 
                 <span className="text-muted">·</span>
@@ -739,6 +740,7 @@ function SubmissionRow({
   onToggleExpand,
   onDownloadSingle,
   isDownloading,
+  canDownload,
   renderRowActions,
   renderDrawerActions,
   allowDecisions,
@@ -747,6 +749,8 @@ function SubmissionRow({
   const dateFormatted = formatRowDate(
     event.event_date || event.start_date || event.created_at
   );
+
+  const reportCheck = canDownload ? canDownload(event) : { canDownload: true };
 
   return (
     <div className="group transition-colors hover:bg-raised/20">
@@ -808,7 +812,7 @@ function SubmissionRow({
         {/* 5. Right side action buttons */}
         {renderRowActions ? (
           <div className="flex shrink-0 items-center gap-1.5">
-            {renderRowActions(event, { isExpanded, isDownloading })}
+            {renderRowActions(event, { isExpanded, isDownloading, canDownload })}
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-2">
@@ -824,9 +828,14 @@ function SubmissionRow({
             <button
               type="button"
               onClick={onDownloadSingle}
-              disabled={isDownloading}
-              className="hidden sm:inline-flex btn btn-ghost btn-xs border border-line/80 font-medium text-ink hover:bg-raised/60 items-center gap-1.5"
-              title="Download report"
+              disabled={isDownloading || !reportCheck.canDownload}
+              className={`hidden sm:inline-flex btn btn-ghost btn-xs border border-line/80 font-medium ${
+                !reportCheck.canDownload
+                  ? "opacity-45 cursor-not-allowed text-muted"
+                  : "text-ink hover:bg-raised/60"
+              } items-center gap-1.5`}
+              title={reportCheck.reason || "Download report"}
+              aria-label={`Download report for ${event.event_name}`}
             >
               {isDownloading ? (
                 <span className="spin h-3.5 w-3.5" />

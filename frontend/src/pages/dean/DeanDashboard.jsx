@@ -4,51 +4,95 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiJson, isAbortError } from "../../services/api";
 import DeanShell from "../../components/dean/DeanShell";
-import DateRangeModal from "../../components/common/DateRangeModal";
-import { programShare } from "../../components/dean/programShades";
+import Modal from "../../components/teacher/Modal";
 import PageHero from "../../components/teacher/PageHero";
 import StatusChip from "../../components/teacher/StatusChip";
 import StatCard from "../../components/common/StatCard";
-import SubmissionsGroupedList from "../../components/dean/SubmissionsGroupedList";
+import { programShare } from "../../components/dean/programShades";
 import { trackOf } from "../../components/teacher/status";
 import useThemeTokens from "../../components/theme/useThemeTokens";
+import { formatRowDate } from "../../utils/submissionGrouping";
 import {
   IconAlertTriangle,
   IconArrowRight,
   IconCalendar,
   IconChartBar,
-  IconCheckCircle,
   IconChartPie,
+  IconCheck,
+  IconCheckCircle,
   IconClock,
   IconEye,
-  IconFilter,
   IconInbox,
   IconLayers,
   IconRefresh,
   IconRotateCcw,
-  IconSearch,
   IconX,
   IconXCircle,
 } from "../../components/teacher/icons";
-import { decodeEventMetadata } from "../../utils/draftStorage";
 import {
-  DEAN_STATUS_FILTERS,
-  EVENT_TYPES,
-  countByStatusBucket,
-  matchesEventSearch,
-  matchesStatusFilter,
+  canApprove,
+  canReject,
+  getApproveLabel,
+  getStatusBucket,
+  normalizeStatus,
 } from "../../utils/constants";
 
 /** The whole submission set — not a status, so it takes its own hue. */
 const TOTAL_TRACK = "#0EA5E9"; // sky
 
+/**
+ * Filter predicate: only events awaiting Dean review.
+ * Includes pending, submitted, under_review, and resubmitted/correction events.
+ * Excludes already approved, completed, published, recorded, rejected, revoked, and draft.
+ */
+function isAwaitingDeanReview(event) {
+  if (!event) return false;
+  const status = normalizeStatus(event.status);
+  if (
+    status === "approved" ||
+    status === "published" ||
+    status === "completed" ||
+    status === "recorded" ||
+    status === "in_progress" ||
+    status === "draft" ||
+    status === "rejected" ||
+    status === "revoked"
+  ) {
+    return false;
+  }
+  return (
+    getStatusBucket(status) === "pending" ||
+    status === "resubmitted" ||
+    status === "needs_correction" ||
+    status === "changes_requested" ||
+    status.includes("resubmit") ||
+    status.includes("correct") ||
+    Boolean(event.is_resubmitted)
+  );
+}
+
+/**
+ * Earliest date timestamp for sorting oldest-waiting first.
+ */
+function getWaitingTimestamp(event) {
+  if (!event) return Infinity;
+  const raw =
+    event.submitted_at ||
+    event.created_at ||
+    event.event_date ||
+    event.start_date ||
+    event.date;
+  if (!raw) return Infinity;
+  const t = new Date(raw).getTime();
+  return Number.isNaN(t) ? Infinity : t;
+}
+
 export default function DeanDashboard() {
   const navigate = useNavigate();
   const tokens = useThemeTokens();
 
-  // "overview" is the numbers and the program mix; "submissions" is the same
-  // events as a filterable list. Both live on this screen, as they did before
-  // the two views shared a sidebar toggle.
+  // "overview" is the numbers and the program mix; "submissions" is the Review Queue
+  // of items awaiting the Dean's action.
   const [activeView, setActiveView] = useState("overview");
 
   // ============================================
@@ -63,37 +107,22 @@ export default function DeanDashboard() {
   });
 
   const [events, setEvents] = useState([]);
-
-  const [selectedDate, setSelectedDate] = useState("");
   const [selectedEventType, setSelectedEventType] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [showDateRangeModal, setShowDateRangeModal] = useState(false);
 
   // Signed-in Dean, used for the header and rail account blocks.
   const [deanProfile, setDeanProfile] = useState(null);
-
-  // Client-side filters. Intentionally kept out of filtersRef: they narrow
-  // the events already fetched and must never trigger a server refetch.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
 
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingEvents, setLoadingEvents] = useState(true);
 
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  // The filters in force, read by the refresh a new notification triggers.
-  const filtersRef = useRef({
-    selectedDate: "",
-    selectedEventType: "",
-    startDate: "",
-    endDate: "",
-  });
-
-  useEffect(() => {
-    filtersRef.current = { selectedDate, selectedEventType, startDate, endDate };
-  }, [selectedDate, selectedEventType, startDate, endDate]);
+  // Decision state for direct Approve / Reject in the Review Queue
+  const [decision, setDecision] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [reasonError, setReasonError] = useState("");
+  const [processingId, setProcessingId] = useState(null);
 
   // ============================================
   // LOGOUT
@@ -106,8 +135,6 @@ export default function DeanDashboard() {
 
   // ============================================
   // ERRORS
-  // apiJson clears the session on a 401 (the token is refreshed ahead of
-  // expiry, so a 401 means it was revoked or expired): go to the login page.
   // ============================================
 
   const isSignedOut = (err) => {
@@ -143,17 +170,13 @@ export default function DeanDashboard() {
 
   // ============================================
   // LOAD EVENTS
-  //
-  // Filters can change faster than the server answers. Each load aborts the
-  // one before it, so a slow older response can never overwrite the list for
-  // the filters now on screen.
   // ============================================
 
   const eventsControllerRef = useRef(null);
 
   useEffect(() => () => eventsControllerRef.current?.abort(), []);
 
-  const loadEvents = async (date = "", eventType = "", start = "", end = "") => {
+  const loadEvents = async () => {
     eventsControllerRef.current?.abort();
     const controller = new AbortController();
     eventsControllerRef.current = controller;
@@ -162,30 +185,7 @@ export default function DeanDashboard() {
       setLoadingEvents(true);
       setError("");
 
-      const params = new URLSearchParams();
-
-      if (date) {
-        params.append("event_date", date);
-      }
-
-      if (start) {
-        params.append("start_date", start);
-      }
-
-      if (end) {
-        params.append("end_date", end);
-      }
-
-      if (eventType) {
-        params.append("event_type", eventType);
-      }
-
-      const queryString = params.toString();
-
-      const data = await apiJson(
-        queryString ? `/dean/events?${queryString}` : "/dean/events",
-        { signal: controller.signal }
-      );
+      const data = await apiJson("/dean/events", { signal: controller.signal });
 
       if (controller.signal.aborted) return;
       setEvents(data?.events || []);
@@ -195,7 +195,6 @@ export default function DeanDashboard() {
       if (isSignedOut(err)) return;
 
       setEvents([]);
-
       setError(err?.message || "Unable to load events.");
     } finally {
       if (eventsControllerRef.current === controller) setLoadingEvents(false);
@@ -214,77 +213,145 @@ export default function DeanDashboard() {
         setDeanProfile(data);
       }
     } catch (err) {
-      // Non-blocking: the shell falls back to a neutral initial.
       console.error("Load dean profile error:", err);
     }
   };
 
   useEffect(() => {
     loadStats();
-    loadEvents("", "");
+    loadEvents();
     loadDeanProfile();
   }, []);
 
   // ============================================
-  // WHEN A NOTIFICATION ARRIVES
-  //
-  // The bell in the shell polls the Dean's own notification feed — which the
-  // server fills on every submission *and* resubmission — and calls this when
-  // something new lands, so the counts and the list stay current.
+  // REFRESH HANDLERS
   // ============================================
 
   const refreshAfterNotification = () => {
     loadStats();
-    loadEvents(
-      filtersRef.current.selectedDate,
-      filtersRef.current.selectedEventType,
-      filtersRef.current.startDate,
-      filtersRef.current.endDate
-    );
+    loadEvents();
   };
 
+  const refreshDashboard = async () => {
+    setError("");
+    await Promise.all([loadStats(), loadEvents()]);
+  };
+
+  // Auto-dismiss success toast
+  useEffect(() => {
+    if (!success) return undefined;
+    const timer = setTimeout(() => setSuccess(""), 4500);
+    return () => clearTimeout(timer);
+  }, [success]);
+
   // ============================================
-  // GET UNIQUE EVENT TYPES
+  // REVIEW QUEUE (Oldest-waiting first)
   // ============================================
 
-  // Sourced from the fixed list the API accepts, not from the currently
-  // loaded rows -- otherwise selecting a type collapses the dropdown to that
-  // one option and the Dean cannot switch without clearing filters.
-  const eventTypes = EVENT_TYPES;
+  const reviewQueueEvents = useMemo(() => {
+    return (events || [])
+      .filter(isAwaitingDeanReview)
+      .sort((a, b) => {
+        const diff = getWaitingTimestamp(a) - getWaitingTimestamp(b);
+        if (diff !== 0) return diff;
+        return (a.id || "").localeCompare(b.id || "");
+      });
+  }, [events]);
 
-  // Status chip counts and the client-filtered list. Counts always come from
-  // the full fetch scope so they stay stable while filtering.
-  const statusCounts = useMemo(() => countByStatusBucket(events), [events]);
+  // ============================================
+  // DECISION HANDLERS (Approve / Reject)
+  // ============================================
 
-  const visibleEvents = useMemo(
-    () =>
-      events.filter(
-        (event) =>
-          matchesEventSearch(event, searchQuery) &&
-          matchesStatusFilter(event, statusFilter)
-      ),
-    [events, searchQuery, statusFilter]
-  );
+  const openDecision = (event, kind) => {
+    setDecision({ event, kind });
+    setRejectReason("");
+    setReasonError("");
+  };
 
-  const isFiltered =
-    searchQuery.trim() !== "" ||
-    statusFilter !== "all" ||
-    selectedDate !== "" ||
-    startDate !== "" ||
-    endDate !== "" ||
-    selectedEventType !== "";
+  const closeDecision = () => {
+    if (processingId) return;
+    setDecision(null);
+    setRejectReason("");
+    setReasonError("");
+  };
+
+  const confirmApprove = async () => {
+    const event = decision?.event;
+    if (!event) return;
+
+    try {
+      setProcessingId(event.id);
+      setError("");
+      setSuccess("");
+
+      const data = await apiJson(`/dean/events/${event.id}/approve`, {
+        method: "PATCH",
+      });
+
+      setSuccess(data?.message || "Event approved successfully.");
+      setDecision(null);
+      await Promise.all([loadStats(), loadEvents()]);
+    } catch (err) {
+      console.error("Approve error:", err);
+      if (isSignedOut(err)) return;
+      setError(err?.message || "Failed to approve event.");
+      setDecision(null);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const confirmReject = async () => {
+    const event = decision?.event;
+    if (!event) return;
+
+    const reason = rejectReason.trim();
+    if (!reason) {
+      setReasonError("A reason is required — the teacher sees it verbatim.");
+      return;
+    }
+
+    try {
+      setProcessingId(event.id);
+      setError("");
+      setSuccess("");
+      setReasonError("");
+
+      const data = await apiJson(`/dean/events/${event.id}/reject`, {
+        method: "PATCH",
+        body: { rejection_reason: reason },
+      });
+
+      setSuccess(data?.message || "Event rejected successfully.");
+      setDecision(null);
+      await Promise.all([loadStats(), loadEvents()]);
+    } catch (err) {
+      console.error("Reject error:", err);
+      if (isSignedOut(err)) return;
+      setError(err?.message || "Failed to reject event.");
+      setDecision(null);
+    } finally {
+      setProcessingId(null);
+    }
+  };
 
   // ============================================
   // PROGRAM MIX
   // ============================================
 
-  // Largest share first, each row carrying its own shade of the accent. The
-  // shades are rebuilt when the theme flips, because the chart is SVG and
-  // cannot inherit the token itself.
   const programMix = useMemo(
     () => programShare(events, tokens.accent),
     [events, tokens.accent]
   );
+
+  const handleTypeSelect = (name) => {
+    if (!name) return;
+    setSelectedEventType((prev) => (prev === name ? "" : name));
+  };
+
+  const clearFilters = () => {
+    setSelectedEventType("");
+  };
 
   const statCards = [
     {
@@ -321,89 +388,8 @@ export default function DeanDashboard() {
     },
   ];
 
-  // ============================================
-  // FILTER A PROGRAM TYPE
-  // ============================================
-
-  const handleTypeSelect = (name) => {
-    if (!name) return;
-
-    setSelectedEventType(name);
-    setActiveView("submissions");
-
-    loadEvents(selectedDate, name, startDate, endDate);
-  };
-
-  // ============================================
-  // DATE FILTER
-  // ============================================
-
-  const handleDateChange = (event) => {
-    const date = event.target.value;
-
-    setSelectedDate(date);
-    setStartDate("");
-    setEndDate("");
-
-    loadEvents(date, selectedEventType, "", "");
-  };
-
-  const handleApplyDateRange = ({ startDate: s, endDate: e }) => {
-    setStartDate(s);
-    setEndDate(e);
-    setSelectedDate("");
-
-    loadEvents("", selectedEventType, s, e);
-  };
-
-  const handleClearDateRange = () => {
-    setStartDate("");
-    setEndDate("");
-
-    loadEvents(selectedDate, selectedEventType, "", "");
-  };
-
-  // ============================================
-  // EVENT TYPE FILTER
-  // ============================================
-
-  const handleEventTypeChange = (event) => {
-    const eventType = event.target.value;
-
-    setSelectedEventType(eventType);
-
-    loadEvents(selectedDate, eventType, startDate, endDate);
-  };
-
-  // ============================================
-  // CLEAR FILTERS
-  // ============================================
-
-  const clearFilters = () => {
-    setSelectedDate("");
-    setStartDate("");
-    setEndDate("");
-    setSelectedEventType("");
-    setSearchQuery("");
-    setStatusFilter("all");
-
-    loadEvents("", "", "", "");
-  };
-
-  // ============================================
-  // REFRESH
-  // ============================================
-
-  const refreshDashboard = async () => {
-    setError("");
-
-    await Promise.all([
-      loadStats(),
-      loadEvents(selectedDate, selectedEventType, startDate, endDate),
-    ]);
-  };
-
   const busy = loadingStats || loadingEvents;
+  const decisionEvent = decision?.event;
 
   // ============================================
   // RENDER
@@ -414,12 +400,11 @@ export default function DeanDashboard() {
       active="dashboard"
       profile={deanProfile}
       onLogout={handleLogout}
-      railBadge={events.length}
+      railBadge={reviewQueueEvents.length}
       railNote="Teachers propose events, you approve them. Pending submissions are the queue that needs you."
       onNotification={refreshAfterNotification}
     >
       <div className="mx-auto w-full max-w-wrap px-5 py-8 sm:px-8">
-
         <PageHero
           eyebrow="Dean Panel"
           title="Campus Event"
@@ -469,6 +454,28 @@ export default function DeanDashboard() {
           </div>
         )}
 
+        {success && (
+          <div
+            className="mt-6 flex items-start gap-3 rounded-2xl border p-4"
+            data-tint=""
+            style={{ "--track": trackOf("approved") }}
+            role="status"
+          >
+            <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink">Success</p>
+              <p className="prose-muted mt-0.5 text-sm">{success}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSuccess("")}
+              className="btn btn-ghost btn-xs shrink-0"
+            >
+              <IconX className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {/* ------------------------------------------------------- the views */}
         <div
           role="tablist"
@@ -495,15 +502,14 @@ export default function DeanDashboard() {
           >
             <IconInbox className="h-4 w-4" />
             Submissions
-            <span className="tab-count">{statusCounts.all}</span>
+            <span className="tab-count">{reviewQueueEvents.length}</span>
           </button>
         </div>
 
         {/* ==================================================== OVERVIEW === */}
         {activeView === "overview" && (
           <>
-            {/* The shared KPI card, identical on the Teacher and Super
-                Admin dashboards; the 1.5rem gaps match theirs too. */}
+            {/* The shared KPI cards */}
             <div className="mt-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
               {statCards.map((card, i) => (
                 <StatCard
@@ -518,7 +524,6 @@ export default function DeanDashboard() {
               ))}
             </div>
 
-
             {/* ---------------------------------------------- program mix */}
             <section className="glass reveal mt-6 overflow-hidden" style={{ "--i": 5 }}>
               <div className="flex flex-col gap-3 border-b hairline px-6 py-5 md:flex-row md:items-center md:justify-between">
@@ -530,7 +535,7 @@ export default function DeanDashboard() {
                     <p className="eyebrow">Distribution</p>
                     <h2 className="h3 text-ink">Programs by type</h2>
                     <p className="prose-muted mt-0.5 text-xs">
-                      Pick a program to see only its events.
+                      Pick a program to highlight its events.
                     </p>
                   </div>
                 </div>
@@ -568,10 +573,7 @@ export default function DeanDashboard() {
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-8 lg:flex-row">
-
-                    {/* The ring. One hue, shaded by share — identity is
-                        carried by the labelled rows beside it, never by the
-                        colour alone. */}
+                    {/* The ring */}
                     <div
                       className="h-60 w-full shrink-0 lg:w-75"
                       role="img"
@@ -611,7 +613,6 @@ export default function DeanDashboard() {
                             ))}
                           </Pie>
 
-                          {/* The total, reading through the hole. */}
                           <text
                             x="50%"
                             y="50%"
@@ -656,8 +657,7 @@ export default function DeanDashboard() {
                       </ResponsiveContainer>
                     </div>
 
-                    {/* The rows: the same data, directly labelled, and each
-                        one filters exactly like a slice. */}
+                    {/* The rows */}
                     <ul className="w-full min-w-0 flex-1 space-y-1">
                       {programMix.map((entry) => {
                         const total = events.length || 1;
@@ -708,156 +708,280 @@ export default function DeanDashboard() {
           </>
         )}
 
-        {/* ================================================= SUBMISSIONS === */}
+        {/* ============================================== REVIEW QUEUE === */}
         {activeView === "submissions" && (
-          <>
-            {/* ------------------------------------------------------ filters
-                One toolbar line for the inputs, one for the status chips. The
-                labels live on the controls themselves (placeholder, first
-                option, aria-label), so nothing is lost to a screen reader. */}
-            <div className="glass mt-4 overflow-hidden">
-              <div className="flex flex-wrap items-center gap-2.5 px-4 py-3.5 sm:px-5">
-
-                <div className="mr-auto flex shrink-0 items-center gap-2.5">
-                  <span className="icon-tile h-9 w-9 rounded-xl">
-                    <IconFilter className="h-4 w-4" />
-                  </span>
-                  <div>
-                    <p className="eyebrow">Narrow</p>
-                    <h2 className="mt-0.5 font-display text-sm font-semibold text-ink">
-                      Filters
-                    </h2>
-                  </div>
+          <section className="glass reveal mt-6 overflow-hidden rounded-xl border border-line/60 bg-surface shadow-xs">
+            {/* Card Header */}
+            <div className="flex items-center justify-between border-b border-line/60 px-5 py-4 sm:px-6">
+              <div className="flex items-center gap-3">
+                <span className="icon-tile h-9 w-9 rounded-xl">
+                  <IconClock className="h-4 w-4 text-accent" />
+                </span>
+                <div>
+                  <h2 className="font-display text-base font-semibold text-ink">
+                    Review Queue
+                  </h2>
+                  <p className="prose-muted text-xs">
+                    Submissions awaiting Dean approval, sorted oldest first
+                  </p>
                 </div>
-
-                {/* Search + status narrow the loaded events; no refetch. */}
-                <div className="relative w-full sm:w-60 xl:w-72">
-                  <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-muted">
-                    <IconSearch className="h-4 w-4" />
-                  </span>
-
-                  <input
-                    id="deanEventSearch"
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search name, venue, or type…"
-                    aria-label="Search events"
-                    className="input pl-10 pr-9"
-                  />
-
-                  {searchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setSearchQuery("")}
-                      aria-label="Clear search"
-                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted transition hover:text-ink"
-                    >
-                      <IconX className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={handleDateChange}
-                  aria-label="Filter by date"
-                  title="Filter by date"
-                  className="input w-full sm:w-auto"
-                />
-
-                <button
-                  type="button"
-                  onClick={() => setShowDateRangeModal(true)}
-                  className={`btn btn-sm shrink-0 ${
-                    startDate || endDate ? "btn-primary font-medium" : "btn-ghost"
-                  }`}
-                  title="Filter by date range"
-                  aria-label="Filter by date range"
-                >
-                  <IconCalendar />
-                  <span>
-                    {startDate && endDate
-                      ? `${startDate} – ${endDate}`
-                      : startDate
-                        ? `From ${startDate}`
-                        : endDate
-                          ? `Until ${endDate}`
-                          : "Date Range"}
-                  </span>
-                </button>
-
-                <select
-                  value={selectedEventType}
-                  onChange={handleEventTypeChange}
-                  aria-label="Filter by program type"
-                  title="Filter by program type"
-                  className="input w-full sm:w-auto"
-                >
-                  <option value="">All programs</option>
-                  {eventTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Only once there is something to clear — an always-on
-                    button reads as a control rather than an escape hatch. */}
-                {isFiltered && (
-                  <button
-                    type="button"
-                    onClick={clearFilters}
-                    className="btn btn-ghost btn-sm shrink-0"
-                  >
-                    <IconRotateCcw />
-                    Clear
-                  </button>
-                )}
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5 border-t hairline bg-raised/35 px-4 py-2.5 sm:px-5">
-                {DEAN_STATUS_FILTERS.map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={statusFilter === tab.key}
-                    onClick={() => setStatusFilter(tab.key)}
-                    className="tab"
-                  >
-                    {tab.label}
-                    <span className="tab-count">{statusCounts[tab.key] ?? 0}</span>
-                  </button>
-                ))}
-
-                <p className="num ml-auto text-xs font-medium text-muted">
-                  Showing {visibleEvents.length} of {statusCounts.all}
-                </p>
-              </div>
+              <span className="chip chip-solid text-xs">
+                {reviewQueueEvents.length} {reviewQueueEvents.length === 1 ? "event" : "events"}
+              </span>
             </div>
 
-            {/* -------------------------------------------------------- grouped list */}
-            <SubmissionsGroupedList
-              events={visibleEvents}
-              loading={loadingEvents}
-              isFiltered={isFiltered}
-              onClearFilters={clearFilters}
-              selectedEventType={selectedEventType}
-            />
-          </>
+            {/* Card Body */}
+            {loadingEvents ? (
+              <div className="flex h-48 flex-col items-center justify-center gap-3">
+                <span className="spin h-8 w-8 text-accent" />
+                <p className="prose-muted text-sm">Loading review queue…</p>
+              </div>
+            ) : reviewQueueEvents.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                <span className="icon-tile mb-4 h-12 w-12 rounded-2xl">
+                  <IconInbox className="h-6 w-6 text-muted" />
+                </span>
+                <p className="font-display text-base font-semibold text-ink">
+                  Nothing needs your attention right now.
+                </p>
+                <p className="prose-muted mt-1 text-xs sm:text-sm max-w-sm">
+                  All submitted events have been reviewed. New submissions from teachers will appear here.
+                </p>
+                <Link
+                  to="/dean/events"
+                  className="btn btn-ghost btn-sm mt-5 inline-flex items-center gap-1.5"
+                >
+                  <span>View all events</span>
+                  <IconArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            ) : (
+              <>
+                <div className="divide-y divide-line/30">
+                  {reviewQueueEvents.map((event) => (
+                    <div
+                      key={event.id}
+                      className="flex flex-col gap-3 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 transition-colors hover:bg-raised/20"
+                    >
+                      {/* Left: Date + Event title + Subtitle */}
+                      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+                        <span className="whitespace-nowrap font-bold text-xs sm:text-sm text-ink">
+                          {formatRowDate(event.event_date || event.start_date || event.created_at)}
+                        </span>
+
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Link
+                            to={`/dean/events/${event.id}`}
+                            className="truncate font-semibold text-sm text-ink hover:text-accent"
+                            title={event.event_name}
+                          >
+                            {event.event_name || "Untitled Event"}
+                          </Link>
+
+                          <span className="hidden truncate text-xs text-muted md:inline">
+                            · {event.event_type || "Event"}
+                            {event.department ? ` · ${event.department}` : ""}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Middle: Status chip */}
+                      <div className="shrink-0">
+                        <StatusChip status={event.status} size="sm" />
+                      </div>
+
+                      {/* Right: Actions */}
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Link
+                          to={`/dean/events/${event.id}`}
+                          className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink hover:bg-raised/60 inline-flex items-center gap-1.5"
+                          title="View submission details"
+                        >
+                          <IconEye className="h-3.5 w-3.5 text-muted" />
+                          <span>View</span>
+                        </Link>
+
+                        {canApprove(event) && (
+                          <button
+                            type="button"
+                            onClick={() => openDecision(event, "approve")}
+                            disabled={processingId === event.id}
+                            title={getApproveLabel(event)}
+                            className="btn btn-ok btn-xs inline-flex items-center gap-1"
+                          >
+                            {processingId === event.id ? (
+                              <span className="spin h-3.5 w-3.5" />
+                            ) : (
+                              <IconCheck className="h-3.5 w-3.5" />
+                            )}
+                            <span>{getApproveLabel(event)}</span>
+                          </button>
+                        )}
+
+                        {canReject(event) && (
+                          <button
+                            type="button"
+                            onClick={() => openDecision(event, "reject")}
+                            disabled={processingId === event.id}
+                            title="Reject this event"
+                            className="btn btn-danger btn-xs inline-flex items-center gap-1"
+                          >
+                            {processingId === event.id ? (
+                              <span className="spin h-3.5 w-3.5" />
+                            ) : (
+                              <IconX className="h-3.5 w-3.5" />
+                            )}
+                            <span>Reject</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Footer */}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-t border-line/60 bg-raised/20 px-5 py-3.5 text-xs text-muted sm:px-6">
+                  <span>
+                    Showing {reviewQueueEvents.length} event{reviewQueueEvents.length === 1 ? "" : "s"} awaiting review.
+                  </span>
+                  <Link
+                    to="/dean/events"
+                    className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
+                  >
+                    <span>View all events</span>
+                    <IconArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+              </>
+            )}
+          </section>
         )}
       </div>
 
-      <DateRangeModal
-        open={showDateRangeModal}
-        onClose={() => setShowDateRangeModal(false)}
-        startDate={startDate}
-        endDate={endDate}
-        onApply={handleApplyDateRange}
-        onClear={handleClearDateRange}
-      />
+      {/* ==================================================================
+          DECISION MODAL (Approve / Reject)
+      ================================================================== */}
+      <Modal
+        open={Boolean(decision)}
+        onClose={closeDecision}
+        eyebrow="Confirm"
+        title={
+          decision?.kind === "approve"
+            ? "Do you want to approve?"
+            : "Reject event"
+        }
+        subtitle={
+          decision?.kind === "approve"
+            ? "The teacher is notified of the decision."
+            : "The teacher sees the reason you give."
+        }
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeDecision}
+              disabled={Boolean(processingId)}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+
+            {decision?.kind === "approve" && (
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(`/dean/events/${decisionEvent?.id}?action=approve`)
+                }
+                disabled={Boolean(processingId)}
+                className="btn btn-ghost btn-sm"
+              >
+                Open event and approve
+              </button>
+            )}
+
+            {decision?.kind === "approve" ? (
+              <button
+                type="button"
+                onClick={confirmApprove}
+                disabled={Boolean(processingId)}
+                className="btn btn-ok btn-sm"
+              >
+                {processingId ? <span className="spin h-3.5 w-3.5" /> : <IconCheck />}
+                {processingId ? "Approving…" : "Approve"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={confirmReject}
+                disabled={Boolean(processingId)}
+                className="btn btn-danger btn-sm"
+              >
+                {processingId ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
+                {processingId ? "Rejecting…" : "Reject"}
+              </button>
+            )}
+          </>
+        }
+      >
+        <div className="flex items-start gap-3">
+          <span
+            className="icon-tile icon-tile-track"
+            style={{
+              "--track":
+                decision?.kind === "approve" ? trackOf("approved") : trackOf("rejected"),
+            }}
+          >
+            {decision?.kind === "approve" ? <IconCheckCircle /> : <IconAlertTriangle />}
+          </span>
+
+          <div className="min-w-0">
+            <p className="font-display text-sm font-semibold text-ink">
+              {decisionEvent?.event_name || "Untitled Event"}
+            </p>
+            <p className="prose-muted mt-1 text-xs">
+              {[
+                decisionEvent?.event_type,
+                formatRowDate(decisionEvent?.event_date || decisionEvent?.created_at),
+                decisionEvent?.location,
+              ]
+                .filter(Boolean)
+                .join(" · ") || "No details recorded"}
+            </p>
+          </div>
+        </div>
+
+        {decision?.kind === "reject" && (
+          <div className="field mt-5">
+            <label htmlFor="rejectReason">
+              Reason for rejection
+              <span className="req">*</span>
+            </label>
+
+            <textarea
+              id="rejectReason"
+              value={rejectReason}
+              onChange={(e) => {
+                setRejectReason(e.target.value);
+                if (reasonError) setReasonError("");
+              }}
+              rows={4}
+              autoFocus
+              placeholder="What needs to change before this can be approved?"
+              aria-invalid={reasonError ? "true" : undefined}
+              aria-describedby={reasonError ? "rejectReasonError" : undefined}
+              className="input"
+            />
+
+            {reasonError && (
+              <p id="rejectReasonError" className="error mt-1 text-xs text-err" role="alert">
+                {reasonError}
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
     </DeanShell>
   );
 }

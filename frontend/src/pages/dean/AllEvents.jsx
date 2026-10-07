@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import { fetchCurrentUser, signOut } from "../../services/auth";
 import { apiJson, isAbortError } from "../../services/api";
@@ -12,7 +13,9 @@ import {
   IconCalendar,
   IconCheck,
   IconCheckCircle,
+  IconDownload,
   IconEye,
+  IconMoreHorizontal,
   IconRefresh,
   IconRotateCcw,
   IconSearch,
@@ -31,72 +34,219 @@ import useEventTypes from "../../hooks/useEventTypes";
 import useTableQuery from "../../hooks/useTableQuery";
 import SubmissionsGroupedList from "../../components/dean/SubmissionsGroupedList";
 import { bulkEvents } from "../../services/deanTeachers";
+import useEventReportDownload from "../../hooks/useEventReportDownload";
 
 /**
- * Table columns, ordered by how much each one drives the Dean's decision.
- * Action is pinned to the right edge, so on a narrow screen it is Location —
- * the least decisive field, and the one still shown in full on the details
- * page — that slides under the pin rather than the status or the event name.
+ * A row's overflow menu for secondary actions. Rendered into <body> with fixed
+ * positioning so table/card boundaries cannot clip it.
  */
-/**
- * The three decisions the Dean can take on a row. Shared by the desktop table
- * and the mobile card list so the two can never drift apart.
- */
-function EventActions({ event, isProcessing, onApprove, onReject, onRevoke, onRemove }) {
+function RowMenu({ label, items, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+  const WIDTH = 210;
+
+  const place = useCallback(() => {
+    const button = buttonRef.current?.getBoundingClientRect();
+    if (!button) return;
+    const height = menuRef.current?.offsetHeight || 0;
+    const below = button.bottom + 6;
+    const top =
+      below + height > window.innerHeight - 8
+        ? Math.max(8, button.top - height - 6)
+        : below;
+    const left = Math.min(
+      Math.max(8, button.right - WIDTH),
+      window.innerWidth - WIDTH - 8,
+    );
+    setPos({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, place]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const itemsOf = () => [
+      ...(menuRef.current?.querySelectorAll('[role="menuitem"]:not([disabled])') || []),
+    ];
+    itemsOf()[0]?.focus({ preventScroll: true });
+
+    const close = (refocus = false) => {
+      setOpen(false);
+      if (refocus) buttonRef.current?.focus();
+    };
+    const onPointer = (e) => {
+      if (!menuRef.current?.contains(e.target) && !buttonRef.current?.contains(e.target)) {
+        close();
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(true);
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const list = itemsOf();
+        const at = list.indexOf(document.activeElement);
+        const next =
+          e.key === "ArrowDown"
+            ? (at + 1) % list.length
+            : (at - 1 + list.length) % list.length;
+        list[next]?.focus({ preventScroll: true });
+      } else if (e.key === "Tab") {
+        close();
+      }
+    };
+    const onScroll = () => place();
+
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [open, place]);
+
   return (
     <>
-      <Link
-        to={`/dean/events/${event.id}`}
-        title="View full details"
-        aria-label={`View full details for ${event.event_name}`}
-        className="icon-btn icon-btn-sm"
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        title="More actions"
+        className={`btn btn-ghost btn-xs border border-line/80 font-medium text-ink hover:bg-raised/60 inline-flex items-center justify-center h-7 w-7 p-0 ${
+          open ? "bg-raised" : ""
+        }`}
       >
-        <IconEye />
-      </Link>
+        <IconMoreHorizontal className="h-4 w-4 text-muted hover:text-ink" />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            aria-label={label}
+            className="hv-popover glass glass-blur fixed z-50 rounded-xl p-1.5 text-left shadow-lg border border-line/80"
+            style={{ top: pos.top, left: pos.left, width: WIDTH }}
+          >
+            {items.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  onSelect(item.key);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-45 ${
+                  item.danger
+                    ? "text-err hover:bg-err/10 focus-visible:bg-err/10"
+                    : "text-ink hover:bg-raised focus-visible:bg-raised"
+                }`}
+              >
+                <item.Icon className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
 
-      {/* Reject and Revoke are separate actions over separate statuses, so
-          at most one of them ever applies to a given row. */}
-      {canReject(event) && (
-        <button
-          type="button"
-          onClick={() => onReject(event)}
-          disabled={isProcessing}
-          title="Reject this event"
-          className="btn btn-danger btn-xs"
-        >
-          {isProcessing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
-          Reject
-        </button>
-      )}
+/**
+ * Minimal row actions: Report button + primary decision button + More (⋯) menu.
+ */
+function EventActions({
+  event,
+  isProcessing,
+  isDownloading,
+  onDownloadReport,
+  canDownloadReport,
+  onApprove,
+  onReject,
+  onRevoke,
+  onRemove,
+  navigate,
+}) {
+  const check = canDownloadReport || { canDownload: true };
+  const hasApprove = canApprove(event);
+  const hasRevoke = canRevoke(event);
+  const hasReject = canReject(event);
 
-      {canRevoke(event) && (
-        <button
-          type="button"
-          onClick={() => onRevoke(event)}
-          disabled={isProcessing}
-          title="Withdraw this event's approval"
-          className="btn btn-danger btn-xs"
-        >
-          {isProcessing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
-          Revoke
-        </button>
-      )}
+  const menuItems = [
+    {
+      key: "view",
+      label: "View details",
+      Icon: IconEye,
+    },
+  ];
 
-      {/* Remove: archive (reversible) or delete for good. Both live behind
-          one control so the destructive option is never a stray click away
-          from Approve. */}
+  if (hasApprove && hasReject) {
+    menuItems.push({
+      key: "reject",
+      label: "Reject",
+      Icon: IconX,
+      danger: true,
+    });
+  }
+
+  menuItems.push({
+    key: "archive",
+    label: "Archive or delete",
+    Icon: IconArchive,
+    danger: true,
+  });
+
+  const handleMenuSelect = (key) => {
+    if (key === "view") {
+      navigate(`/dean/events/${event.id}`);
+    } else if (key === "reject") {
+      onReject(event);
+    } else if (key === "revoke") {
+      onRevoke(event);
+    } else if (key === "archive") {
+      onRemove(event);
+    }
+  };
+
+  return (
+    <>
+      {/* 1. Report download button */}
       <button
         type="button"
-        onClick={() => onRemove(event)}
-        disabled={isProcessing}
-        title="Archive or delete this event"
-        aria-label={`Archive or delete ${event.event_name}`}
-        className="icon-btn icon-btn-sm text-err"
+        onClick={onDownloadReport}
+        disabled={isDownloading || !check.canDownload}
+        title={check.reason || "Download report"}
+        aria-label={`Download report for ${event.event_name}`}
+        className={`btn btn-ghost btn-xs border border-line/80 font-medium ${
+          !check.canDownload
+            ? "opacity-45 cursor-not-allowed text-muted"
+            : "text-ink hover:bg-raised/60"
+        } inline-flex items-center gap-1.5`}
       >
-        <IconArchive />
+        {isDownloading ? (
+          <span className="spin h-3.5 w-3.5" />
+        ) : (
+          <IconDownload className="h-3.5 w-3.5 text-muted" />
+        )}
+        <span>Report</span>
       </button>
 
-      {canApprove(event) && (
+      {/* 2. Primary decision button */}
+      {hasApprove ? (
         <button
           type="button"
           onClick={() => onApprove(event)}
@@ -107,7 +257,36 @@ function EventActions({ event, isProcessing, onApprove, onReject, onRevoke, onRe
           {isProcessing ? <span className="spin h-3.5 w-3.5" /> : <IconCheck />}
           {getApproveLabel(event)}
         </button>
-      )}
+      ) : hasRevoke ? (
+        <button
+          type="button"
+          onClick={() => onRevoke(event)}
+          disabled={isProcessing}
+          title="Withdraw this event's approval"
+          className="btn btn-danger btn-xs"
+        >
+          {isProcessing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
+          Revoke
+        </button>
+      ) : hasReject ? (
+        <button
+          type="button"
+          onClick={() => onReject(event)}
+          disabled={isProcessing}
+          title="Reject this event"
+          className="btn btn-danger btn-xs"
+        >
+          {isProcessing ? <span className="spin h-3.5 w-3.5" /> : <IconX />}
+          Reject
+        </button>
+      ) : null}
+
+      {/* 3. More (⋯) menu */}
+      <RowMenu
+        label={`More actions for ${event.event_name}`}
+        items={menuItems}
+        onSelect={handleMenuSelect}
+      />
     </>
   );
 }
@@ -167,6 +346,33 @@ function AllEvents() {
   const [decision, setDecision] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
   const [reasonError, setReasonError] = useState("");
+
+  const {
+    downloadingRowId,
+    isBulkDownloading,
+    downloadProgress,
+    downloadNotice,
+    downloadError,
+    setDownloadNotice,
+    setDownloadError,
+    downloadSingle,
+    downloadBulk,
+    canDownload,
+  } = useEventReportDownload();
+
+  useEffect(() => {
+    if (downloadNotice) {
+      setSuccess(downloadNotice);
+      setDownloadNotice("");
+    }
+  }, [downloadNotice, setDownloadNotice]);
+
+  useEffect(() => {
+    if (downloadError) {
+      setError(downloadError);
+      setDownloadError("");
+    }
+  }, [downloadError, setDownloadError]);
 
   // ============================================================
   // ERRORS
@@ -834,6 +1040,7 @@ function AllEvents() {
           title="All Events Review Queue"
           showReviewQueueLink={false}
           selectedIds={effectiveSelectedIds}
+          defaultExpanded={false}
           onToggleSelect={toggleEvent}
           onToggleSelectGroup={toggleGroup}
           onClearSelection={() => setSelected(new Map())}
@@ -842,64 +1049,91 @@ function AllEvents() {
             <EventActions
               event={event}
               isProcessing={processingId === event.id}
+              isDownloading={downloadingRowId === event.id}
+              onDownloadReport={() => downloadSingle(event)}
+              canDownloadReport={canDownload(event)}
               onApprove={(e) => openDecision(e, "approve")}
               onReject={(e) => openDecision(e, "reject")}
               onRevoke={(e) => openDecision(e, "revoke")}
               onRemove={(e) => setRemoval({ event: e, mode: "archive", confirmText: "" })}
+              navigate={navigate}
             />
           )}
-          renderDrawerActions={(event) => (
-            <div className="flex flex-wrap items-center gap-2">
-              {canApprove(event) && (
+          renderDrawerActions={(event) => {
+            const check = canDownload(event);
+            const isDownloading = downloadingRowId === event.id;
+            return (
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => openDecision(event, "approve")}
-                  disabled={processingId === event.id}
-                  className="btn btn-ok btn-xs"
+                  onClick={() => downloadSingle(event)}
+                  disabled={isDownloading || !check.canDownload}
+                  title={check.reason || "Download report"}
+                  aria-label={`Download report for ${event.event_name}`}
+                  className={`btn btn-ghost btn-xs border border-line/80 font-medium ${
+                    !check.canDownload
+                      ? "opacity-45 cursor-not-allowed text-muted"
+                      : "text-ink hover:bg-raised/60"
+                  } inline-flex items-center gap-1.5`}
                 >
-                  <IconCheck />
-                  {getApproveLabel(event)}
+                  {isDownloading ? (
+                    <span className="spin h-3.5 w-3.5" />
+                  ) : (
+                    <IconDownload className="h-3.5 w-3.5 text-muted" />
+                  )}
+                  <span>Report</span>
                 </button>
-              )}
-              {canReject(event) && (
+                {canApprove(event) && (
+                  <button
+                    type="button"
+                    onClick={() => openDecision(event, "approve")}
+                    disabled={processingId === event.id}
+                    className="btn btn-ok btn-xs"
+                  >
+                    <IconCheck />
+                    {getApproveLabel(event)}
+                  </button>
+                )}
+                {canReject(event) && (
+                  <button
+                    type="button"
+                    onClick={() => openDecision(event, "reject")}
+                    disabled={processingId === event.id}
+                    className="btn btn-danger btn-xs"
+                  >
+                    <IconX />
+                    Reject
+                  </button>
+                )}
+                {canRevoke(event) && (
+                  <button
+                    type="button"
+                    onClick={() => openDecision(event, "revoke")}
+                    disabled={processingId === event.id}
+                    className="btn btn-danger btn-xs"
+                  >
+                    Revoke
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => openDecision(event, "reject")}
+                  onClick={() => setRemoval({ event, mode: "archive", confirmText: "" })}
                   disabled={processingId === event.id}
-                  className="btn btn-danger btn-xs"
+                  className="btn btn-ghost btn-xs text-err"
                 >
-                  <IconX />
-                  Reject
+                  <IconArchive />
+                  Archive
                 </button>
-              )}
-              {canRevoke(event) && (
-                <button
-                  type="button"
-                  onClick={() => openDecision(event, "revoke")}
-                  disabled={processingId === event.id}
-                  className="btn btn-danger btn-xs"
-                >
-                  Revoke
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setRemoval({ event, mode: "archive", confirmText: "" })}
-                disabled={processingId === event.id}
-                className="btn btn-ghost btn-xs text-err"
-              >
-                <IconArchive />
-                Archive
-              </button>
-            </div>
-          )}
+              </div>
+            );
+          }}
           bulkActions={({ clearSelection }) => (
             <>
               {visibleEvents.length > effectiveSelectedEvents.length && (
                 <button
                   type="button"
                   onClick={selectAllVisible}
-                  disabled={bulkBusy}
+                  disabled={bulkBusy || isBulkDownloading}
                   className="btn btn-ghost btn-xs font-medium text-ink"
                 >
                   Select all {visibleEvents.length} events
@@ -907,8 +1141,22 @@ function AllEvents() {
               )}
               <button
                 type="button"
+                onClick={() => downloadBulk(effectiveSelectedEvents)}
+                disabled={bulkBusy || isBulkDownloading || effectiveSelectedEvents.length === 0}
+                className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
+                title="Download report for selected events"
+              >
+                {isBulkDownloading ? (
+                  <span className="spin h-3.5 w-3.5" />
+                ) : (
+                  <IconDownload className="h-3.5 w-3.5" />
+                )}
+                <span>{downloadProgress || "Download report"}</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setBulkArchive({ reason: "" })}
-                disabled={bulkBusy}
+                disabled={bulkBusy || isBulkDownloading}
                 className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
               >
                 <IconArchive className="h-3.5 w-3.5" />
@@ -917,7 +1165,7 @@ function AllEvents() {
               <button
                 type="button"
                 onClick={() => setBulkDelete({ confirmText: "" })}
-                disabled={bulkBusy}
+                disabled={bulkBusy || isBulkDownloading}
                 className="btn btn-ghost btn-xs border border-red-500/30 text-red-600 dark:text-red-400 font-medium inline-flex items-center gap-1.5"
               >
                 <IconTrash className="h-3.5 w-3.5" />
@@ -927,6 +1175,7 @@ function AllEvents() {
               <button
                 type="button"
                 onClick={clearSelection}
+                disabled={bulkBusy || isBulkDownloading}
                 className="btn btn-ghost btn-xs text-muted hover:text-ink font-medium"
               >
                 Clear

@@ -50,6 +50,11 @@ class SocialLinkRequest(BaseModel):
     social_network_url: str | None = None
 
 
+class DeanMultiReportRequest(BaseModel):
+    event_ids: list[str]
+    customization: ReportCustomizationOptions | dict | None = None
+
+
 # ============================================================
 # HELPERS
 # ============================================================
@@ -507,23 +512,15 @@ def download_report(
 LINK_SCOPE = "event"
 
 
-def build_dean_report(
+def build_dean_report_entry(
     event: dict,
     teacher: dict,
     media: list,
     documents: list,
     *,
     file_link: Callable[[str, str], str],
-    links_valid_until: datetime | None = None,
     customization: ReportCustomizationOptions | dict | None = None,
-) -> BytesIO:
-    """The Dean's report, in the same design and structure as the Event
-    Manager's (app/services/managed_report_pdf.py): event details, the
-    description, the chosen photos laid out as one block, every file with a
-    download link -- then the approval, which only this workflow has.
-
-    ``event``, ``media`` and ``documents`` are serialized rows (``id``).
-    """
+) -> ReportEntry:
     opts = normalize_customization(customization) or {}
     inc_photos = opts.get("include_photos", True)
     selected_pids = opts.get("selected_photo_ids")
@@ -558,9 +555,6 @@ def build_dean_report(
         for kind, row in report_files.report_attachment_rows(media, documents, opts)
     ]
 
-    # Department and expected participants stay in the description's metadata
-    # blob (see services/event_fields.py); the other fields are real columns,
-    # filled from the blob for events created before they existed.
     item = with_legacy_metadata(dict(event))
     description, meta = split_description(item.get("description"))
     item["description"] = description
@@ -569,7 +563,7 @@ def build_dean_report(
 
     is_managed = (event.get("status") == "recorded" or bool(event.get("owner_id")))
 
-    entry = ReportEntry(
+    return ReportEntry(
         event=item,
         photos=photos,
         photo_failures=failures,
@@ -581,8 +575,119 @@ def build_dean_report(
         reference=None if is_managed else report_reference(event),
         customization=opts,
     )
+
+
+def build_dean_report(
+    event: dict,
+    teacher: dict,
+    media: list,
+    documents: list,
+    *,
+    file_link: Callable[[str, str], str],
+    links_valid_until: datetime | None = None,
+    customization: ReportCustomizationOptions | dict | None = None,
+) -> BytesIO:
+    """The Dean's report, in the same design and structure as the Event
+    Manager's (app/services/managed_report_pdf.py): event details, the
+    description, the chosen photos laid out as one block, every file with a
+    download link -- then the approval, which only this workflow has.
+
+    ``event``, ``media`` and ``documents`` are serialized rows (``id``).
+    """
+    entry = build_dean_report_entry(
+        event, teacher, media, documents, file_link=file_link, customization=customization
+    )
+    opts = normalize_customization(customization) or {}
     return build_managed_report_pdf(
         [entry], links_valid_until=links_valid_until, subject="Official event report", customization=opts
+    )
+
+
+@router.post("/dean/reports")
+def multi_event_dean_report(
+    payload: DeanMultiReportRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    """One consolidated report for several Dean events (1 to 50 events)."""
+    user = get_current_user(authorization)
+    check_event_viewer(user)
+
+    wanted: list[str] = []
+    for value in payload.event_ids:
+        if value and str(value) not in wanted:
+            wanted.append(str(value))
+
+    if not wanted:
+        raise HTTPException(status_code=400, detail="No events selected for report generation.")
+    if len(wanted) > 50:
+        raise HTTPException(status_code=400, detail="A consolidated report can cover at most 50 events.")
+
+    exp = report_files.links_expiry()
+    customization = report_files.resolve_customization(payload.customization)
+
+    entries = []
+    for event_id in wanted:
+        try:
+            event = get_event(event_id)
+        except HTTPException:
+            continue
+        if not is_completed(event):
+            continue
+
+        report = get_report(event["id"])
+        is_managed = (event.get("status") == "recorded" or bool(event.get("owner_id")))
+        if not is_managed and not report and not event.get("report_generated_at"):
+            continue
+
+        media = get_event_media(event["id"])
+        documents = get_event_documents(event["id"])
+        teacher = get_teacher(event)
+
+        scope = "managed" if is_managed else LINK_SCOPE
+
+        def file_link(kind: str, file_id: str) -> str:
+            sig = report_files.link_signature(scope, kind, file_id, exp)
+            if is_managed:
+                return absolute_url(request, f"/event-manager/files/{kind}/{file_id}?exp={exp}&sig={sig}")
+            return absolute_url(request, f"/reports/files/{kind}/{file_id}?exp={exp}&sig={sig}")
+
+        entries.append(
+            build_dean_report_entry(
+                event, teacher, media, documents, file_link=file_link, customization=customization
+            )
+        )
+
+    if not entries:
+        raise HTTPException(
+            status_code=400,
+            detail="None of the selected events are completed or have generated reports.",
+        )
+
+    pdf = build_managed_report_pdf(
+        entries,
+        links_valid_until=datetime.fromtimestamp(exp, tz=timezone.utc),
+        subject="Official event report" if len(entries) == 1 else "Consolidated event report",
+        prepared_by={"name": user.get("name"), "email": user.get("email")},
+        customization=customization,
+    )
+    filename = (
+        report_download_name(entries[0].event.get("event_name"))
+        if len(entries) == 1
+        else report_file_name(f"Consolidated_Event_Report_{utc_now():%Y-%m-%d}")
+    )
+    return StreamingResponse(
+        pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": content_disposition(
+                "attachment",
+                filename,
+                fallback="Event_Report.pdf",
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
     )
 
 
