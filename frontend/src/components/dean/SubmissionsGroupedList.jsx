@@ -17,7 +17,6 @@ import { downloadEventReport, downloadEventsReport, reportNotice } from "../../s
 import {
   IconArrowRight,
   IconCalendar,
-  IconCheck,
   IconChevronDown,
   IconChevronRight,
   IconClock,
@@ -58,9 +57,26 @@ function IndeterminateCheckbox({ checked, indeterminate, onChange, ariaLabel, id
 }
 
 /**
- * Grouped submissions view for the Dean Dashboard.
+ * Reusable Grouped submissions view for the Dean Dashboard and All Events.
  * Groups workshop/program submissions hierarchically: Year -> Month -> Items.
- * Matches the reference UX design language (spacing, borders, typography, pill toggles, action buttons).
+ *
+ * Props:
+ * - events: array of submission objects
+ * - loading: boolean
+ * - isFiltered: boolean
+ * - onClearFilters: func
+ * - selectedEventType: string
+ * - title: string
+ * - showReviewQueueLink: boolean
+ * - warningBanner: ReactNode
+ * - renderRowActions: (event, { isExpanded, isDownloading }) => ReactNode
+ * - renderDrawerActions: (event) => ReactNode
+ * - allowDecisions: boolean
+ * - bulkActions: ({ selectedCount, selectedIds, selectedEvents, clearSelection }) => ReactNode
+ * - selectedIds: Set (controlled selection from parent)
+ * - onToggleSelect: (event) => void
+ * - onToggleSelectGroup: (events) => void
+ * - onClearSelection: () => void
  */
 export default function SubmissionsGroupedList({
   events = [],
@@ -68,63 +84,90 @@ export default function SubmissionsGroupedList({
   isFiltered = false,
   onClearFilters,
   selectedEventType = "",
+  title = "Dean's Review Queue",
+  showReviewQueueLink = true,
+  warningBanner = null,
+  renderRowActions = null,
+  renderDrawerActions = null,
+  allowDecisions = false,
+  bulkActions = null,
+  selectedIds: controlledSelectedIds = null,
+  onToggleSelect = null,
+  onToggleSelectGroup = null,
+  onClearSelection = null,
 }) {
   const [groupBy, setGroupBy] = useState("date"); // "date" | "status"
-  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [internalSelectedIds, setInternalSelectedIds] = useState(() => new Set());
   const [expandedYears, setExpandedYears] = useState(() => new Set());
+  const [expandedMonths, setExpandedMonths] = useState(() => new Set());
   const [expandedRows, setExpandedRows] = useState(() => new Set());
   const [showBulkViewModal, setShowBulkViewModal] = useState(false);
   const [bulkActionNotice, setBulkActionNotice] = useState("");
   const [downloadingRowId, setDownloadingRowId] = useState(null);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
 
+  // Use controlled selection if provided by parent, otherwise fall back to internal
+  const effectiveSelectedIds = controlledSelectedIds || internalSelectedIds;
+
   // Derive grouped datasets
   const yearGroups = useMemo(() => groupSubmissionsByDate(events), [events]);
   const statusGroups = useMemo(() => groupSubmissionsByStatus(events), [events]);
   const summary = useMemo(() => getSubmissionsSummary(events), [events]);
 
-  // Expand current / newest year by default; older years collapsed
+  // Expand current year AND current year's months by default (Requirement 4)
+  const initialExpansionDoneRef = useRef(false);
   useEffect(() => {
-    if (yearGroups.length > 0) {
-      setExpandedYears((prev) => {
-        // If already configured by user, keep it; otherwise expand only the newest year
-        if (prev.size === 0) {
-          return new Set([yearGroups[0].year]);
-        }
-        return prev;
-      });
+    if (yearGroups.length > 0 && !initialExpansionDoneRef.current) {
+      initialExpansionDoneRef.current = true;
+      const currentCalendarYear = new Date().getFullYear();
+      const currentYear = yearGroups.find((y) => y.year === currentCalendarYear) || yearGroups[0];
+      setExpandedYears(new Set([currentYear.year]));
+      const currentYearMonthKeys = currentYear.months.map((m) => m.monthKey);
+      setExpandedMonths(new Set(currentYearMonthKeys));
     }
   }, [yearGroups]);
+
+  // Map of event by ID for quick lookups
+  const eventMap = useMemo(() => new Map(events.map((e) => [e.id, e])), [events]);
 
   // ============================================
   // SELECTION HANDLERS
   // ============================================
 
-  const toggleSelectRow = (id) => {
-    setSelectedIds((prev) => {
+  const handleToggleSelectRow = (event) => {
+    if (onToggleSelect) {
+      onToggleSelect(event);
+      return;
+    }
+    setInternalSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
+      if (next.has(event.id)) {
+        next.delete(event.id);
       } else {
-        next.add(id);
+        next.add(event.id);
       }
       return next;
     });
   };
 
-  const toggleSelectGroup = (itemIds) => {
-    if (!itemIds || itemIds.length === 0) return;
-    const { checked } = calculateGroupSelectionState(itemIds, selectedIds);
+  const handleToggleSelectGroup = (items) => {
+    if (!items || items.length === 0) return;
 
-    setSelectedIds((prev) => {
+    if (onToggleSelectGroup) {
+      onToggleSelectGroup(items);
+      return;
+    }
+
+    const itemIds = items.map((it) => it.id);
+    const { checked } = calculateGroupSelectionState(itemIds, effectiveSelectedIds);
+
+    setInternalSelectedIds((prev) => {
       const next = new Set(prev);
       if (checked) {
-        // Uncheck all in group
         for (const id of itemIds) {
           next.delete(id);
         }
       } else {
-        // Check all in group
         for (const id of itemIds) {
           next.add(id);
         }
@@ -133,8 +176,12 @@ export default function SubmissionsGroupedList({
     });
   };
 
-  const clearSelection = () => {
-    setSelectedIds(new Set());
+  const handleClearSelection = () => {
+    if (onClearSelection) {
+      onClearSelection();
+      return;
+    }
+    setInternalSelectedIds(new Set());
   };
 
   // ============================================
@@ -148,6 +195,29 @@ export default function SubmissionsGroupedList({
         next.delete(year);
       } else {
         next.add(year);
+        // Expand this year's months when expanding the year if none are expanded
+        const group = yearGroups.find((g) => g.year === year);
+        if (group) {
+          setExpandedMonths((mPrev) => {
+            const mNext = new Set(mPrev);
+            for (const m of group.months) {
+              mNext.add(m.monthKey);
+            }
+            return mNext;
+          });
+        }
+      }
+      return next;
+    });
+  };
+
+  const toggleExpandMonth = (monthKey) => {
+    setExpandedMonths((prev) => {
+      const next = new Set(prev);
+      if (next.has(monthKey)) {
+        next.delete(monthKey);
+      } else {
+        next.add(monthKey);
       }
       return next;
     });
@@ -166,7 +236,7 @@ export default function SubmissionsGroupedList({
   };
 
   // ============================================
-  // DOWNLOAD HANDLERS
+  // DOWNLOAD HANDLERS (Default fallback)
   // ============================================
 
   const handleDownloadSingle = async (event) => {
@@ -185,14 +255,14 @@ export default function SubmissionsGroupedList({
   };
 
   const handleBulkDownload = async () => {
-    const ids = Array.from(selectedIds);
+    const ids = Array.from(effectiveSelectedIds);
     if (ids.length === 0) return;
 
     try {
       setIsBulkDownloading(true);
       setBulkActionNotice("");
       if (ids.length === 1) {
-        const item = events.find((e) => String(e.id) === String(ids[0]));
+        const item = eventMap.get(ids[0]);
         const outcome = await downloadEventReport(ids[0], item?.event_name || "Event");
         setBulkActionNotice(reportNotice(outcome, "Report"));
       } else {
@@ -209,8 +279,8 @@ export default function SubmissionsGroupedList({
 
   // Selected items array for bulk modal
   const selectedEventsList = useMemo(() => {
-    return events.filter((e) => selectedIds.has(e.id));
-  }, [events, selectedIds]);
+    return events.filter((e) => effectiveSelectedIds.has(e.id));
+  }, [events, effectiveSelectedIds]);
 
   // ============================================
   // RENDER: LOADING OR EMPTY
@@ -252,15 +322,18 @@ export default function SubmissionsGroupedList({
   }
 
   return (
-    <div className="mt-4 space-y-4">
+    <div className="space-y-4">
+      {/* Optional Warning Banner (e.g. 1000 cap reached) */}
+      {warningBanner}
+
       {/* ------------------------------------------------------------------
           TOP-OF-PANEL TOOLBAR (matches Dinshaw's reference header)
-          Summary on left · Group by pills & latest action on right
+          Summary on left · Group by pills & review queue link on right
       ------------------------------------------------------------------ */}
       <div className="glass flex flex-wrap items-center justify-between gap-4 px-5 py-3.5 sm:px-6">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="font-display font-semibold text-ink">
-            {selectedEventType ? `${selectedEventType}` : "Dean's Review Queue"}
+            {selectedEventType ? `${selectedEventType}` : title}
           </span>
           <span className="text-muted">·</span>
           <span className="font-medium text-muted">
@@ -306,14 +379,16 @@ export default function SubmissionsGroupedList({
             </button>
           </div>
 
-          <Link
-            to="/dean/events"
-            className="btn btn-ghost btn-xs border border-line/70 font-medium text-ink"
-            title="Open Dean review queue"
-          >
-            Review queue
-            <IconArrowRight className="h-3.5 w-3.5" />
-          </Link>
+          {showReviewQueueLink && (
+            <Link
+              to="/dean/events"
+              className="btn btn-ghost btn-xs border border-line/70 font-medium text-ink"
+              title="Open Dean review queue"
+            >
+              Review queue
+              <IconArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          )}
         </div>
       </div>
 
@@ -339,8 +414,9 @@ export default function SubmissionsGroupedList({
         <div className="space-y-6">
           {yearGroups.map((yearGroup) => {
             const isYearExpanded = expandedYears.has(yearGroup.year);
-            const allYearItemIds = yearGroup.months.flatMap((m) => m.items.map((it) => it.id));
-            const yearSelection = calculateGroupSelectionState(allYearItemIds, selectedIds);
+            const allYearItems = yearGroup.months.flatMap((m) => m.items);
+            const allYearItemIds = allYearItems.map((it) => it.id);
+            const yearSelection = calculateGroupSelectionState(allYearItemIds, effectiveSelectedIds);
 
             return (
               <section
@@ -355,7 +431,7 @@ export default function SubmissionsGroupedList({
                       id={`year-checkbox-${yearGroup.year}`}
                       checked={yearSelection.checked}
                       indeterminate={yearSelection.indeterminate}
-                      onChange={() => toggleSelectGroup(allYearItemIds)}
+                      onChange={() => handleToggleSelectGroup(allYearItems)}
                       ariaLabel={`Select all submissions in year ${yearGroup.year}`}
                       title={`Select all in ${yearGroup.year}`}
                     />
@@ -392,8 +468,9 @@ export default function SubmissionsGroupedList({
                 {isYearExpanded && (
                   <div className="space-y-5 pl-2 sm:pl-4">
                     {yearGroup.months.map((monthGroup) => {
+                      const isMonthExpanded = expandedMonths.has(monthGroup.monthKey);
                       const monthItemIds = monthGroup.items.map((it) => it.id);
-                      const monthSelection = calculateGroupSelectionState(monthItemIds, selectedIds);
+                      const monthSelection = calculateGroupSelectionState(monthItemIds, effectiveSelectedIds);
 
                       return (
                         <div key={monthGroup.monthKey} className="space-y-2">
@@ -407,38 +484,54 @@ export default function SubmissionsGroupedList({
                                 id={`month-checkbox-${monthGroup.monthKey}`}
                                 checked={monthSelection.checked}
                                 indeterminate={monthSelection.indeterminate}
-                                onChange={() => toggleSelectGroup(monthItemIds)}
+                                onChange={() => handleToggleSelectGroup(monthGroup.items)}
                                 ariaLabel={`Select all submissions in ${monthGroup.monthLabel}`}
                                 title={`Select all in ${monthGroup.monthLabel}`}
                               />
 
-                              <span className="text-xs font-bold uppercase tracking-wider text-muted">
-                                {monthGroup.monthLabel}
-                              </span>
-
-                              <span className="text-[11px] font-semibold text-muted">
-                                ({monthGroup.count})
-                              </span>
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandMonth(monthGroup.monthKey)}
+                                aria-expanded={isMonthExpanded}
+                                className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-muted hover:text-ink transition focus:outline-none"
+                              >
+                                <span>{monthGroup.monthLabel}</span>
+                                <span className="text-[11px] font-semibold text-muted">
+                                  ({monthGroup.count})
+                                </span>
+                                <span className="text-muted ml-0.5">
+                                  {isMonthExpanded ? (
+                                    <IconChevronDown className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <IconChevronRight className="h-3.5 w-3.5" />
+                                  )}
+                                </span>
+                              </button>
                             </div>
                           </div>
 
                           {/* BORDERED CARD:
-                              Rounded container with thin dividers between rows
+                              Rendered when month is expanded (current year's months expanded by default)
                           */}
-                          <div className="overflow-hidden rounded-xl border border-line/60 bg-surface shadow-xs divide-y divide-line/30">
-                            {monthGroup.items.map((event) => (
-                              <SubmissionRow
-                                key={event.id}
-                                event={event}
-                                isSelected={selectedIds.has(event.id)}
-                                onToggleSelect={() => toggleSelectRow(event.id)}
-                                isExpanded={expandedRows.has(event.id)}
-                                onToggleExpand={() => toggleExpandRow(event.id)}
-                                onDownloadSingle={() => handleDownloadSingle(event)}
-                                isDownloading={downloadingRowId === event.id}
-                              />
-                            ))}
-                          </div>
+                          {isMonthExpanded && (
+                            <div className="overflow-hidden rounded-xl border border-line/60 bg-surface shadow-xs divide-y divide-line/30">
+                              {monthGroup.items.map((event) => (
+                                <SubmissionRow
+                                  key={event.id}
+                                  event={event}
+                                  isSelected={effectiveSelectedIds.has(event.id)}
+                                  onToggleSelect={() => handleToggleSelectRow(event)}
+                                  isExpanded={expandedRows.has(event.id)}
+                                  onToggleExpand={() => toggleExpandRow(event.id)}
+                                  onDownloadSingle={() => handleDownloadSingle(event)}
+                                  isDownloading={downloadingRowId === event.id}
+                                  renderRowActions={renderRowActions}
+                                  renderDrawerActions={renderDrawerActions}
+                                  allowDecisions={allowDecisions}
+                                />
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -457,7 +550,7 @@ export default function SubmissionsGroupedList({
         <div className="space-y-6">
           {statusGroups.map((group) => {
             const groupItemIds = group.items.map((it) => it.id);
-            const selection = calculateGroupSelectionState(groupItemIds, selectedIds);
+            const selection = calculateGroupSelectionState(groupItemIds, effectiveSelectedIds);
 
             return (
               <section key={group.statusKey} className="space-y-2">
@@ -467,7 +560,7 @@ export default function SubmissionsGroupedList({
                       id={`status-checkbox-${group.statusKey}`}
                       checked={selection.checked}
                       indeterminate={selection.indeterminate}
-                      onChange={() => toggleSelectGroup(groupItemIds)}
+                      onChange={() => handleToggleSelectGroup(group.items)}
                       ariaLabel={`Select all in ${group.statusLabel}`}
                     />
                     <span className="text-xs font-bold uppercase tracking-wider text-muted">
@@ -484,12 +577,15 @@ export default function SubmissionsGroupedList({
                     <SubmissionRow
                       key={event.id}
                       event={event}
-                      isSelected={selectedIds.has(event.id)}
-                      onToggleSelect={() => toggleSelectRow(event.id)}
+                      isSelected={effectiveSelectedIds.has(event.id)}
+                      onToggleSelect={() => handleToggleSelectRow(event)}
                       isExpanded={expandedRows.has(event.id)}
                       onToggleExpand={() => toggleExpandRow(event.id)}
                       onDownloadSingle={() => handleDownloadSingle(event)}
                       isDownloading={downloadingRowId === event.id}
+                      renderRowActions={renderRowActions}
+                      renderDrawerActions={renderDrawerActions}
+                      allowDecisions={allowDecisions}
                     />
                   ))}
                 </div>
@@ -501,73 +597,83 @@ export default function SubmissionsGroupedList({
 
       {/* ------------------------------------------------------------------
           STICKY BULK-ACTION BAR
-          When >= 1 row is selected: "3 selected · View · Download · Clear"
+          When >= 1 row is selected
       ------------------------------------------------------------------ */}
-      {selectedIds.size > 0 && (
+      {effectiveSelectedIds.size > 0 && (
         <aside
           aria-label="Bulk actions for selected submissions"
           className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 transform animate-in fade-in slide-in-from-bottom-4 duration-200"
         >
           <div className="flex items-center gap-3 rounded-2xl border border-line/80 bg-surface/95 px-5 py-3 shadow-xl backdrop-blur-md">
             <span className="text-sm font-semibold text-ink whitespace-nowrap">
-              {selectedIds.size} selected
+              {effectiveSelectedIds.size} selected
             </span>
 
             <span className="text-muted">·</span>
 
-            {/* View selected items details modal */}
-            <button
-              type="button"
-              onClick={() => setShowBulkViewModal(true)}
-              className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
-            >
-              <IconEye className="h-3.5 w-3.5" />
-              View
-            </button>
+            {/* Custom bulk actions if provided, otherwise default View/Download/Clear */}
+            {bulkActions ? (
+              bulkActions({
+                selectedCount: effectiveSelectedIds.size,
+                selectedIds: effectiveSelectedIds,
+                selectedEvents: selectedEventsList,
+                clearSelection: handleClearSelection,
+              })
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowBulkViewModal(true)}
+                  className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
+                >
+                  <IconEye className="h-3.5 w-3.5" />
+                  View
+                </button>
 
-            {/* Download selected report */}
-            <button
-              type="button"
-              onClick={handleBulkDownload}
-              disabled={isBulkDownloading}
-              className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
-            >
-              {isBulkDownloading ? (
-                <span className="spin h-3.5 w-3.5" />
-              ) : (
-                <IconDownload className="h-3.5 w-3.5" />
-              )}
-              Download
-            </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDownload}
+                  disabled={isBulkDownloading}
+                  className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
+                >
+                  {isBulkDownloading ? (
+                    <span className="spin h-3.5 w-3.5" />
+                  ) : (
+                    <IconDownload className="h-3.5 w-3.5" />
+                  )}
+                  Download
+                </button>
 
-            <span className="text-muted">·</span>
+                <span className="text-muted">·</span>
 
-            <button
-              type="button"
-              onClick={clearSelection}
-              className="btn btn-ghost btn-xs text-muted hover:text-ink font-medium"
-            >
-              Clear
-            </button>
+                <button
+                  type="button"
+                  onClick={handleClearSelection}
+                  className="btn btn-ghost btn-xs text-muted hover:text-ink font-medium"
+                >
+                  Clear
+                </button>
+              </>
+            )}
           </div>
         </aside>
       )}
 
       {/* ------------------------------------------------------------------
-          BULK VIEW MODAL: Review Selected Submissions
+          BULK VIEW MODAL: Review Selected Submissions (Default fallback)
       ------------------------------------------------------------------ */}
       <Modal
         open={showBulkViewModal}
         onClose={() => setShowBulkViewModal(false)}
         eyebrow="Review Selection"
         title={`Selected Submissions (${selectedEventsList.length})`}
-        subtitle="Quick overview of the submissions you selected from the dashboard."
+        subtitle="Quick overview of the submissions you selected."
         wide
         footer={
           <div className="flex items-center justify-between w-full">
             <button
               type="button"
-              onClick={clearSelection}
+              onClick={handleClearSelection}
               className="btn btn-ghost btn-sm"
             >
               Clear selection
@@ -623,7 +729,7 @@ export default function SubmissionsGroupedList({
 /**
  * Individual Submission Row matching the Dinshaw's visual reference:
  * Left to right:
- * [Checkbox] [Chevron] [Bold Date + Title + Subtitle] [Short Status Text] [Outlined Action Button]
+ * [Checkbox] [Chevron] [Bold Date + Title + Subtitle] [Short Status Text] [Actions]
  */
 function SubmissionRow({
   event,
@@ -633,6 +739,9 @@ function SubmissionRow({
   onToggleExpand,
   onDownloadSingle,
   isDownloading,
+  renderRowActions,
+  renderDrawerActions,
+  allowDecisions,
 }) {
   const fields = useMemo(() => readEventFields(event), [event]);
   const dateFormatted = formatRowDate(
@@ -684,7 +793,7 @@ function SubmissionRow({
               {event.event_name}
             </span>
 
-            {/* Muted details line (like reference's: "1 of 6 reports · Campaign...") */}
+            {/* Muted details line */}
             <span className="hidden truncate text-xs text-muted md:inline">
               · {event.event_type || "Program"} · {fields.department}
             </span>
@@ -696,37 +805,42 @@ function SubmissionRow({
           <StatusChip status={event.status} size="sm" />
         </div>
 
-        {/* 5. Right side: Outlined action button ("Zip day" style in reference) */}
-        <div className="flex shrink-0 items-center gap-2">
-          <Link
-            to={`/dean/events/${event.id}`}
-            className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink hover:bg-raised/60 inline-flex items-center gap-1.5"
-            title="View submission details"
-          >
-            <IconEye className="h-3.5 w-3.5 text-muted" />
-            <span>View</span>
-          </Link>
+        {/* 5. Right side action buttons */}
+        {renderRowActions ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            {renderRowActions(event, { isExpanded, isDownloading })}
+          </div>
+        ) : (
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              to={`/dean/events/${event.id}`}
+              className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink hover:bg-raised/60 inline-flex items-center gap-1.5"
+              title="View submission details"
+            >
+              <IconEye className="h-3.5 w-3.5 text-muted" />
+              <span>View</span>
+            </Link>
 
-          <button
-            type="button"
-            onClick={onDownloadSingle}
-            disabled={isDownloading}
-            className="hidden sm:inline-flex btn btn-ghost btn-xs border border-line/80 font-medium text-ink hover:bg-raised/60 items-center gap-1.5"
-            title="Download report"
-          >
-            {isDownloading ? (
-              <span className="spin h-3.5 w-3.5" />
-            ) : (
-              <IconDownload className="h-3.5 w-3.5 text-muted" />
-            )}
-            <span>Report</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={onDownloadSingle}
+              disabled={isDownloading}
+              className="hidden sm:inline-flex btn btn-ghost btn-xs border border-line/80 font-medium text-ink hover:bg-raised/60 items-center gap-1.5"
+              title="Download report"
+            >
+              {isDownloading ? (
+                <span className="spin h-3.5 w-3.5" />
+              ) : (
+                <IconDownload className="h-3.5 w-3.5 text-muted" />
+              )}
+              <span>Report</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ------------------------------------------------
           EXPANDED ACCORDION: FULL SUBMISSION DETAILS
-          Title, department/faculty, date/venue, documents, status history
       ------------------------------------------------ */}
       {isExpanded && (
         <div className="border-t border-line/40 bg-raised/15 px-6 py-5 space-y-5 animate-in fade-in duration-150">
@@ -842,6 +956,13 @@ function SubmissionRow({
               <ProgressTimeline event={event} perspective="dean" />
             </div>
           </div>
+
+          {/* Optional decision actions in drawer */}
+          {(allowDecisions || renderDrawerActions) && renderDrawerActions && (
+            <div className="pt-3 border-t border-line/30 flex flex-wrap items-center gap-2">
+              {renderDrawerActions(event)}
+            </div>
+          )}
         </div>
       )}
     </div>

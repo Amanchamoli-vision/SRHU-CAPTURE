@@ -29,9 +29,8 @@ import {
 } from "../../utils/constants";
 import useEventTypes from "../../hooks/useEventTypes";
 import useTableQuery from "../../hooks/useTableQuery";
-import Pagination from "../../components/common/Pagination";
-import EventsTable from "../../components/dean/EventsTable";
-import { bulkEvents, fetchEventIds } from "../../services/deanTeachers";
+import SubmissionsGroupedList from "../../components/dean/SubmissionsGroupedList";
+import { bulkEvents } from "../../services/deanTeachers";
 
 /**
  * Table columns, ordered by how much each one drives the Dean's decision.
@@ -130,7 +129,6 @@ function AllEvents() {
   // "Select All Events": ids (with names, for the confirmation) kept across
   // pages and filters, so events can be picked from several pages at once.
   const [selected, setSelected] = useState(() => new Map());
-  const [selectingAll, setSelectingAll] = useState(false);
   const [bulkDelete, setBulkDelete] = useState(null); // { confirmText } while open
   const [bulkArchive, setBulkArchive] = useState(null); // { reason } while open
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -143,11 +141,11 @@ function AllEvents() {
   // out of step with the rows it produced. Every filter change resets to
   // page 1 -- narrowing a filter while on page 7 would otherwise show an
   // empty table and read as a bug.
-  const { query, setFilter, setFilters, setPage, setPerPage, reset } = useTableQuery();
+  const { query, setFilter, setFilters, reset } = useTableQuery({}, { paginate: false });
   // Categories come from the server now, so a type a teacher added is
   // filterable here -- which the old hardcoded list could not do.
   const { types: eventTypes } = useEventTypes();
-  const { page, per, q: searchQuery, status: statusFilter, type: typeFilter,
+  const { q: searchQuery, status: statusFilter, type: typeFilter,
           date: selectedDate, startDate, endDate } = query;
   const [showDateRangeModal, setShowDateRangeModal] = useState(false);
 
@@ -207,8 +205,7 @@ function AllEvents() {
       setError("");
 
       const params = new URLSearchParams({
-        skip: String(query.skip),
-        limit: String(query.per),
+        limit: "1000",
       });
       if (query.date) params.set("event_date", query.date);
       if (query.startDate) params.set("start_date", query.startDate);
@@ -238,7 +235,7 @@ function AllEvents() {
     }
     // handleApiError is stable for the lifetime of the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.skip, query.per, query.date, query.startDate, query.endDate, query.type, query.q, query.status, query.source]);
+  }, [query.date, query.startDate, query.endDate, query.type, query.q, query.status, query.source]);
 
   // ============================================================
   // INITIAL LOAD
@@ -357,9 +354,14 @@ function AllEvents() {
   // SELECT ALL EVENTS + BULK DELETE
   // ============================================================
 
-  const pageIds = events.map((event) => event.id);
-  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
-  const someOnPageSelected = pageIds.some((id) => selected.has(id));
+  // Intersect selection with currently visible (filtered) events (Requirement 3)
+  const effectiveSelectedEvents = useMemo(() => {
+    return events.filter((event) => selected.has(event.id));
+  }, [events, selected]);
+
+  const effectiveSelectedIds = useMemo(() => {
+    return new Set(effectiveSelectedEvents.map((event) => event.id));
+  }, [effectiveSelectedEvents]);
 
   const toggleEvent = (event) => {
     setSelected((prev) => {
@@ -370,40 +372,30 @@ function AllEvents() {
     });
   };
 
-  const togglePage = () => {
+  const toggleGroup = (groupItems) => {
     setSelected((prev) => {
       const next = new Map(prev);
-      if (allOnPageSelected) events.forEach((event) => next.delete(event.id));
-      else events.forEach((event) => next.set(event.id, event.event_name || "Untitled Event"));
+      const allSelected = groupItems.every((item) => next.has(item.id));
+      if (allSelected) {
+        groupItems.forEach((item) => next.delete(item.id));
+      } else {
+        groupItems.forEach((item) => next.set(item.id, item.event_name || "Untitled Event"));
+      }
       return next;
     });
   };
 
-  /** Every event matching the current filters, across all pages. */
-  const selectAllMatching = async () => {
-    try {
-      setSelectingAll(true);
-      // One request for every matching id, however many pages they span.
-      const params = new URLSearchParams();
-      if (query.date) params.set("event_date", query.date);
-      if (query.startDate) params.set("start_date", query.startDate);
-      if (query.endDate) params.set("end_date", query.endDate);
-      if (query.type) params.set("event_type", query.type);
-      if (query.q) params.set("q", query.q);
-      if (query.source) params.set("source", query.source);
-      if (query.status && query.status !== "all") params.set("status_bucket", query.status);
-      const next = new Map(selected);
-      (await fetchEventIds(params)).forEach((event) => next.set(event.id, event.event_name || "Untitled Event"));
-      setSelected(next);
-    } catch (err) {
-      handleApiError(err, "Could not select every matching event", "Select all events error");
-    } finally {
-      setSelectingAll(false);
-    }
+  /** Select all currently visible (loaded) events. */
+  const selectAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      visibleEvents.forEach((event) => next.set(event.id, event.event_name || "Untitled Event"));
+      return next;
+    });
   };
 
   const runBulkDelete = async () => {
-    const ids = [...selected.keys()];
+    const ids = effectiveSelectedEvents.map((e) => e.id);
     if (ids.length === 0) return;
     try {
       setBulkBusy(true);
@@ -430,7 +422,7 @@ function AllEvents() {
   };
 
   const runBulkArchive = async () => {
-    const ids = [...selected.keys()];
+    const ids = effectiveSelectedEvents.map((e) => e.id);
     if (ids.length === 0) return;
     try {
       setBulkBusy(true);
@@ -633,7 +625,6 @@ function AllEvents() {
       onLogout={handleLogout}
       railBadge={eventCounts.all}
       railNote="Approve or reject from the row, or open an event for the full proposal, its media and its documents."
-      locked
     >
       {/* Toasts sit bottom-right so feedback never shifts the layout or covers
           the filter controls. */}
@@ -806,7 +797,7 @@ function AllEvents() {
               <p className="num text-xs font-medium text-muted">
                 {total === 0
                   ? "No events"
-                  : `Showing ${query.skip + 1}–${query.skip + visibleEvents.length} of ${total}`}
+                  : `Showing ${visibleEvents.length} of ${total}`}
               </p>
 
               {isFiltered && (
@@ -823,136 +814,126 @@ function AllEvents() {
           </div>
         </div>
 
-        {/* ================================================
-            EVENTS TABLE
-            Fills the remaining height; its body is the only
-            scrolling region on the page.
-        ================================================ */}
-        <div className="glass relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Warning Banner if total > loaded events (1,000 cap reached) (Requirement 2) */}
+        {total > visibleEvents.length && (
+          <div className="flex items-center gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs sm:text-sm text-amber-800 dark:text-amber-200">
+            <IconAlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            <span>
+              Showing first {visibleEvents.length.toLocaleString()} of {total.toLocaleString()}. Narrow your filters.
+            </span>
+          </div>
+        )}
 
-          {loading && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center bg-surface/70 backdrop-blur-[1px]">
-              <div className="flex items-center gap-2.5 text-sm font-medium text-muted">
-                <span className="spin h-4 w-4 text-accent" />
-                Loading events…
-              </div>
-            </div>
-          )}
-
-          {/* Select All Events: page-level on every screen size (the phone
-              cards have no header checkbox), all-matching once anything is
-              picked, and the bulk delete itself. */}
-          {events.length > 0 && (
-            <div
-              className="flex flex-wrap items-center gap-2 border-b hairline px-4 py-2.5"
-              role="region"
-              aria-label="Select events"
-            >
-              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-ink md:hidden">
-                <input
-                  type="checkbox"
-                  checked={allOnPageSelected}
-                  onChange={togglePage}
-                  className="h-4 w-4 rounded border-line text-accent focus:ring-accent"
-                />
-                Select all on this page
-              </label>
-              {selected.size === 0 ? (
-                <p className="hidden text-xs text-muted md:block">
-                  Tick events to archive or delete several at once, or use the box in the header to select the whole page.
-                </p>
-              ) : (
-                <>
-                  <p className="text-xs text-ink">
-                    <span className="num font-semibold">{selected.size}</span>{" "}
-                    {selected.size === 1 ? "event" : "events"} selected
-                  </p>
-                  <div className="ml-auto flex flex-wrap items-center gap-2">
-                    {total > selected.size && (
-                      <button
-                        type="button"
-                        onClick={selectAllMatching}
-                        disabled={selectingAll || bulkBusy}
-                        className="btn btn-ghost btn-xs"
-                      >
-                        {selectingAll && <span className="spin h-3.5 w-3.5" />}
-                        Select all {total} events
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setSelected(new Map())}
-                      disabled={bulkBusy}
-                      className="btn btn-ghost btn-xs"
-                    >
-                      Clear selection
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBulkArchive({ reason: "" })}
-                      disabled={bulkBusy}
-                      className="btn btn-brand btn-xs"
-                    >
-                      <IconArchive />
-                      Archive selected
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBulkDelete({ confirmText: "" })}
-                      disabled={bulkBusy}
-                      className="btn btn-danger btn-xs"
-                    >
-                      <IconTrash />
-                      Delete selected
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          <EventsTable
-            events={visibleEvents}
-            loading={loading}
-            selection={{
-              isSelected: (id) => selected.has(id),
-              onToggle: toggleEvent,
-              allSelected: allOnPageSelected,
-              someSelected: someOnPageSelected,
-              onToggleAll: togglePage,
-            }}
-            formatEventDate={formatEventDate}
-            emptyHint={
-              isFiltered
-                ? "No events match the current filters."
-                : "No events have been submitted yet."
-            }
-            onClearFilters={isFiltered ? handleClearAllFilters : undefined}
-            renderActions={(event) => (
-              <EventActions
-                event={event}
-                isProcessing={processingId === event.id}
-                onApprove={(e) => openDecision(e, "approve")}
-                onReject={(e) => openDecision(e, "reject")}
-                onRevoke={(e) => openDecision(e, "revoke")}
-                onRemove={(e) => setRemoval({ event: e, mode: "archive", confirmText: "" })}
-              />
-            )}
-          />
-
-          {/* Outside the scrolling body: the page is height-locked, so the
-              controls have to stay put while the rows scroll under them. */}
-          {total > 0 && (
-            <Pagination
-              page={page}
-              perPage={per}
-              total={total}
-              onPageChange={setPage}
-              onPerPageChange={setPerPage}
-              disabled={loading}
+        {/* Reusable Grouped List (Requirement 1 & 2) */}
+        <SubmissionsGroupedList
+          events={visibleEvents}
+          loading={loading}
+          isFiltered={isFiltered}
+          onClearFilters={handleClearAllFilters}
+          selectedEventType={typeFilter}
+          title="All Events Review Queue"
+          showReviewQueueLink={false}
+          selectedIds={effectiveSelectedIds}
+          onToggleSelect={toggleEvent}
+          onToggleSelectGroup={toggleGroup}
+          onClearSelection={() => setSelected(new Map())}
+          allowDecisions={true}
+          renderRowActions={(event) => (
+            <EventActions
+              event={event}
+              isProcessing={processingId === event.id}
+              onApprove={(e) => openDecision(e, "approve")}
+              onReject={(e) => openDecision(e, "reject")}
+              onRevoke={(e) => openDecision(e, "revoke")}
+              onRemove={(e) => setRemoval({ event: e, mode: "archive", confirmText: "" })}
             />
           )}
-        </div>
+          renderDrawerActions={(event) => (
+            <div className="flex flex-wrap items-center gap-2">
+              {canApprove(event) && (
+                <button
+                  type="button"
+                  onClick={() => openDecision(event, "approve")}
+                  disabled={processingId === event.id}
+                  className="btn btn-ok btn-xs"
+                >
+                  <IconCheck />
+                  {getApproveLabel(event)}
+                </button>
+              )}
+              {canReject(event) && (
+                <button
+                  type="button"
+                  onClick={() => openDecision(event, "reject")}
+                  disabled={processingId === event.id}
+                  className="btn btn-danger btn-xs"
+                >
+                  <IconX />
+                  Reject
+                </button>
+              )}
+              {canRevoke(event) && (
+                <button
+                  type="button"
+                  onClick={() => openDecision(event, "revoke")}
+                  disabled={processingId === event.id}
+                  className="btn btn-danger btn-xs"
+                >
+                  Revoke
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setRemoval({ event, mode: "archive", confirmText: "" })}
+                disabled={processingId === event.id}
+                className="btn btn-ghost btn-xs text-err"
+              >
+                <IconArchive />
+                Archive
+              </button>
+            </div>
+          )}
+          bulkActions={({ clearSelection }) => (
+            <>
+              {visibleEvents.length > effectiveSelectedEvents.length && (
+                <button
+                  type="button"
+                  onClick={selectAllVisible}
+                  disabled={bulkBusy}
+                  className="btn btn-ghost btn-xs font-medium text-ink"
+                >
+                  Select all {visibleEvents.length} events
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setBulkArchive({ reason: "" })}
+                disabled={bulkBusy}
+                className="btn btn-ghost btn-xs border border-line/80 font-medium text-ink inline-flex items-center gap-1.5"
+              >
+                <IconArchive className="h-3.5 w-3.5" />
+                Archive selected
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkDelete({ confirmText: "" })}
+                disabled={bulkBusy}
+                className="btn btn-ghost btn-xs border border-red-500/30 text-red-600 dark:text-red-400 font-medium inline-flex items-center gap-1.5"
+              >
+                <IconTrash className="h-3.5 w-3.5" />
+                Delete selected
+              </button>
+              <span className="text-muted">·</span>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="btn btn-ghost btn-xs text-muted hover:text-ink font-medium"
+              >
+                Clear
+              </button>
+            </>
+          )}
+        />
       </div>
 
       {/* ==================================================================
@@ -963,7 +944,7 @@ function AllEvents() {
         open={Boolean(bulkArchive)}
         onClose={() => !bulkBusy && setBulkArchive(null)}
         eyebrow="Archive"
-        title={`Archive ${selected.size} ${selected.size === 1 ? "event" : "events"}?`}
+        title={`Archive ${effectiveSelectedEvents.length} ${effectiveSelectedEvents.length === 1 ? "event" : "events"}?`}
         footer={
           <>
             <button
@@ -976,7 +957,7 @@ function AllEvents() {
             </button>
             <button type="button" onClick={runBulkArchive} disabled={bulkBusy} className="btn btn-brand btn-sm">
               {bulkBusy ? <span className="spin h-4 w-4" /> : <IconArchive />}
-              Archive {selected.size}
+              Archive {effectiveSelectedEvents.length}
             </button>
           </>
         }
@@ -1010,7 +991,7 @@ function AllEvents() {
         open={Boolean(bulkDelete)}
         onClose={() => !bulkBusy && setBulkDelete(null)}
         eyebrow="Permanent"
-        title={`Delete ${selected.size} ${selected.size === 1 ? "event" : "events"} permanently?`}
+        title={`Delete ${effectiveSelectedEvents.length} ${effectiveSelectedEvents.length === 1 ? "event" : "events"} permanently?`}
         footer={
           <>
             <button
@@ -1028,7 +1009,7 @@ function AllEvents() {
               className="btn btn-danger btn-sm"
             >
               {bulkBusy ? <span className="spin h-4 w-4" /> : <IconTrash />}
-              Delete {selected.size} permanently
+              Delete {effectiveSelectedEvents.length} permanently
             </button>
           </>
         }
@@ -1039,10 +1020,12 @@ function AllEvents() {
             To keep an event&apos;s records, archive it instead.
           </p>
           <ul className="max-h-40 space-y-1 overflow-auto rounded-xl border hairline bg-raised/40 p-3 text-xs text-ink">
-            {[...selected.values()].slice(0, 50).map((name, index) => (
-              <li key={index} className="truncate">{name}</li>
+            {effectiveSelectedEvents.slice(0, 50).map((event) => (
+              <li key={event.id} className="truncate">{event.event_name || "Untitled Event"}</li>
             ))}
-            {selected.size > 50 && <li className="text-muted">…and {selected.size - 50} more</li>}
+            {effectiveSelectedEvents.length > 50 && (
+              <li className="text-muted">…and {effectiveSelectedEvents.length - 50} more</li>
+            )}
           </ul>
           <div className="field">
             <label htmlFor="bulkDeleteConfirm">
