@@ -36,8 +36,32 @@ import {
   normalizeStatus,
 } from "../../utils/constants";
 
-/** The whole submission set — not a status, so it takes its own hue. */
 const TOTAL_TRACK = "#0EA5E9"; // sky
+
+const DEAN_EVENTS_CACHE_KEY = "cc_dean_events_count";
+
+function getCachedEventsCount() {
+  try {
+    const raw = sessionStorage.getItem(DEAN_EVENTS_CACHE_KEY);
+    if (raw !== null) {
+      const parsed = parseInt(raw, 10);
+      if (!Number.isNaN(parsed) && parsed >= 0) return parsed;
+    }
+  } catch {
+    // sessionStorage might be restricted
+  }
+  return null;
+}
+
+function setCachedEventsCount(count) {
+  if (typeof count === "number" && !Number.isNaN(count) && count >= 0) {
+    try {
+      sessionStorage.setItem(DEAN_EVENTS_CACHE_KEY, String(count));
+    } catch {
+      // sessionStorage might be restricted
+    }
+  }
+}
 
 /**
  * Filter predicate: only events awaiting Dean review.
@@ -98,11 +122,14 @@ export default function DeanDashboard() {
   // STATES
   // ============================================
 
-  const [stats, setStats] = useState({
-    total_events: 0,
-    pending_events: 0,
-    approved_events: 0,
-    rejected_events: 0,
+  const [stats, setStats] = useState(() => {
+    const cached = getCachedEventsCount();
+    return {
+      total_events: cached ?? 0,
+      pending_events: 0,
+      approved_events: 0,
+      rejected_events: 0,
+    };
   });
 
   const [events, setEvents] = useState([]);
@@ -127,6 +154,11 @@ export default function DeanDashboard() {
   // ============================================
 
   const handleLogout = async () => {
+    try {
+      sessionStorage.removeItem(DEAN_EVENTS_CACHE_KEY);
+    } catch {
+      // ignore
+    }
     await signOut();
     navigate("/login", { replace: true });
   };
@@ -151,8 +183,13 @@ export default function DeanDashboard() {
 
       const data = await apiJson("/dean/dashboard/stats");
 
+      const total = data?.total_events ?? 0;
+      if (total > 0 || getCachedEventsCount() === null) {
+        setCachedEventsCount(total);
+      }
+
       setStats({
-        total_events: data?.total_events || 0,
+        total_events: total,
         pending_events: data?.pending_events || 0,
         approved_events: data?.approved_events || 0,
         rejected_events: data?.rejected_events || 0,
@@ -186,7 +223,11 @@ export default function DeanDashboard() {
       const data = await apiJson("/dean/events", { signal: controller.signal });
 
       if (controller.signal.aborted) return;
-      setEvents(data?.events || []);
+      const loadedEvents = data?.events || [];
+      if (loadedEvents.length > 0) {
+        setCachedEventsCount(loadedEvents.length);
+      }
+      setEvents(loadedEvents);
     } catch (err) {
       if (controller.signal.aborted || isAbortError(err)) return;
       console.error("Events error:", err);
@@ -385,6 +426,15 @@ export default function DeanDashboard() {
   const busy = loadingStats || loadingEvents;
   const decisionEvent = decision?.event;
 
+  const resolvedEventCount = useMemo(() => {
+    const live = stats.total_events || events.length;
+    if (live > 0) return live;
+    const cached = getCachedEventsCount();
+    if (cached !== null && cached > 0) return cached;
+    if (busy) return undefined;
+    return 0;
+  }, [stats.total_events, events.length, busy]);
+
   // ============================================
   // RENDER
   // ============================================
@@ -394,7 +444,7 @@ export default function DeanDashboard() {
       active="dashboard"
       profile={deanProfile}
       onLogout={handleLogout}
-      railBadge={stats.total_events || events.length}
+      railBadge={resolvedEventCount}
       railNote="Teachers propose events, you approve them. Pending submissions are the queue that needs you."
       onNotification={refreshAfterNotification}
     >

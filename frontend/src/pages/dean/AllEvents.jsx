@@ -335,7 +335,19 @@ function AllEvents() {
   // Totals for the status tabs and the footer, straight from the server --
   // they must count the whole result set, not the page on screen.
   const [total, setTotal] = useState(0);
-  const [eventCounts, setEventCounts] = useState({ all: 0 });
+  const [eventCounts, setEventCounts] = useState(() => {
+    let cached = 0;
+    try {
+      const raw = sessionStorage.getItem("cc_dean_events_count");
+      if (raw !== null) {
+        const parsed = parseInt(raw, 10);
+        if (!Number.isNaN(parsed) && parsed >= 0) cached = parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return { all: cached };
+  });
 
   // Signed-in Dean, used for the shell's account blocks.
   const [deanProfile, setDeanProfile] = useState(null);
@@ -428,9 +440,17 @@ function AllEvents() {
       });
 
       if (controller.signal.aborted) return;
+      const totalAll = data?.counts?.all ?? data?.total ?? 0;
+      if (totalAll > 0) {
+        try {
+          sessionStorage.setItem("cc_dean_events_count", String(totalAll));
+        } catch {
+          // ignore
+        }
+      }
       setEvents(data?.events || []);
       setTotal(data?.total || 0);
-      setEventCounts(data?.counts || { all: data?.total || 0 });
+      setEventCounts(data?.counts || { all: totalAll });
     } catch (err) {
       if (controller.signal.aborted || isAbortError(err)) return;
       handleApiError(err, "Failed to load events", "Load events error");
@@ -829,7 +849,7 @@ function AllEvents() {
       active="events"
       profile={deanProfile}
       onLogout={handleLogout}
-      railBadge={eventCounts.all}
+      railBadge={eventCounts.all > 0 ? eventCounts.all : (loading ? undefined : 0)}
       railNote="Approve or reject from the row, or open an event for the full proposal, its media and its documents."
     >
       {/* Toasts sit bottom-right so feedback never shifts the layout or covers
