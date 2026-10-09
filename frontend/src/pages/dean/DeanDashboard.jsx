@@ -25,7 +25,6 @@ import {
   IconInbox,
   IconLayers,
   IconRefresh,
-  IconRotateCcw,
   IconX,
   IconXCircle,
 } from "../../components/teacher/icons";
@@ -107,7 +106,6 @@ export default function DeanDashboard() {
   });
 
   const [events, setEvents] = useState([]);
-  const [selectedEventType, setSelectedEventType] = useState("");
 
   // Signed-in Dean, used for the header and rail account blocks.
   const [deanProfile, setDeanProfile] = useState(null);
@@ -346,11 +344,7 @@ export default function DeanDashboard() {
 
   const handleTypeSelect = (name) => {
     if (!name) return;
-    setSelectedEventType((prev) => (prev === name ? "" : name));
-  };
-
-  const clearFilters = () => {
-    setSelectedEventType("");
+    navigate(`/dean/events?type=${encodeURIComponent(name)}`);
   };
 
   const statCards = [
@@ -400,7 +394,7 @@ export default function DeanDashboard() {
       active="dashboard"
       profile={deanProfile}
       onLogout={handleLogout}
-      railBadge={reviewQueueEvents.length}
+      railBadge={stats.total_events || events.length}
       railNote="Teachers propose events, you approve them. Pending submissions are the queue that needs you."
       onNotification={refreshAfterNotification}
     >
@@ -535,24 +529,10 @@ export default function DeanDashboard() {
                     <p className="eyebrow">Distribution</p>
                     <h2 className="h3 text-ink">Programs by type</h2>
                     <p className="prose-muted mt-0.5 text-xs">
-                      Pick a program to highlight its events.
+                      Pick a program to view its events.
                     </p>
                   </div>
                 </div>
-
-                {selectedEventType && (
-                  <div className="flex items-center gap-2.5">
-                    <span className="chip chip-solid">{selectedEventType}</span>
-                    <button
-                      type="button"
-                      onClick={clearFilters}
-                      className="btn btn-ghost btn-xs"
-                    >
-                      <IconRotateCcw />
-                      Show all
-                    </button>
-                  </div>
-                )}
               </div>
 
               <div className="p-6">
@@ -602,13 +582,6 @@ export default function DeanDashboard() {
                                 fill={entry.shade}
                                 stroke={`rgb(${tokens.surface})`}
                                 strokeWidth={2}
-                                opacity={
-                                  selectedEventType &&
-                                  selectedEventType.toLowerCase() !==
-                                    entry.name.toLowerCase()
-                                    ? 0.3
-                                    : 1
-                                }
                               />
                             ))}
                           </Pie>
@@ -662,19 +635,14 @@ export default function DeanDashboard() {
                       {programMix.map((entry) => {
                         const total = events.length || 1;
                         const pct = Math.round((entry.value / total) * 100);
-                        const active =
-                          selectedEventType &&
-                          selectedEventType.toLowerCase() === entry.name.toLowerCase();
 
                         return (
                           <li key={entry.name}>
                             <button
                               type="button"
                               onClick={() => handleTypeSelect(entry.name)}
-                              aria-pressed={Boolean(active)}
-                              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition ${
-                                active ? "bg-accent/8" : "hover:bg-raised/45"
-                              }`}
+                              title={`View ${entry.name} events`}
+                              className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left transition hover:bg-raised/45"
                             >
                               <span
                                 className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -692,9 +660,8 @@ export default function DeanDashboard() {
                                 />
                               </span>
 
-                              <span className="num w-20 shrink-0 text-right text-sm text-muted">
-                                <span className="font-semibold text-ink">{entry.value}</span>{" "}
-                                ({pct}%)
+                              <span className="num shrink-0 text-right text-sm font-semibold text-ink">
+                                {entry.value}
                               </span>
                             </button>
                           </li>
